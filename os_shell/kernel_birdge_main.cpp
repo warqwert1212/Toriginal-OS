@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "terminal.hpp"
+#include "terminal_define.hpp"
 
 // tiny strcmp/strncmp (no libc)
 static int kstrcmp(const char* a, const char* b) {
