@@ -1,6 +1,6 @@
-#include "terminal.hpp"
+#include "terminal_define.hpp"
 #include "io.hpp"
-#include "keyboard.hpp"
+#include "keyboard_define.hpp"
 
 static inline uint16_t vga_entry(char c, uint8_t color) {
     return (uint16_t)c | ((uint16_t)color << 8);
