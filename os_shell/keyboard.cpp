@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "keyboard.hpp"
+#include "keyboard_define.hpp"
 #include "io.hpp"
 
 static const char scancode_table[128] = {
