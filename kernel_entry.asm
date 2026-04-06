@@ -1,17 +1,39 @@
 [BITS 32]
-MULTIBOOT_HEADER_MAGIC equ 0x1BADB002
-MULTIBOOT_HEADER_FLAGS equ 0x00000001
-MULTIBOOT_CHECKSUM equ -(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS)
+
+; Multiboot header
+MAGIC equ 0x1BADB002
+FLAGS equ 0x00000003
+CHECKSUM equ -(MAGIC + FLAGS)
 
 section .multiboot
     align 4
-    dd MULTIBOOT_HEADER_MAGIC
-    dd MULTIBOOT_HEADER_FLAGS
-    dd MULTIBOOT_CHECKSUM
+    dd MAGIC
+    dd FLAGS
+    dd CHECKSUM
+    dd 0
+    dd 0
+    dd 0
+    dd 0
+    dd 0
+    dd 0
+    dd 800
+    dd 600
+    dd 32
 
 section .text
-global start
-start:
+extern kernel_main
+
+global _start
+_start:
+    mov esp, stack_top
+    call kernel_main
     cli
+.hang:
     hlt
-    jmp start
+    jmp .hang
+
+section .bss
+    align 16
+    stack_bottom: equ $ - 0x4000
+    resb 0x4000
+    stack_top:
