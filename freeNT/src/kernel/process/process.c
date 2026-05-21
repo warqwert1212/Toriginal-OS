@@ -1,0 +1,178 @@
+#include "process.h"
+#include "mm.h"
+#include "string.h"
+#include "io.h"
+
+/* Process table */
+static process_t *process_table[MAX_PROCESSES] = {0};
+static pid_t next_pid = 1;
+static process_t *current_process = NULL;
+static process_t *run_queue_head = NULL;
+static process_t *run_queue_tail = NULL;
+
+/* Initialize process management */
+void process_init(void) {
+    memset(process_table, 0, sizeof(process_table));
+    next_pid = 1;
+    current_process = NULL;
+    run_queue_head = NULL;
+    run_queue_tail = NULL;
+}
+
+/* Create a new process */
+process_t* process_create(const char *name, uint8_t priority) {
+    if (next_pid >= MAX_PROCESSES)
+        return NULL;
+    
+    process_t *proc = (process_t *)kmalloc(sizeof(process_t));
+    if (!proc)
+        return NULL;
+    
+    memset(proc, 0, sizeof(process_t));
+    
+    proc->pid = next_pid++;
+    proc->ppid = (current_process) ? current_process->pid : 0;
+    proc->state = PROCESS_CREATED;
+    proc->priority = priority;
+    proc->creation_time = 0;  /* TODO: get current time */
+    proc->execution_time = 0;
+    proc->exit_code = 0;
+    
+    /* Allocate address space */
+    paddr_t page_table = mm_alloc_pages(1);
+    proc->page_table_root = page_table;
+    
+    /* Set up stack and heap */
+    proc->stack_end = 0x7FFFFFFF000UL;
+    proc->stack_start = proc->stack_end - 0x100000;  /* 1MB stack */
+    proc->heap_start = 0x0000000010000000UL;
+    proc->heap_end = proc->heap_start + 0x10000000;  /* 256MB heap */
+    
+    /* Initialize file descriptor table */
+    proc->fd_table = kmalloc(sizeof(void *) * MAX_FD_PER_PROCESS);
+    proc->fd_count = 0;
+    
+    /* Add to process table */
+    process_table[proc->pid] = proc;
+    
+    return proc;
+}
+
+/* Get process by PID */
+process_t* process_get_by_pid(pid_t pid) {
+    if (pid < 0 || pid >= MAX_PROCESSES)
+        return NULL;
+    return process_table[pid];
+}
+
+/* Get current process */
+process_t* process_get_current(void) {
+    return current_process;
+}
+
+/* Fork a process */
+pid_t process_fork(void) {
+    process_t *parent = current_process;
+    if (!parent)
+        return -1;
+    
+    process_t *child = process_create("fork", parent->priority);
+    if (!child)
+        return -1;
+    
+    /* Copy parent's context */
+    child->context = parent->context;
+    
+    /* Copy parent's memory space */
+    /* TODO: implement copy-on-write */
+    
+    child->state = PROCESS_RUNNABLE;
+    
+    return child->pid;
+}
+
+/* Execute a program in a process */
+int process_exec(pid_t pid, const char *filename, const char **argv) {
+    process_t *proc = process_get_by_pid(pid);
+    if (!proc)
+        return -1;
+    
+    /* TODO: Load executable using loader subsystem */
+    
+    return 0;
+}
+
+/* Wait for process */
+int process_wait(pid_t pid, int *status) {
+    process_t *proc = process_get_by_pid(pid);
+    if (!proc)
+        return -1;
+    
+    /* TODO: Wait until process terminates */
+    
+    if (status)
+        *status = proc->exit_code;
+    
+    return 0;
+}
+
+/* Exit process */
+void process_exit(int status) {
+    if (!current_process)
+        return;
+    
+    current_process->exit_code = status;
+    current_process->state = PROCESS_TERMINATED;
+}
+
+/* Kill process */
+void process_kill(pid_t pid) {
+    process_t *proc = process_get_by_pid(pid);
+    if (!proc)
+        return;
+    
+    proc->state = PROCESS_TERMINATED;
+    proc->exit_code = -1;
+}
+
+/* Initialize scheduler */
+void scheduler_init(void) {
+    run_queue_head = NULL;
+    run_queue_tail = NULL;
+}
+
+/* Get next runnable process */
+process_t* scheduler_next(void) {
+    /* Simple FIFO scheduler */
+    if (!run_queue_head)
+        return current_process;
+    
+    process_t *next = run_queue_head;
+    
+    /* Move to back of queue */
+    run_queue_head = next->next;
+    if (!run_queue_head)
+        run_queue_tail = NULL;
+    else
+        run_queue_head->prev = NULL;
+    
+    if (run_queue_tail) {
+        run_queue_tail->next = next;
+        next->prev = run_queue_tail;
+    } else {
+        run_queue_head = next;
+        next->prev = NULL;
+    }
+    
+    run_queue_tail = next;
+    next->next = NULL;
+    
+    return next;
+}
+
+/* Yield to next process */
+void scheduler_yield(void) {
+    process_t *next = scheduler_next();
+    if (next)
+        current_process = next;
+}

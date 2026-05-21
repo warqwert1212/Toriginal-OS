@@ -1,0 +1,2 @@
+/usr/bin/ar qc libgui_framework.a CMakeFiles/gui_framework.dir/src/gui_framework.cpp.o CMakeFiles/gui_framework.dir/src/system_apps.cpp.o
+/usr/bin/ranlib libgui_framework.a
