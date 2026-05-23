@@ -175,13 +175,13 @@ freeNT/fast:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/build
 .PHONY : freeNT/fast
 
-src/kernel/boot/boot.o: src/kernel/boot/boot.S.o
-.PHONY : src/kernel/boot/boot.o
+src/kernel/boot/boot64.o: src/kernel/boot/boot64.S.o
+.PHONY : src/kernel/boot/boot64.o
 
 # target to build an object file
-src/kernel/boot/boot.S.o:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot.S.o
-.PHONY : src/kernel/boot/boot.S.o
+src/kernel/boot/boot64.S.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot64.S.o
+.PHONY : src/kernel/boot/boot64.S.o
 
 src/kernel/fs/filesystem.o: src/kernel/fs/filesystem.c.o
 .PHONY : src/kernel/fs/filesystem.o
@@ -206,6 +206,54 @@ src/kernel/fs/filesystem.s: src/kernel/fs/filesystem.c.s
 src/kernel/fs/filesystem.c.s:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.s
 .PHONY : src/kernel/fs/filesystem.c.s
+
+src/kernel/graphics.o: src/kernel/graphics.c.o
+.PHONY : src/kernel/graphics.o
+
+# target to build an object file
+src/kernel/graphics.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/graphics.c.o
+.PHONY : src/kernel/graphics.c.o
+
+src/kernel/graphics.i: src/kernel/graphics.c.i
+.PHONY : src/kernel/graphics.i
+
+# target to preprocess a source file
+src/kernel/graphics.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/graphics.c.i
+.PHONY : src/kernel/graphics.c.i
+
+src/kernel/graphics.s: src/kernel/graphics.c.s
+.PHONY : src/kernel/graphics.s
+
+# target to generate assembly for a file
+src/kernel/graphics.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/graphics.c.s
+.PHONY : src/kernel/graphics.c.s
+
+src/kernel/icons.o: src/kernel/icons.c.o
+.PHONY : src/kernel/icons.o
+
+# target to build an object file
+src/kernel/icons.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/icons.c.o
+.PHONY : src/kernel/icons.c.o
+
+src/kernel/icons.i: src/kernel/icons.c.i
+.PHONY : src/kernel/icons.i
+
+# target to preprocess a source file
+src/kernel/icons.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/icons.c.i
+.PHONY : src/kernel/icons.c.i
+
+src/kernel/icons.s: src/kernel/icons.c.s
+.PHONY : src/kernel/icons.s
+
+# target to generate assembly for a file
+src/kernel/icons.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/icons.c.s
+.PHONY : src/kernel/icons.c.s
 
 src/kernel/interrupts/interrupts.o: src/kernel/interrupts/interrupts.c.o
 .PHONY : src/kernel/interrupts/interrupts.o
@@ -279,29 +327,29 @@ src/kernel/kernel.c.s:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/kernel.c.s
 .PHONY : src/kernel/kernel.c.s
 
-src/kernel/loader/loader.o: src/kernel/loader/loader.c.o
-.PHONY : src/kernel/loader/loader.o
+src/kernel/loader/loader_enhanced.o: src/kernel/loader/loader_enhanced.c.o
+.PHONY : src/kernel/loader/loader_enhanced.o
 
 # target to build an object file
-src/kernel/loader/loader.c.o:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader.c.o
-.PHONY : src/kernel/loader/loader.c.o
+src/kernel/loader/loader_enhanced.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o
+.PHONY : src/kernel/loader/loader_enhanced.c.o
 
-src/kernel/loader/loader.i: src/kernel/loader/loader.c.i
-.PHONY : src/kernel/loader/loader.i
+src/kernel/loader/loader_enhanced.i: src/kernel/loader/loader_enhanced.c.i
+.PHONY : src/kernel/loader/loader_enhanced.i
 
 # target to preprocess a source file
-src/kernel/loader/loader.c.i:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader.c.i
-.PHONY : src/kernel/loader/loader.c.i
+src/kernel/loader/loader_enhanced.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.i
+.PHONY : src/kernel/loader/loader_enhanced.c.i
 
-src/kernel/loader/loader.s: src/kernel/loader/loader.c.s
-.PHONY : src/kernel/loader/loader.s
+src/kernel/loader/loader_enhanced.s: src/kernel/loader/loader_enhanced.c.s
+.PHONY : src/kernel/loader/loader_enhanced.s
 
 # target to generate assembly for a file
-src/kernel/loader/loader.c.s:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader.c.s
-.PHONY : src/kernel/loader/loader.c.s
+src/kernel/loader/loader_enhanced.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.s
+.PHONY : src/kernel/loader/loader_enhanced.c.s
 
 src/kernel/mm/memory.o: src/kernel/mm/memory.c.o
 .PHONY : src/kernel/mm/memory.o
@@ -412,10 +460,16 @@ help:
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
 	@echo "... freeNT"
-	@echo "... src/kernel/boot/boot.o"
+	@echo "... src/kernel/boot/boot64.o"
 	@echo "... src/kernel/fs/filesystem.o"
 	@echo "... src/kernel/fs/filesystem.i"
 	@echo "... src/kernel/fs/filesystem.s"
+	@echo "... src/kernel/graphics.o"
+	@echo "... src/kernel/graphics.i"
+	@echo "... src/kernel/graphics.s"
+	@echo "... src/kernel/icons.o"
+	@echo "... src/kernel/icons.i"
+	@echo "... src/kernel/icons.s"
 	@echo "... src/kernel/interrupts/interrupts.o"
 	@echo "... src/kernel/interrupts/interrupts.i"
 	@echo "... src/kernel/interrupts/interrupts.s"
@@ -425,9 +479,9 @@ help:
 	@echo "... src/kernel/kernel.o"
 	@echo "... src/kernel/kernel.i"
 	@echo "... src/kernel/kernel.s"
-	@echo "... src/kernel/loader/loader.o"
-	@echo "... src/kernel/loader/loader.i"
-	@echo "... src/kernel/loader/loader.s"
+	@echo "... src/kernel/loader/loader_enhanced.o"
+	@echo "... src/kernel/loader/loader_enhanced.i"
+	@echo "... src/kernel/loader/loader_enhanced.s"
 	@echo "... src/kernel/mm/memory.o"
 	@echo "... src/kernel/mm/memory.i"
 	@echo "... src/kernel/mm/memory.s"

@@ -188,12 +188,12 @@ shell/clean: shell/CMakeFiles/toriginal_shell.dir/clean
 freeNT/CMakeFiles/freeNT.dir/all:
 	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/depend
 	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=3,4,5,6,7,8,9,10,11,12,13 "Built target freeNT"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=3,4,5,6,7,8,9,10,11,12,13,14,15 "Built target freeNT"
 .PHONY : freeNT/CMakeFiles/freeNT.dir/all
 
 # Build rule for subdir invocation for target.
 freeNT/CMakeFiles/freeNT.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 11
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 13
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/freeNT.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
 .PHONY : freeNT/CMakeFiles/freeNT.dir/rule
@@ -214,7 +214,7 @@ freeNT/CMakeFiles/freeNT.dir/clean:
 shell/CMakeFiles/toriginal_shell.dir/all:
 	$(MAKE) $(MAKESILENT) -f shell/CMakeFiles/toriginal_shell.dir/build.make shell/CMakeFiles/toriginal_shell.dir/depend
 	$(MAKE) $(MAKESILENT) -f shell/CMakeFiles/toriginal_shell.dir/build.make shell/CMakeFiles/toriginal_shell.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=23,24,25 "Built target toriginal_shell"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=25,26,27 "Built target toriginal_shell"
 .PHONY : shell/CMakeFiles/toriginal_shell.dir/all
 
 # Build rule for subdir invocation for target.
@@ -240,7 +240,7 @@ shell/CMakeFiles/toriginal_shell.dir/clean:
 pkgman/CMakeFiles/pkgman.dir/all:
 	$(MAKE) $(MAKESILENT) -f pkgman/CMakeFiles/pkgman.dir/build.make pkgman/CMakeFiles/pkgman.dir/depend
 	$(MAKE) $(MAKESILENT) -f pkgman/CMakeFiles/pkgman.dir/build.make pkgman/CMakeFiles/pkgman.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=19,20 "Built target pkgman"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=21,22 "Built target pkgman"
 .PHONY : pkgman/CMakeFiles/pkgman.dir/all
 
 # Build rule for subdir invocation for target.
@@ -266,7 +266,7 @@ pkgman/CMakeFiles/pkgman.dir/clean:
 gui/CMakeFiles/gui_framework.dir/all:
 	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/gui_framework.dir/build.make gui/CMakeFiles/gui_framework.dir/depend
 	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/gui_framework.dir/build.make gui/CMakeFiles/gui_framework.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=14,15,16 "Built target gui_framework"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=16,17,18 "Built target gui_framework"
 .PHONY : gui/CMakeFiles/gui_framework.dir/all
 
 # Build rule for subdir invocation for target.
@@ -318,7 +318,7 @@ gui/CMakeFiles/desktop.dir/clean:
 apps/CMakeFiles/snake.dir/all:
 	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/depend
 	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=21,22 "Built target snake"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=23,24 "Built target snake"
 .PHONY : apps/CMakeFiles/snake.dir/all
 
 # Build rule for subdir invocation for target.
@@ -344,7 +344,7 @@ apps/CMakeFiles/snake.dir/clean:
 drivers/CMakeFiles/net_driver.dir/all:
 	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/depend
 	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=17,18 "Built target net_driver"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=19,20 "Built target net_driver"
 .PHONY : drivers/CMakeFiles/net_driver.dir/all
 
 # Build rule for subdir invocation for target.

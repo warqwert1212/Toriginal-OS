@@ -1,71 +1,73 @@
-.section .text
-.global _start
-.global kernel_main
-.extern kernel_main
+/* Multiboot2 header must be 32-bit aligned and at start of boot section */
+#define MULTIBOOT_MAGIC 0xe85250d6
+#define MULTIBOOT_ARCHITECTURE_I386 0
 
-/* Multiboot2 header */
+.section .text.boot
 .align 8
+.globl multiboot_header
+.globl _start
+
 multiboot_header:
-    .long 0xe85250d6                      /* Magic */
-    .long 0                               /* Architecture (i386) */
-    .long (multiboot_header_end - multiboot_header)  /* Header length */
-    .long 0x100000000 - (0xe85250d6 + 0 + (multiboot_header_end - multiboot_header))
-    
-    /* Information request */
-    .align 8
-    .word 1
-    .word 0
-    .long 12
-    .long 0
-    
-    /* Entry address tag */
-    .align 8
-    .word 3
-    .word 0
-    .long 12
-    .long _start
+    .long MULTIBOOT_MAGIC
+    .long MULTIBOOT_ARCHITECTURE_I386
+    .long (multiboot_header_end - multiboot_header)
+    .long -(MULTIBOOT_MAGIC + MULTIBOOT_ARCHITECTURE_I386 + (multiboot_header_end - multiboot_header))
     
     /* End tag */
     .align 8
     .word 0
     .word 0
     .long 8
-    
+
 multiboot_header_end:
 
-.section .data
-.align 4096
+.section .bss.boot
+.align 16
 boot_stack_bottom:
     .skip 16384
 boot_stack_top:
 
-.section .text
-.align 16
+.section .text.boot
+.code32
 
 _start:
-    cli                                   /* Disable interrupts */
-    mov $boot_stack_top, %rsp             /* Set up stack */
-    and $~15, %rsp                        /* Align stack to 16 bytes */
+    cli
+    cld
     
-    mov %rdi, %rsi                        /* Multiboot magic in rsi */
-    mov %rsi, %rdi                        /* Multiboot info in rdi */
+    /* Set up stack */
+    mov $boot_stack_top, %esp
+    and $~15, %esp
     
+    /* Save multiboot info for kernel_main */
+    push %ebx                      /* Multiboot info struct */
+    push %eax                      /* Multiboot magic number */
+    
+    /* Call kernel main (32-bit version) */
     call kernel_main
     
+    /* Should never return */
+    cli
     hlt
-    jmp .
+.loop_forever:
+    jmp .loop_forever
 
-.global load_idt
+.section .text
+.code64
+
+.globl load_idt
 load_idt:
     lidt (%rdi)
     ret
 
-.global enable_interrupts
+.globl enable_interrupts
 enable_interrupts:
     sti
     ret
 
-.global disable_interrupts
+.globl disable_interrupts
 disable_interrupts:
     cli
     ret
+
+/* Mark stack as non-executable */
+.section .note.GNU-stack, "", @progbits

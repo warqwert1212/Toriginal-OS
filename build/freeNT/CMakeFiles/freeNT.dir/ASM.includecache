@@ -6,5 +6,5 @@
 
 #IncludeRegexTransform: 
 
-/workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot.S
+/workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot64.S
 

@@ -74,6 +74,24 @@ typedef struct {
     const char *symbol;
 } relocation_entry_t;
 
+/* Executable format types */
+#define EXEC_FORMAT_PE  0    /* Windows PE .exe */
+#define EXEC_FORMAT_TRP 1    /* Toriganal Runtime Package */
+#define EXEC_FORMAT_ELF 2    /* Linux ELF */
+
+/* Relocation types */
+#define RELOC_ABSOLUTE  0
+#define RELOC_RELATIVE  1
+#define RELOC_SYMBOL    2
+
+typedef struct {
+    uint32_t offset;
+    uint32_t type;
+    uint64_t value;
+} relocation_entry_extended_t;
+
 int loader_apply_relocations(pid_t pid, relocation_entry_t *relocs, size_t count);
+int loader_init(void);
+const char* loader_format_to_string(int format);
 
 #endif /* _KERNEL_LOADER_H */

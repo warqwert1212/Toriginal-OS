@@ -7,11 +7,11 @@ ASM_DEFINES =
 
 ASM_INCLUDES = -I/workspaces/Toriganal-OS/freeNT/src/kernel/include
 
-ASM_FLAGS = -O3 -DNDEBUG -mcmodel=kernel -ffreestanding -fno-stack-protector -fno-pie -fno-pic -Wno-error=unused-but-set-variable
+ASM_FLAGS = -O3 -DNDEBUG -mcmodel=large -ffreestanding -fno-stack-protector -fno-pie -fno-pic -fno-asynchronous-unwind-tables -Wall -Wextra -Wno-error=unused-but-set-variable
 
 C_DEFINES = 
 
 C_INCLUDES = -I/workspaces/Toriganal-OS/freeNT/src/kernel/include
 
-C_FLAGS = -O3 -DNDEBUG -std=gnu99 -mcmodel=kernel -ffreestanding -fno-stack-protector -fno-pie -fno-pic -Wno-error=unused-but-set-variable
+C_FLAGS = -O3 -DNDEBUG -std=gnu99 -mcmodel=large -ffreestanding -fno-stack-protector -fno-pie -fno-pic -fno-asynchronous-unwind-tables -Wall -Wextra -Wno-error=unused-but-set-variable
 
