@@ -92,3 +92,12 @@ char serial_getc(void) {
     while (!(inb(SERIAL_PORT + 5) & 0x01));  /* Wait for receive buffer full */
     return inb(SERIAL_PORT);
 }
+
+/* Write a NUL-terminated string to the serial port */
+void serial_puts(const char *str) {
+    if (!str) return;
+    while (*str) {
+        serial_putc(*str);
+        str++;
+    }
+}

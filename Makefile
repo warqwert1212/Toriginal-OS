@@ -51,14 +51,14 @@ test: shell
 # Create bootable ISO
 iso: kernel
 	@echo "Creating bootable ISO image..."
-	@mkdir -p $(ISO_DIR)/boot/grub
-	@cp $(BUILD_DIR)/freeNT $(ISO_DIR)/boot/
-	@cp freeNT/src/kernel/boot/grub.cfg $(ISO_DIR)/boot/grub/
-	@which grub-mkrescue > /dev/null 2>&1 && \
-		grub-mkrescue -o freeNT.iso $(ISO_DIR)/ && \
-		echo "ISO created: freeNT.iso" || \
-		echo "Warning: grub-mkrescue not found. Install grub2-tools to create ISO."
-	@echo "To test with QEMU: qemu-system-x86_64 -cdrom freeNT.iso"
+	@# Build helper tool and run it to assemble ISO directory and call grub-mkrescue
+	@$(MAKE) -C build mkisoboot || true
+	@if [ -x build/tools/mkisoboot/mkisoboot ]; then \
+		./build/tools/mkisoboot/mkisoboot || true; \
+	else \
+		echo "mkisoboot helper not found or not built. Run 'make' to build the tools."; \
+		echo "To create ISO manually: mkdir -p $(ISO_DIR)/boot/grub && cp $(BUILD_DIR)/freeNT $(ISO_DIR)/boot/ && cp freeNT/src/kernel/boot/grub.cfg $(ISO_DIR)/boot/grub/ && grub-mkrescue -o freeNT.iso $(ISO_DIR)/"; \
+	fi
 
 # Clean
 clean:

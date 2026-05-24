@@ -240,6 +240,32 @@ snake/fast:
 .PHONY : snake/fast
 
 #=============================================================================
+# Target rules for targets named cli_app
+
+# Build rule for target.
+cli_app: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 cli_app
+.PHONY : cli_app
+
+# fast build rule for target.
+cli_app/fast:
+	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/build
+.PHONY : cli_app/fast
+
+#=============================================================================
+# Target rules for targets named gui_app
+
+# Build rule for target.
+gui_app: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 gui_app
+.PHONY : gui_app
+
+# fast build rule for target.
+gui_app/fast:
+	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/build
+.PHONY : gui_app/fast
+
+#=============================================================================
 # Target rules for targets named net_driver
 
 # Build rule for target.
@@ -251,6 +277,19 @@ net_driver: cmake_check_build_system
 net_driver/fast:
 	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/build
 .PHONY : net_driver/fast
+
+#=============================================================================
+# Target rules for targets named mkisoboot
+
+# Build rule for target.
+mkisoboot: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mkisoboot
+.PHONY : mkisoboot
+
+# fast build rule for target.
+mkisoboot/fast:
+	$(MAKE) $(MAKESILENT) -f tools/mkisoboot/CMakeFiles/mkisoboot.dir/build.make tools/mkisoboot/CMakeFiles/mkisoboot.dir/build
+.PHONY : mkisoboot/fast
 
 # Help Target
 help:
@@ -264,9 +303,12 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... cli_app"
 	@echo "... desktop"
 	@echo "... freeNT"
+	@echo "... gui_app"
 	@echo "... gui_framework"
+	@echo "... mkisoboot"
 	@echo "... net_driver"
 	@echo "... pkgman"
 	@echo "... snake"

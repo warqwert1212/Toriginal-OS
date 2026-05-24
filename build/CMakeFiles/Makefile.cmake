@@ -38,6 +38,7 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/workspaces/Toriganal-OS/gui/CMakeLists.txt"
   "/workspaces/Toriganal-OS/pkgman/CMakeLists.txt"
   "/workspaces/Toriganal-OS/shell/CMakeLists.txt"
+  "/workspaces/Toriganal-OS/tools/mkisoboot/CMakeLists.txt"
   )
 
 # The corresponding makefile is:
@@ -55,6 +56,7 @@ set(CMAKE_MAKEFILE_PRODUCTS
   "gui/CMakeFiles/CMakeDirectoryInformation.cmake"
   "apps/CMakeFiles/CMakeDirectoryInformation.cmake"
   "drivers/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "tools/mkisoboot/CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
@@ -65,5 +67,8 @@ set(CMAKE_DEPEND_INFO_FILES
   "gui/CMakeFiles/gui_framework.dir/DependInfo.cmake"
   "gui/CMakeFiles/desktop.dir/DependInfo.cmake"
   "apps/CMakeFiles/snake.dir/DependInfo.cmake"
+  "apps/CMakeFiles/cli_app.dir/DependInfo.cmake"
+  "apps/CMakeFiles/gui_app.dir/DependInfo.cmake"
   "drivers/CMakeFiles/net_driver.dir/DependInfo.cmake"
+  "tools/mkisoboot/CMakeFiles/mkisoboot.dir/DependInfo.cmake"
   )

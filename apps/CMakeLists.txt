@@ -9,5 +9,11 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2")
 # Snake Game
 ADD_EXECUTABLE(snake games/snake/snake.c)
 
+# Simple CLI and GUI apps
+ADD_EXECUTABLE(cli_app cli_app/main.c)
+ADD_EXECUTABLE(gui_app gui_app/main.c)
+
 # Install targets
 INSTALL(TARGETS snake DESTINATION bin/games)
+INSTALL(TARGETS cli_app DESTINATION bin)
+INSTALL(TARGETS gui_app DESTINATION bin)

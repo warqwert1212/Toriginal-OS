@@ -65,6 +65,7 @@ void process_exit(int status);
 void process_kill(pid_t pid);
 process_t* process_get_current(void);
 process_t* process_get_by_pid(pid_t pid);
+void process_start(pid_t pid);
 
 /* Scheduler */
 void scheduler_init(void);

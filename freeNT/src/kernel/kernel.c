@@ -6,6 +6,7 @@
 #include "fs.h"
 #include "io.h"
 #include "string.h"
+#include "shell.h"
 
 /* Global kernel state */
 static kernel_mem_stats_t kernel_mem_stats = {0};
@@ -13,7 +14,7 @@ static volatile int kernel_initialized = 0;
 
 /* Forward declarations */
 void kernel_init(void);
-void kernel_main(void);
+void kernel_main(unsigned int multiboot_magic, unsigned int multiboot_info);
 
 /* Kernel panic - terminate execution */
 void kernel_panic(const char *fmt, ...) {
@@ -75,21 +76,47 @@ void kernel_init(void) {
     kernel_initialized = 1;
 }
 
-/* Main kernel entry point */
-void kernel_main(void) {
+/* Main kernel entry point
+   Receives Multiboot2 magic and a pointer to the multiboot info tags. */
+void kernel_main(unsigned int multiboot_magic, unsigned int multiboot_info) {
     io_clear_screen();
-    
+
+    /* Print early boot banner */
+    io_put_string("freeNT Kernel v1.0.0\n");
+
+    /* Initialize serial for early diagnostics and detect boot medium (Multiboot2) */
+    serial_init();
+
+    extern void detect_boot_medium(unsigned int, void *);
+    extern const char *get_boot_device(void);
+    extern const char *get_boot_mode(void);
+    extern int get_boot_is_uefi(void);
+
+    serial_puts("[boot] Serial initialized\n");
+
+    detect_boot_medium(multiboot_magic, (void *)(uintptr_t)multiboot_info);
+
+    serial_puts("[boot] Mode: ");
+    serial_puts(get_boot_mode());
+    serial_puts("\n");
+
+    serial_puts("[boot] Device: ");
+    serial_puts(get_boot_device());
+    serial_puts("\n\n");
+
     /* Initialize all kernel subsystems */
     kernel_init();
-    
+
     /* Enable interrupts */
     interrupts_enable();
-    
+
     io_put_string("freeNT kernel running\n");
     io_put_string("Ready to execute Toriginal OS shell...\n\n");
-    
-    /* The shell would be loaded and executed here */
-    /* For now, main kernel loop */
+
+    /* Enter the in-kernel shell (blocks on serial). */
+    kernel_shell();
+
+    /* If the shell ever returns, continue scheduling. */
     while (1) {
         scheduler_yield();
     }

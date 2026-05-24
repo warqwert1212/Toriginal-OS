@@ -175,6 +175,58 @@ snake/fast:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/build
 .PHONY : snake/fast
 
+# Convenience name for target.
+apps/CMakeFiles/cli_app.dir/rule:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 apps/CMakeFiles/cli_app.dir/rule
+.PHONY : apps/CMakeFiles/cli_app.dir/rule
+
+# Convenience name for target.
+cli_app: apps/CMakeFiles/cli_app.dir/rule
+.PHONY : cli_app
+
+# fast build rule for target.
+cli_app/fast:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/build
+.PHONY : cli_app/fast
+
+# Convenience name for target.
+apps/CMakeFiles/gui_app.dir/rule:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 apps/CMakeFiles/gui_app.dir/rule
+.PHONY : apps/CMakeFiles/gui_app.dir/rule
+
+# Convenience name for target.
+gui_app: apps/CMakeFiles/gui_app.dir/rule
+.PHONY : gui_app
+
+# fast build rule for target.
+gui_app/fast:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/build
+.PHONY : gui_app/fast
+
+cli_app/main.o: cli_app/main.c.o
+.PHONY : cli_app/main.o
+
+# target to build an object file
+cli_app/main.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/cli_app/main.c.o
+.PHONY : cli_app/main.c.o
+
+cli_app/main.i: cli_app/main.c.i
+.PHONY : cli_app/main.i
+
+# target to preprocess a source file
+cli_app/main.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/cli_app/main.c.i
+.PHONY : cli_app/main.c.i
+
+cli_app/main.s: cli_app/main.c.s
+.PHONY : cli_app/main.s
+
+# target to generate assembly for a file
+cli_app/main.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/cli_app/main.c.s
+.PHONY : cli_app/main.c.s
+
 games/snake/snake.o: games/snake/snake.c.o
 .PHONY : games/snake/snake.o
 
@@ -199,6 +251,30 @@ games/snake/snake.c.s:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/games/snake/snake.c.s
 .PHONY : games/snake/snake.c.s
 
+gui_app/main.o: gui_app/main.c.o
+.PHONY : gui_app/main.o
+
+# target to build an object file
+gui_app/main.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/gui_app/main.c.o
+.PHONY : gui_app/main.c.o
+
+gui_app/main.i: gui_app/main.c.i
+.PHONY : gui_app/main.i
+
+# target to preprocess a source file
+gui_app/main.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/gui_app/main.c.i
+.PHONY : gui_app/main.c.i
+
+gui_app/main.s: gui_app/main.c.s
+.PHONY : gui_app/main.s
+
+# target to generate assembly for a file
+gui_app/main.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/gui_app/main.c.s
+.PHONY : gui_app/main.c.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -211,10 +287,18 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... cli_app"
+	@echo "... gui_app"
 	@echo "... snake"
+	@echo "... cli_app/main.o"
+	@echo "... cli_app/main.i"
+	@echo "... cli_app/main.s"
 	@echo "... games/snake/snake.o"
 	@echo "... games/snake/snake.i"
 	@echo "... games/snake/snake.s"
+	@echo "... gui_app/main.o"
+	@echo "... gui_app/main.i"
+	@echo "... gui_app/main.s"
 .PHONY : help
 
 

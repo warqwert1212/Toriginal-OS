@@ -9,4 +9,5 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/kernel.c.o: \
  /workspaces/Toriganal-OS/freeNT/src/kernel/include/syscall.h \
  /workspaces/Toriganal-OS/freeNT/src/kernel/include/fs.h \
  /workspaces/Toriganal-OS/freeNT/src/kernel/include/io.h \
- /workspaces/Toriganal-OS/freeNT/src/kernel/include/string.h
+ /workspaces/Toriganal-OS/freeNT/src/kernel/include/string.h \
+ /workspaces/Toriganal-OS/freeNT/src/kernel/include/shell.h

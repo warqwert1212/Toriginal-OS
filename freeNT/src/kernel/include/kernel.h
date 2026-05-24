@@ -9,8 +9,10 @@
 #define KERNEL_VERSION_MINOR 0
 #define KERNEL_VERSION_PATCH 0
 
-/* Kernel entry point (defined in boot assembly) */
-void kernel_main(void);
+/* Kernel entry point (defined in boot assembly)
+    Accepts Multiboot2 magic and info pointer (both 32-bit values passed
+    through the 64-bit boot stub). */
+void kernel_main(unsigned int multiboot_magic, unsigned int multiboot_info);
 
 /* Kernel initialization routines */
 void kernel_init(void);

@@ -34,6 +34,8 @@
 /workspaces/Toriganal-OS/build/gui/CMakeFiles/install/local.dir
 /workspaces/Toriganal-OS/build/gui/CMakeFiles/install/strip.dir
 /workspaces/Toriganal-OS/build/apps/CMakeFiles/snake.dir
+/workspaces/Toriganal-OS/build/apps/CMakeFiles/cli_app.dir
+/workspaces/Toriganal-OS/build/apps/CMakeFiles/gui_app.dir
 /workspaces/Toriganal-OS/build/apps/CMakeFiles/edit_cache.dir
 /workspaces/Toriganal-OS/build/apps/CMakeFiles/rebuild_cache.dir
 /workspaces/Toriganal-OS/build/apps/CMakeFiles/list_install_components.dir
@@ -47,3 +49,10 @@
 /workspaces/Toriganal-OS/build/drivers/CMakeFiles/install.dir
 /workspaces/Toriganal-OS/build/drivers/CMakeFiles/install/local.dir
 /workspaces/Toriganal-OS/build/drivers/CMakeFiles/install/strip.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/mkisoboot.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/edit_cache.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/rebuild_cache.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/list_install_components.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/install.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/install/local.dir
+/workspaces/Toriganal-OS/build/tools/mkisoboot/CMakeFiles/install/strip.dir

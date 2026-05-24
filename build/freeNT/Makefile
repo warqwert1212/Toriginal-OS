@@ -183,6 +183,30 @@ src/kernel/boot/boot64.S.o:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot64.S.o
 .PHONY : src/kernel/boot/boot64.S.o
 
+src/kernel/boot/boot_detect.o: src/kernel/boot/boot_detect.c.o
+.PHONY : src/kernel/boot/boot_detect.o
+
+# target to build an object file
+src/kernel/boot/boot_detect.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o
+.PHONY : src/kernel/boot/boot_detect.c.o
+
+src/kernel/boot/boot_detect.i: src/kernel/boot/boot_detect.c.i
+.PHONY : src/kernel/boot/boot_detect.i
+
+# target to preprocess a source file
+src/kernel/boot/boot_detect.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.i
+.PHONY : src/kernel/boot/boot_detect.c.i
+
+src/kernel/boot/boot_detect.s: src/kernel/boot/boot_detect.c.s
+.PHONY : src/kernel/boot/boot_detect.s
+
+# target to generate assembly for a file
+src/kernel/boot/boot_detect.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.s
+.PHONY : src/kernel/boot/boot_detect.c.s
+
 src/kernel/fs/filesystem.o: src/kernel/fs/filesystem.c.o
 .PHONY : src/kernel/fs/filesystem.o
 
@@ -399,6 +423,30 @@ src/kernel/process/process.c.s:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/process/process.c.s
 .PHONY : src/kernel/process/process.c.s
 
+src/kernel/shell/shell.o: src/kernel/shell/shell.c.o
+.PHONY : src/kernel/shell/shell.o
+
+# target to build an object file
+src/kernel/shell/shell.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o
+.PHONY : src/kernel/shell/shell.c.o
+
+src/kernel/shell/shell.i: src/kernel/shell/shell.c.i
+.PHONY : src/kernel/shell/shell.i
+
+# target to preprocess a source file
+src/kernel/shell/shell.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.i
+.PHONY : src/kernel/shell/shell.c.i
+
+src/kernel/shell/shell.s: src/kernel/shell/shell.c.s
+.PHONY : src/kernel/shell/shell.s
+
+# target to generate assembly for a file
+src/kernel/shell/shell.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.s
+.PHONY : src/kernel/shell/shell.c.s
+
 src/kernel/string.o: src/kernel/string.c.o
 .PHONY : src/kernel/string.o
 
@@ -461,6 +509,9 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... freeNT"
 	@echo "... src/kernel/boot/boot64.o"
+	@echo "... src/kernel/boot/boot_detect.o"
+	@echo "... src/kernel/boot/boot_detect.i"
+	@echo "... src/kernel/boot/boot_detect.s"
 	@echo "... src/kernel/fs/filesystem.o"
 	@echo "... src/kernel/fs/filesystem.i"
 	@echo "... src/kernel/fs/filesystem.s"
@@ -488,6 +539,9 @@ help:
 	@echo "... src/kernel/process/process.o"
 	@echo "... src/kernel/process/process.i"
 	@echo "... src/kernel/process/process.s"
+	@echo "... src/kernel/shell/shell.o"
+	@echo "... src/kernel/shell/shell.i"
+	@echo "... src/kernel/shell/shell.s"
 	@echo "... src/kernel/string.o"
 	@echo "... src/kernel/string.i"
 	@echo "... src/kernel/string.s"

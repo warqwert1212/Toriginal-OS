@@ -50,6 +50,7 @@ if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   include("/workspaces/Toriganal-OS/build/gui/cmake_install.cmake")
   include("/workspaces/Toriganal-OS/build/apps/cmake_install.cmake")
   include("/workspaces/Toriganal-OS/build/drivers/cmake_install.cmake")
+  include("/workspaces/Toriganal-OS/build/tools/mkisoboot/cmake_install.cmake")
 
 endif()
 

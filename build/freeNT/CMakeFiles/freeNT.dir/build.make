@@ -236,6 +236,34 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.s"
 	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /workspaces/Toriganal-OS/freeNT/src/kernel/loader/loader_enhanced.c -o CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.s
 
+freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o: freeNT/CMakeFiles/freeNT.dir/flags.make
+freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o: /workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.c
+freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o: freeNT/CMakeFiles/freeNT.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o"
+	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o -MF CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o.d -o CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o -c /workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.c
+
+freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.i"
+	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.c > CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.i
+
+freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.s"
+	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.c -o CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.s
+
+freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o: freeNT/CMakeFiles/freeNT.dir/flags.make
+freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o: /workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c
+freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o: freeNT/CMakeFiles/freeNT.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building C object freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o"
+	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o -MF CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o.d -o CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o -c /workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c
+
+freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.i"
+	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c > CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.i
+
+freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.s"
+	cd /workspaces/Toriganal-OS/build/freeNT && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c -o CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.s
+
 # Object files for target freeNT
 freeNT_OBJECTS = \
 "CMakeFiles/freeNT.dir/src/kernel/boot/boot64.S.o" \
@@ -249,7 +277,9 @@ freeNT_OBJECTS = \
 "CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.o" \
 "CMakeFiles/freeNT.dir/src/kernel/interrupts/interrupts.c.o" \
 "CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o" \
-"CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o"
+"CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o" \
+"CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o" \
+"CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o"
 
 # External object files for target freeNT
 freeNT_EXTERNAL_OBJECTS =
@@ -266,9 +296,11 @@ freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.o
 freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/src/kernel/interrupts/interrupts.c.o
 freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o
 freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o
+freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o
+freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o
 freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/build.make
 freeNT/freeNT: freeNT/CMakeFiles/freeNT.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Linking C executable freeNT"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Linking C executable freeNT"
 	cd /workspaces/Toriganal-OS/build/freeNT && $(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/freeNT.dir/link.txt --verbose=$(VERBOSE)
 	cd /workspaces/Toriganal-OS/build/freeNT && mkdir -p iso/boot/grub
 	cd /workspaces/Toriganal-OS/build/freeNT && cp freeNT iso/boot/freeNT

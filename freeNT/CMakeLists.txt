@@ -33,6 +33,8 @@ SET(KERNEL_SOURCES
     src/kernel/interrupts/interrupts.c
     src/kernel/syscall/syscall.c
     src/kernel/loader/loader_enhanced.c
+    src/kernel/boot/boot_detect.c
+    src/kernel/shell/shell.c
 )
 
 ADD_EXECUTABLE(freeNT ${KERNEL_SOURCES})

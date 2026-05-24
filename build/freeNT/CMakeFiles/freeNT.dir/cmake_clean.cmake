@@ -1,5 +1,7 @@
 file(REMOVE_RECURSE
   "CMakeFiles/freeNT.dir/src/kernel/boot/boot64.S.o"
+  "CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o"
+  "CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o.d"
   "CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.o"
   "CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.o.d"
   "CMakeFiles/freeNT.dir/src/kernel/graphics.c.o"
@@ -18,6 +20,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/freeNT.dir/src/kernel/mm/memory.c.o.d"
   "CMakeFiles/freeNT.dir/src/kernel/process/process.c.o"
   "CMakeFiles/freeNT.dir/src/kernel/process/process.c.o.d"
+  "CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o"
+  "CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o.d"
   "CMakeFiles/freeNT.dir/src/kernel/string.c.o"
   "CMakeFiles/freeNT.dir/src/kernel/string.c.o.d"
   "CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o"

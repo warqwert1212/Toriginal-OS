@@ -70,6 +70,16 @@ process_t* process_get_current(void) {
     return current_process;
 }
 
+/* Forward declaration for in-place start helper */
+static void process_start_inplace(process_t *proc);
+
+/* Public API: start a loaded process by PID (jumps to its entry point) */
+void process_start(pid_t pid) {
+    process_t *proc = process_get_by_pid(pid);
+    if (!proc) return;
+    process_start_inplace(proc);
+}
+
 /* Fork a process */
 pid_t process_fork(void) {
     process_t *parent = current_process;
@@ -96,10 +106,64 @@ int process_exec(pid_t pid, const char *filename, const char **argv) {
     process_t *proc = process_get_by_pid(pid);
     if (!proc)
         return -1;
-    
-    /* TODO: Load executable using loader subsystem */
-    
+    /* Use loader subsystem to load the executable into this process. */
+    extern int loader_load_executable(const char *filename, pid_t pid);
+
+    if (!filename)
+        return -1;
+
+    int r = loader_load_executable(filename, pid);
+    if (r != 0)
+        return -1;
+
+    /* Ensure the process has a valid user stack pointer and set state runnable */
+    if (proc->stack_end)
+        proc->context.rsp = proc->stack_end;
+    else
+        proc->context.rsp = 0x7FFFFFFF000UL; /* fallback */
+
+    /* If loader set an entry point in context.rip, that'll be used. Otherwise, leave as-is. */
+
+    proc->state = PROCESS_RUNNABLE;
+
+    /* Enqueue into run queue if not already present */
+    if (!run_queue_head) {
+        run_queue_head = proc;
+        run_queue_tail = proc;
+        proc->next = NULL;
+        proc->prev = NULL;
+    } else {
+        run_queue_tail->next = proc;
+        proc->prev = run_queue_tail;
+        proc->next = NULL;
+        run_queue_tail = proc;
+    }
+
+    /* If exec was called on the current process, start it in-place (replace image) */
+    if (current_process == proc) {
+        process_start_inplace(proc);
+    }
+
     return 0;
+}
+
+/* Start executing the given process immediately in-place (replaces current)
+   This is a very small trampoline that sets the stack pointer and jumps to
+   the process entry point. It does not perform privilege changes. */
+static void process_start_inplace(process_t *proc) {
+    if (!proc) return;
+    void *entry = (void *)(uintptr_t)proc->context.rip;
+    void *sp = (void *)(uintptr_t)proc->context.rsp;
+
+    /* Inline assembly: set RSP and jump to entry */
+    asm volatile(
+        "mov %0, %%rsp\n"
+        "xor %%rbp, %%rbp\n"
+        "jmp *%1\n"
+        :
+        : "r" (sp), "r" (entry)
+        : "memory"
+    );
 }
 
 /* Wait for process */
