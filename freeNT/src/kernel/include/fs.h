@@ -14,8 +14,7 @@ typedef struct inode {
     uint64_t modified_time;
     uint64_t created_time;
     uint32_t block_count;
-    uint32_t link_count;
-    
+    uint32_t link_count;    void *data;    
     /* Direct blocks and indirect blocks pointers */
     uint64_t blocks[12];  /* Direct blocks */
     uint64_t indirect_block;     /* Single indirect */
@@ -47,6 +46,13 @@ typedef struct {
 #define FILE_PERM_OTHER_R  0004
 #define FILE_PERM_OTHER_W  0002
 #define FILE_PERM_OTHER_X  0001
+
+/* File open flags */
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_RDWR   2
+#define O_CREAT  0x100
+#define O_TRUNC  0x200
 
 /* Filesystem superblock */
 typedef struct {

@@ -7,6 +7,7 @@
 #include "io.h"
 #include "string.h"
 #include "shell.h"
+#include "boot_detect.h"
 
 /* Global kernel state */
 static kernel_mem_stats_t kernel_mem_stats = {0};
@@ -40,7 +41,7 @@ void kernel_init(void) {
     if (kernel_initialized)
         return;
     
-    io_put_string("freeNT Kernel v");
+    io_put_string("Toriginal OS Kernel v");
     io_put_string("1.0.0");
     io_put_string(" initializing...\n");
     
@@ -82,7 +83,7 @@ void kernel_main(unsigned int multiboot_magic, unsigned int multiboot_info) {
     io_clear_screen();
 
     /* Print early boot banner */
-    io_put_string("freeNT Kernel v1.0.0\n");
+    io_put_string("Toriginal OS Kernel v1.0.0\n");
 
     /* Initialize serial for early diagnostics and detect boot medium (Multiboot2) */
     serial_init();
@@ -110,11 +111,29 @@ void kernel_main(unsigned int multiboot_magic, unsigned int multiboot_info) {
     /* Enable interrupts */
     interrupts_enable();
 
-    io_put_string("freeNT kernel running\n");
-    io_put_string("Ready to execute Toriginal OS shell...\n\n");
+    const char *cmdline = get_boot_cmdline();
+    serial_puts("[boot] Cmdline: ");
+    serial_puts(cmdline ? cmdline : "");
+    serial_puts("\n\n");
 
-    /* Enter the in-kernel shell (blocks on serial). */
-    kernel_shell();
+    if (cmdline && strstr(cmdline, "install") != NULL) {
+        io_put_string("Toriginal OS installer mode\n");
+        io_put_string("Installing Toriginal OS...\n\n");
+        kernel_install_mode();
+        kernel_shell();
+    } else if (cmdline && strstr(cmdline, "test-installer") != NULL) {
+        io_put_string("Toriginal OS installer test mode\n");
+        io_put_string("Running installer test commands...\n\n");
+        kernel_install_mode();
+        kernel_shell();
+    } else if (cmdline && strstr(cmdline, "shell") != NULL) {
+        io_put_string("Toriginal OS shell mode\n\n");
+        kernel_shell();
+    } else {
+        io_put_string("Toriginal OS GUI mode\n");
+        io_put_string("Starting Toriginal OS desktop environment placeholder...\n\n");
+        kernel_os_shell();
+    }
 
     /* If the shell ever returns, continue scheduling. */
     while (1) {

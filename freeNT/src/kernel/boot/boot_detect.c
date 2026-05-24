@@ -6,6 +6,7 @@
 #include "boot_detect.h"
 #include "io.h"
 
+#define MULTIBOOT2_TAG_TYPE_CMDLINE 1
 #define MULTIBOOT2_TAG_TYPE_BOOT_DEVICE 5
 #define MULTIBOOT2_TAG_TYPE_EFI64 12
 
@@ -42,6 +43,7 @@ static const char *boot_device_names[] = {
 
 static int is_uefi_boot = 0;
 static const char *current_boot_device = "Unknown";
+static const char *current_boot_cmdline = "";
 
 void detect_boot_medium(unsigned int multiboot_magic, void *multiboot_info) {
     multiboot_tag_t *tags = (multiboot_tag_t *)multiboot_info;
@@ -59,8 +61,14 @@ void detect_boot_medium(unsigned int multiboot_magic, void *multiboot_info) {
 
     multiboot_tag_t *tag = tags;
     while (tag->type != 0) {
-        /* Print some info about each tag encountered for diagnostics */
         switch (tag->type) {
+            case MULTIBOOT2_TAG_TYPE_CMDLINE:
+                serial_puts("[boot_detect] Found CMDLINE tag\n");
+                current_boot_cmdline = (const char *)((uint8_t *)tag + 8);
+                serial_puts("[boot_detect] Cmdline: ");
+                serial_puts(current_boot_cmdline);
+                serial_puts("\n");
+                break;
             case MULTIBOOT2_TAG_TYPE_BOOT_DEVICE:
                 serial_puts("[boot_detect] Found BOOT_DEVICE tag\n");
                 break;
@@ -69,14 +77,12 @@ void detect_boot_medium(unsigned int multiboot_magic, void *multiboot_info) {
                 break;
             default:
                 serial_puts("[boot_detect] Found tag type: ");
-                /* No integer printing; print placeholder */
                 serial_puts("(other)\n");
                 break;
         }
         if (tag->type == MULTIBOOT2_TAG_TYPE_BOOT_DEVICE) {
             multiboot_tag_boot_device_t *bd = (multiboot_tag_boot_device_t *)tag;
-            
-            if (bd->boot_device >= 0 && bd->boot_device <= 6) {
+            if (bd->boot_device <= 6) {
                 current_boot_device = boot_device_names[bd->boot_device];
                 serial_puts("[boot_detect] Boot device index detected\n");
             } else {
@@ -84,17 +90,19 @@ void detect_boot_medium(unsigned int multiboot_magic, void *multiboot_info) {
             }
             break;
         }
-        
         if (tag->type == MULTIBOOT2_TAG_TYPE_EFI64) {
             is_uefi_boot = 1;
         }
-        
         tag = (multiboot_tag_t *)((uint8_t *)tag + ((tag->size + 7) & ~7));
     }
 }
 
 const char *get_boot_device(void) {
     return current_boot_device ? current_boot_device : "Unknown";
+}
+
+const char *get_boot_cmdline(void) {
+    return current_boot_cmdline ? current_boot_cmdline : "";
 }
 
 int get_boot_is_uefi(void) {

@@ -39,7 +39,7 @@ SET(KERNEL_SOURCES
 
 ADD_EXECUTABLE(freeNT ${KERNEL_SOURCES})
 
-TARGET_INCLUDE_DIRECTORIES(freeNT PRIVATE src/kernel/include)
+TARGET_INCLUDE_DIRECTORIES(freeNT PRIVATE src/kernel/include src/kernel/boot)
 
 # Set kernel-specific linker options
 SET_TARGET_PROPERTIES(freeNT PROPERTIES 

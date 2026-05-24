@@ -15,6 +15,7 @@ set(CMAKE_ASM_COMPILER_ID "GNU")
 # The include file search paths:
 set(CMAKE_ASM_TARGET_INCLUDE_PATH
   "/workspaces/Toriganal-OS/freeNT/src/kernel/include"
+  "/workspaces/Toriganal-OS/freeNT/src/kernel/boot"
   )
 
 # The set of dependency files which are needed:

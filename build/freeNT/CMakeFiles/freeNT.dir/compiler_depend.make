@@ -48,6 +48,9 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/io.c.o: /workspaces/Toriganal-OS/freeNT/
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/types.h
 
 freeNT/CMakeFiles/freeNT.dir/src/kernel/kernel.c.o: /workspaces/Toriganal-OS/freeNT/src/kernel/kernel.c \
+  /usr/lib/gcc/x86_64-linux-gnu/13/include/stdint-gcc.h \
+  /usr/lib/gcc/x86_64-linux-gnu/13/include/stdint.h \
+  /workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.h \
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/config.h \
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/fs.h \
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/interrupts.h \
