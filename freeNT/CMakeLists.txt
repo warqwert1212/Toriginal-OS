@@ -14,6 +14,7 @@ ADD_COMPILE_OPTIONS(
     -fno-pie
     -fno-pic
     -fno-asynchronous-unwind-tables
+    -fcf-protection=none
     -Wall
     -Wextra
     -Wno-error=unused-but-set-variable

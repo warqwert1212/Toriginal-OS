@@ -61,7 +61,8 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/kernel.c.o: /workspaces/Toriganal-OS/fre
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/shell.h \
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/string.h \
   /workspaces/Toriganal-OS/freeNT/src/kernel/include/syscall.h \
-  /workspaces/Toriganal-OS/freeNT/src/kernel/include/types.h
+  /workspaces/Toriganal-OS/freeNT/src/kernel/include/types.h \
+  /workspaces/Toriganal-OS/freeNT/src/kernel/test_exe_data.h
 
 freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o: /workspaces/Toriganal-OS/freeNT/src/kernel/loader/loader_enhanced.c \
   /usr/lib/gcc/x86_64-linux-gnu/13/include/stdint-gcc.h \
@@ -117,6 +118,8 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o: /workspaces/Torigan
 
 /workspaces/Toriganal-OS/freeNT/src/kernel/string.c:
 
+/workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c:
+
 /usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h:
 
 /workspaces/Toriganal-OS/freeNT/src/kernel/include/mm.h:
@@ -151,6 +154,8 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o: /workspaces/Torigan
 
 /workspaces/Toriganal-OS/freeNT/src/kernel/icons.c:
 
+/workspaces/Toriganal-OS/freeNT/src/kernel/test_exe_data.h:
+
 /workspaces/Toriganal-OS/freeNT/src/kernel/include/io.h:
 
 /workspaces/Toriganal-OS/freeNT/src/kernel/include/icons.h:
@@ -172,5 +177,3 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o: /workspaces/Torigan
 /workspaces/Toriganal-OS/freeNT/src/kernel/loader/loader_enhanced.c:
 
 /workspaces/Toriganal-OS/freeNT/src/kernel/include/loader.h:
-
-/workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c:

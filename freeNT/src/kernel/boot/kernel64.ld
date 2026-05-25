@@ -23,7 +23,7 @@ SECTIONS
     /* Kernel in high virtual memory - 64-bit addressing */
     . = 0xFFFF800000000000 + 0x200000;  /* 0x200000 (2MB) offset for kernel */
     
-    .text ALIGN(4096) : AT(LOADADDR(.text.boot) + SIZEOF(.text.boot) + SIZEOF(.data.boot) + SIZEOF(.bss.boot)) {
+    .text ALIGN(4096) : AT(0x200000) {
         *(.text)
         *(.text.*)
     }
