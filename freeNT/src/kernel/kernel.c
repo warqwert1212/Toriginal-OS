@@ -140,7 +140,9 @@ static void run_test_executable(const char *path) {
    Receives Multiboot2 magic and a pointer to the multiboot info tags. */
 void kernel_main(unsigned int multiboot_magic, unsigned int multiboot_info) {
     /* Ultra-early serial-only diagnostics. Avoid touching VGA/memory until paging is active. */
+    asm volatile ("mov $0x3f8, %%dx; mov $'X', %%al; out %%al, %%dx;" ::: "dx", "al");
     serial_init();
+    asm volatile ("mov $0x3f8, %%dx; mov $'Y', %%al; out %%al, %%dx;" ::: "dx", "al");
 
     /* Dump some key pointers to serial to check for truncation */
     early_dump_ptr((unsigned long)kernel_main);

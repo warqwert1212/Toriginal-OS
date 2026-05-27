@@ -55,6 +55,26 @@ process_t* process_create(const char *name, uint8_t priority) {
     /* Add to process table */
     process_table[proc->pid] = proc;
     
+    /* Debug: print created PID */
+    {
+        char decbuf[16];
+        int idx = 0;
+        int v = proc->pid;
+        if (v == 0) decbuf[idx++] = '0';
+        else {
+            char tmp[16]; int ti = 0;
+            while (v > 0 && ti < (int)sizeof(tmp)) {
+                tmp[ti++] = '0' + (v % 10);
+                v /= 10;
+            }
+            while (ti-- > 0) decbuf[idx++] = tmp[ti];
+        }
+        decbuf[idx] = '\0';
+        serial_puts("[proc] created pid=");
+        serial_puts(decbuf);
+        serial_puts("\n");
+    }
+
     return proc;
 }
 
@@ -113,8 +133,12 @@ int process_exec(pid_t pid, const char *filename, const char **argv) {
         return -1;
 
     int r = loader_load_executable(filename, pid);
-    if (r != 0)
+    if (r != 0) {
+        serial_puts("[proc] loader returned error\n");
         return -1;
+    } else {
+        serial_puts("[proc] loader returned OK\n");
+    }
 
     /* Ensure the process has a valid user stack pointer and set state runnable */
     if (proc->stack_end)
@@ -154,6 +178,25 @@ static void process_start_inplace(process_t *proc) {
     if (!proc) return;
     void *entry = (void *)(uintptr_t)proc->context.rip;
     void *sp = (void *)(uintptr_t)proc->context.rsp;
+
+    /* Debug: print entry and stack pointer */
+    {
+        uint64_t e = (uint64_t)(uintptr_t)entry;
+        uint64_t s = (uint64_t)(uintptr_t)sp;
+        serial_puts("[proc] start entry=0x");
+        for (int i = 15; i >= 0; --i) {
+            int nib = (e >> (i*4)) & 0xF;
+            char c = (nib < 10) ? ('0' + nib) : ('a' + nib - 10);
+            serial_putc(c);
+        }
+        serial_puts(" rsp=0x");
+        for (int i = 15; i >= 0; --i) {
+            int nib = (s >> (i*4)) & 0xF;
+            char c = (nib < 10) ? ('0' + nib) : ('a' + nib - 10);
+            serial_putc(c);
+        }
+        serial_puts("\n");
+    }
 
     /* Inline assembly: set RSP and jump to entry */
     asm volatile(

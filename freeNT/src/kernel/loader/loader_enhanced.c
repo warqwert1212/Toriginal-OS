@@ -387,13 +387,22 @@ int loader_load_executable(const char *filename, pid_t pid) {
     /* Simple extension-based dispatch for now */
     size_t len = strlen(filename);
     if (len > 4 && strcmp(filename + len - 4, ".exe") == 0) {
-        return loader_load_exe(filename, pid);
+        serial_puts("[loader] detected .exe, calling PE loader\n");
+        int r = loader_load_exe(filename, pid);
+        if (r == 0) serial_puts("[loader] PE loader OK\n"); else serial_puts("[loader] PE loader FAILED\n");
+        return r;
     }
     if (len > 4 && strcmp(filename + len - 4, ".trp") == 0) {
-        return loader_load_trp(filename, pid);
+        serial_puts("[loader] detected .trp, calling TRP loader\n");
+        int r = loader_load_trp(filename, pid);
+        if (r == 0) serial_puts("[loader] TRP loader OK\n"); else serial_puts("[loader] TRP loader FAILED\n");
+        return r;
     }
     if (len > 4 && strcmp(filename + len - 4, ".txt") == 0) {
-        return loader_run_txt(filename, pid);
+        serial_puts("[loader] detected .txt, calling TXT runner\n");
+        int r = loader_run_txt(filename, pid);
+        if (r == 0) serial_puts("[loader] TXT runner OK\n"); else serial_puts("[loader] TXT runner FAILED\n");
+        return r;
     }
 
     /* Fallback: detect by magic bytes would go here */
