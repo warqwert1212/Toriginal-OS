@@ -45,12 +45,8 @@ endif()
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for each subdirectory.
   include("/workspaces/Toriganal-OS/build/freeNT/cmake_install.cmake")
-  include("/workspaces/Toriganal-OS/build/shell/cmake_install.cmake")
-  include("/workspaces/Toriganal-OS/build/pkgman/cmake_install.cmake")
-  include("/workspaces/Toriganal-OS/build/gui/cmake_install.cmake")
-  include("/workspaces/Toriganal-OS/build/apps/cmake_install.cmake")
-  include("/workspaces/Toriganal-OS/build/drivers/cmake_install.cmake")
-  include("/workspaces/Toriganal-OS/build/tools/mkisoboot/cmake_install.cmake")
+  include("/workspaces/Toriganal-OS/build/sys/shell/cmake_install.cmake")
+  include("/workspaces/Toriganal-OS/build/sys/gui/cmake_install.cmake")
 
 endif()
 

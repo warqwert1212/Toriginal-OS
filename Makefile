@@ -1,90 +1,120 @@
-# freeNT OS - Makefile
+CC=gcc
+CXX=g++
+AS=as
+LD=ld
 
-.PHONY: all kernel shell clean distclean build-dir install help run-shell test iso
+CFLAGS=-m64 -mcmodel=kernel -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -Wall -Wextra -g -O2 \
+-IfreeNT/src/kernel \
+-IfreeNT/src/kernel/include \
+-IfreeNT/src/kernel/boot \
+-Isys/shell/src \
+-IfreeNT/src/installer
 
-# Directories
-BUILD_DIR := build
-INSTALL_DIR := install
-ISO_DIR := iso_build
+CXXFLAGS=-m64 -mcmodel=kernel -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
+-fno-exceptions -fno-rtti -Wall -Wextra -g -O2 \
+-IfreeNT/src/kernel \
+-IfreeNT/src/kernel/include \
+-IfreeNT/src/kernel/boot \
+-Isys/shell/src \
+-IfreeNT/src/installer
 
-# Default target
-all: kernel shell
+LDFLAGS=-melf_x86_64 -T freeNT/src/kernel/boot/linker.ld
 
-# Create build directory
-build-dir:
-	@mkdir -p $(BUILD_DIR)
-	@mkdir -p $(INSTALL_DIR)
+SRC_DIR=freeNT/src/kernel
+BOOT_DIR=freeNT/src/kernel/boot
+INSTALLER_DIR=freeNT/src/installer
 
-# Build kernel
-kernel: build-dir
-	@echo "Building freeNT kernel..."
-	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=Release .. && make freeNT
+OBJECTS=\
+boot64.o \
+gdt_flush.o \
+syscall_entry.o \
+boot_detect.o \
+kernel.o \
+io.o \
+string.o \
+graphics.o \
+memory.o \
+interrupts.o \
+process.o \
+filesystem.o \
+syscall.o \
+elf_loader.o \
+auth.o \
+install.o \
+ata.o \
+stubs.o
 
-# Build shell
-shell: build-dir
-	@echo "Building Toriginal OS shell..."
-	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=Release .. && make toriginal_shell
+all: kernel.bin
 
-# Install
-install: kernel shell
-	@echo "Installing to $(INSTALL_DIR)..."
-	@mkdir -p $(INSTALL_DIR)/bin
-	@mkdir -p $(INSTALL_DIR)/boot
-	@cp $(BUILD_DIR)/freeNT $(INSTALL_DIR)/boot/
-	@cp $(BUILD_DIR)/toriginal_shell $(INSTALL_DIR)/bin/
-	@echo "Installation complete!"
+boot64.o: $(BOOT_DIR)/boot64.S
+	$(CC) -m64 -ffreestanding -fno-pie -fno-pic -c $(BOOT_DIR)/boot64.S -o boot64.o
 
-# Run shell (for testing)
-run-shell: shell
-	@echo "Starting Toriginal OS Shell..."
-	@bash ./test-shell.sh
+gdt_flush.o: $(BOOT_DIR)/gdt_flush.s
+	$(AS) --64 -o gdt_flush.o $(BOOT_DIR)/gdt_flush.s
 
-# Test shell directly
-test: shell
-	@SHELL_PATH=$$(find build -name "toriginal_shell" -type f 2>/dev/null | head -1); \
-	if [ -z "$$SHELL_PATH" ]; then \
-		echo "Error: Shell not found. Build may have failed."; \
-		exit 1; \
-	fi; \
-	$$SHELL_PATH
+syscall_entry.o: $(BOOT_DIR)/syscall_entry.s
+	$(AS) --64 -o syscall_entry.o $(BOOT_DIR)/syscall_entry.s
 
-# Create bootable ISO
-iso: kernel
-	@echo "Creating bootable ISO image..."
-	@# Build helper tool and run it to assemble ISO directory and call grub-mkrescue
-	@$(MAKE) -C build mkisoboot || true
-	@if [ -x build/tools/mkisoboot/mkisoboot ]; then \
-		./build/tools/mkisoboot/mkisoboot || true; \
-	else \
-		echo "mkisoboot helper not found or not built. Run 'make' to build the tools."; \
-		echo "To create ISO manually: mkdir -p $(ISO_DIR)/boot/grub && cp $(BUILD_DIR)/freeNT $(ISO_DIR)/boot/ && cp freeNT/src/kernel/boot/grub.cfg $(ISO_DIR)/boot/grub/ && grub-mkrescue -o freeNT.iso $(ISO_DIR)/"; \
-	fi
+boot_detect.o: $(BOOT_DIR)/boot_detect.c
+	$(CC) $(CFLAGS) -c $(BOOT_DIR)/boot_detect.c -o boot_detect.o
 
-# Clean
+kernel.o: $(SRC_DIR)/kernel.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/kernel.c -o kernel.o
+
+io.o: $(SRC_DIR)/io.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/io.c -o io.o
+
+string.o: $(SRC_DIR)/string.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/string.c -o string.o
+
+graphics.o: $(SRC_DIR)/graphics.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/graphics.c -o graphics.o
+
+memory.o: $(SRC_DIR)/memory.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/memory.c -o memory.o
+
+interrupts.o: $(SRC_DIR)/interrupts.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/interrupts.c -o interrupts.o
+
+process.o: $(SRC_DIR)/process.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/process.c -o process.o
+
+filesystem.o: $(SRC_DIR)/filesystem.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/filesystem.c -o filesystem.o
+
+syscall.o: $(SRC_DIR)/syscall.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/syscall.c -o syscall.o
+
+elf_loader.o: $(SRC_DIR)/elf_loader.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/elf_loader.c -o elf_loader.o
+
+auth.o: $(SRC_DIR)/auth.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/auth.c -o auth.o
+
+ata.o: $(INSTALLER_DIR)/ata.c
+	$(CC) $(CFLAGS) -c $(INSTALLER_DIR)/ata.c -o ata.o
+
+install.o: $(INSTALLER_DIR)/install.c
+	$(CC) $(CFLAGS) -c $(INSTALLER_DIR)/install.c -o install.o
+
+stubs.o: $(SRC_DIR)/stubs.c
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/stubs.c -o stubs.o
+
+kernel.bin: $(OBJECTS)
+	$(LD) $(LDFLAGS) $(OBJECTS) -o kernel.bin
+
 clean:
-	@echo "Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR)
-	@rm -rf $(ISO_DIR)
+	rm -rf *.o kernel.bin isodir ToriginalOS.iso freeNT.iso
 
-# Distclean (complete cleanup)
-distclean: clean
-	@rm -rf $(INSTALL_DIR)
-	@rm -f freeNT.iso
-	@find . -name "*.o" -delete
-	@find . -name "*.a" -delete
-	@echo "Cleaned all build artifacts"
+iso: kernel.bin
+	mkdir -p isodir/boot/grub
+	cp kernel.bin isodir/boot/
 
-# Help
-help:
-	@echo "freeNT OS - Build Targets"
-	@echo ""
-	@echo "  make all         - Build kernel and shell (default)"
-	@echo "  make kernel      - Build freeNT kernel only"
-	@echo "  make shell       - Build Toriginal OS shell only"
-	@echo "  make install     - Install to $(INSTALL_DIR)"
-	@echo "  make test        - Run shell directly"
-	@echo "  make run-shell   - Run shell with banner"
-	@echo "  make iso         - Create bootable ISO image"
-	@echo "  make clean       - Remove build directory"
-	@echo "  make distclean   - Remove all build artifacts"
-	@echo "  make help        - Show this help message"
+	printf 'set timeout=0\n' > isodir/boot/grub/grub.cfg
+	printf 'set default=0\n\n' >> isodir/boot/grub/grub.cfg
+	printf 'menuentry "Toriginal OS (64-Bit)" {\n' >> isodir/boot/grub/grub.cfg
+	printf '    multiboot2 /boot/kernel.bin\n' >> isodir/boot/grub/grub.cfg
+	printf '    boot\n' >> isodir/boot/grub/grub.cfg
+	printf '}\n' >> isodir/boot/grub/grub.cfg
+
+	grub-mkrescue -o ToriginalOS.iso isodir

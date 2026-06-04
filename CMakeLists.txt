@@ -3,9 +3,6 @@ PROJECT(freeNT_OS LANGUAGES C CXX ASM)
 
 # Add subdirectories
 ADD_SUBDIRECTORY(freeNT)
-ADD_SUBDIRECTORY(shell)
-ADD_SUBDIRECTORY(pkgman)
-ADD_SUBDIRECTORY(gui)
-ADD_SUBDIRECTORY(apps)
-ADD_SUBDIRECTORY(drivers)
-add_subdirectory(tools/mkisoboot)
+add_subdirectory(sys/shell)
+add_subdirectory(sys/gui)
+# add_subdirectory(sys/userpc)

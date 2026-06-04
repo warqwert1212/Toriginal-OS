@@ -14,12 +14,16 @@ set(CMAKE_ASM_COMPILER_ID "GNU")
 
 # The include file search paths:
 set(CMAKE_ASM_TARGET_INCLUDE_PATH
-  "/workspaces/Toriganal-OS/freeNT/src/kernel/include"
+  "/workspaces/Toriganal-OS/freeNT/src/kernel"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/boot"
+  "/workspaces/Toriganal-OS/freeNT/src/kernel/include"
+  "/workspaces/Toriganal-OS/freeNT/src/installer"
   )
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/workspaces/Toriganal-OS/freeNT/src/installer/ata.c" "freeNT/CMakeFiles/freeNT.dir/src/installer/ata.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/installer/ata.c.o.d"
+  "/workspaces/Toriganal-OS/freeNT/src/installer/install.c" "freeNT/CMakeFiles/freeNT.dir/src/installer/install.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/installer/install.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/boot/boot_detect.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/fs/filesystem.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/fs/filesystem.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/graphics.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/graphics.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/graphics.c.o.d"
@@ -30,7 +34,6 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/workspaces/Toriganal-OS/freeNT/src/kernel/loader/loader_enhanced.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/loader/loader_enhanced.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/mm/memory.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/mm/memory.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/mm/memory.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/process/process.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/process/process.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/process/process.c.o.d"
-  "/workspaces/Toriganal-OS/freeNT/src/kernel/shell/shell.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/string.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/string.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/string.c.o.d"
   "/workspaces/Toriganal-OS/freeNT/src/kernel/syscall/syscall.c" "freeNT/CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o" "gcc" "freeNT/CMakeFiles/freeNT.dir/src/kernel/syscall/syscall.c.o.d"
   )

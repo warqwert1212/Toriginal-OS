@@ -1,2 +1,0 @@
-/usr/bin/ar qc libnet_driver.a CMakeFiles/net_driver.dir/network/src/network_driver.c.o
-/usr/bin/ranlib libnet_driver.a

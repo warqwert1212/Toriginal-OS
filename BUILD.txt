@@ -1,4 +1,4 @@
-## freeNT OS - Build & Installation Quick Reference
+=S - Build & Installation Quick Reference
 
 ### Quick Build
 

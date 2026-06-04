@@ -1,2 +1,0 @@
-/usr/bin/ar qc libpkgman.a CMakeFiles/pkgman.dir/src/pkgman.c.o
-/usr/bin/ranlib libpkgman.a

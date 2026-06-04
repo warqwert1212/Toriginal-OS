@@ -1,0 +1,9 @@
+# Ignore the backup folder with a space
+back\ up/
+back up/
+
+# If you made a backup folder without a space later
+backup/
+
+# Ignore the generated ramdisk archive
+sysroot.tar

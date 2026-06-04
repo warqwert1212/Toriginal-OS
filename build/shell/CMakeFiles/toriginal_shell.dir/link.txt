@@ -1,1 +1,0 @@
-/usr/bin/c++  -Wall -Wextra -Wpedantic -O3 -DNDEBUG CMakeFiles/toriginal_shell.dir/src/shell.cpp.o CMakeFiles/toriginal_shell.dir/src/main.cpp.o -o toriginal_shell 

@@ -162,6 +162,19 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named shell_payload
+
+# Build rule for target.
+shell_payload: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 shell_payload
+.PHONY : shell_payload
+
+# fast build rule for target.
+shell_payload/fast:
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/shell_payload.dir/build.make freeNT/CMakeFiles/shell_payload.dir/build
+.PHONY : shell_payload/fast
+
+#=============================================================================
 # Target rules for targets named freeNT
 
 # Build rule for target.
@@ -175,6 +188,19 @@ freeNT/fast:
 .PHONY : freeNT/fast
 
 #=============================================================================
+# Target rules for targets named iso
+
+# Build rule for target.
+iso: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iso
+.PHONY : iso
+
+# fast build rule for target.
+iso/fast:
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/iso.dir/build.make freeNT/CMakeFiles/iso.dir/build
+.PHONY : iso/fast
+
+#=============================================================================
 # Target rules for targets named toriginal_shell
 
 # Build rule for target.
@@ -184,21 +210,8 @@ toriginal_shell: cmake_check_build_system
 
 # fast build rule for target.
 toriginal_shell/fast:
-	$(MAKE) $(MAKESILENT) -f shell/CMakeFiles/toriginal_shell.dir/build.make shell/CMakeFiles/toriginal_shell.dir/build
+	$(MAKE) $(MAKESILENT) -f sys/shell/CMakeFiles/toriginal_shell.dir/build.make sys/shell/CMakeFiles/toriginal_shell.dir/build
 .PHONY : toriginal_shell/fast
-
-#=============================================================================
-# Target rules for targets named pkgman
-
-# Build rule for target.
-pkgman: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pkgman
-.PHONY : pkgman
-
-# fast build rule for target.
-pkgman/fast:
-	$(MAKE) $(MAKESILENT) -f pkgman/CMakeFiles/pkgman.dir/build.make pkgman/CMakeFiles/pkgman.dir/build
-.PHONY : pkgman/fast
 
 #=============================================================================
 # Target rules for targets named gui_framework
@@ -210,7 +223,7 @@ gui_framework: cmake_check_build_system
 
 # fast build rule for target.
 gui_framework/fast:
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/gui_framework.dir/build.make gui/CMakeFiles/gui_framework.dir/build
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/gui_framework.dir/build.make sys/gui/CMakeFiles/gui_framework.dir/build
 .PHONY : gui_framework/fast
 
 #=============================================================================
@@ -223,73 +236,8 @@ desktop: cmake_check_build_system
 
 # fast build rule for target.
 desktop/fast:
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/desktop.dir/build.make gui/CMakeFiles/desktop.dir/build
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/desktop.dir/build.make sys/gui/CMakeFiles/desktop.dir/build
 .PHONY : desktop/fast
-
-#=============================================================================
-# Target rules for targets named snake
-
-# Build rule for target.
-snake: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 snake
-.PHONY : snake
-
-# fast build rule for target.
-snake/fast:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/build
-.PHONY : snake/fast
-
-#=============================================================================
-# Target rules for targets named cli_app
-
-# Build rule for target.
-cli_app: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 cli_app
-.PHONY : cli_app
-
-# fast build rule for target.
-cli_app/fast:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/build
-.PHONY : cli_app/fast
-
-#=============================================================================
-# Target rules for targets named gui_app
-
-# Build rule for target.
-gui_app: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 gui_app
-.PHONY : gui_app
-
-# fast build rule for target.
-gui_app/fast:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/build
-.PHONY : gui_app/fast
-
-#=============================================================================
-# Target rules for targets named net_driver
-
-# Build rule for target.
-net_driver: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 net_driver
-.PHONY : net_driver
-
-# fast build rule for target.
-net_driver/fast:
-	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/build
-.PHONY : net_driver/fast
-
-#=============================================================================
-# Target rules for targets named mkisoboot
-
-# Build rule for target.
-mkisoboot: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mkisoboot
-.PHONY : mkisoboot
-
-# fast build rule for target.
-mkisoboot/fast:
-	$(MAKE) $(MAKESILENT) -f tools/mkisoboot/CMakeFiles/mkisoboot.dir/build.make tools/mkisoboot/CMakeFiles/mkisoboot.dir/build
-.PHONY : mkisoboot/fast
 
 # Help Target
 help:
@@ -303,15 +251,11 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
-	@echo "... cli_app"
+	@echo "... iso"
+	@echo "... shell_payload"
 	@echo "... desktop"
 	@echo "... freeNT"
-	@echo "... gui_app"
 	@echo "... gui_framework"
-	@echo "... mkisoboot"
-	@echo "... net_driver"
-	@echo "... pkgman"
-	@echo "... snake"
 	@echo "... toriginal_shell"
 .PHONY : help
 

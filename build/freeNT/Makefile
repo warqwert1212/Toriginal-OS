@@ -162,6 +162,20 @@ depend:
 .PHONY : depend
 
 # Convenience name for target.
+freeNT/CMakeFiles/shell_payload.dir/rule:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/shell_payload.dir/rule
+.PHONY : freeNT/CMakeFiles/shell_payload.dir/rule
+
+# Convenience name for target.
+shell_payload: freeNT/CMakeFiles/shell_payload.dir/rule
+.PHONY : shell_payload
+
+# fast build rule for target.
+shell_payload/fast:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/shell_payload.dir/build.make freeNT/CMakeFiles/shell_payload.dir/build
+.PHONY : shell_payload/fast
+
+# Convenience name for target.
 freeNT/CMakeFiles/freeNT.dir/rule:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/freeNT.dir/rule
 .PHONY : freeNT/CMakeFiles/freeNT.dir/rule
@@ -174,6 +188,68 @@ freeNT: freeNT/CMakeFiles/freeNT.dir/rule
 freeNT/fast:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/build
 .PHONY : freeNT/fast
+
+# Convenience name for target.
+freeNT/CMakeFiles/iso.dir/rule:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/iso.dir/rule
+.PHONY : freeNT/CMakeFiles/iso.dir/rule
+
+# Convenience name for target.
+iso: freeNT/CMakeFiles/iso.dir/rule
+.PHONY : iso
+
+# fast build rule for target.
+iso/fast:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/iso.dir/build.make freeNT/CMakeFiles/iso.dir/build
+.PHONY : iso/fast
+
+src/installer/ata.o: src/installer/ata.c.o
+.PHONY : src/installer/ata.o
+
+# target to build an object file
+src/installer/ata.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/installer/ata.c.o
+.PHONY : src/installer/ata.c.o
+
+src/installer/ata.i: src/installer/ata.c.i
+.PHONY : src/installer/ata.i
+
+# target to preprocess a source file
+src/installer/ata.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/installer/ata.c.i
+.PHONY : src/installer/ata.c.i
+
+src/installer/ata.s: src/installer/ata.c.s
+.PHONY : src/installer/ata.s
+
+# target to generate assembly for a file
+src/installer/ata.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/installer/ata.c.s
+.PHONY : src/installer/ata.c.s
+
+src/installer/install.o: src/installer/install.c.o
+.PHONY : src/installer/install.o
+
+# target to build an object file
+src/installer/install.c.o:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/installer/install.c.o
+.PHONY : src/installer/install.c.o
+
+src/installer/install.i: src/installer/install.c.i
+.PHONY : src/installer/install.i
+
+# target to preprocess a source file
+src/installer/install.c.i:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/installer/install.c.i
+.PHONY : src/installer/install.c.i
+
+src/installer/install.s: src/installer/install.c.s
+.PHONY : src/installer/install.s
+
+# target to generate assembly for a file
+src/installer/install.c.s:
+	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/installer/install.c.s
+.PHONY : src/installer/install.c.s
 
 src/kernel/boot/boot64.o: src/kernel/boot/boot64.S.o
 .PHONY : src/kernel/boot/boot64.o
@@ -423,30 +499,6 @@ src/kernel/process/process.c.s:
 	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/process/process.c.s
 .PHONY : src/kernel/process/process.c.s
 
-src/kernel/shell/shell.o: src/kernel/shell/shell.c.o
-.PHONY : src/kernel/shell/shell.o
-
-# target to build an object file
-src/kernel/shell/shell.c.o:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.o
-.PHONY : src/kernel/shell/shell.c.o
-
-src/kernel/shell/shell.i: src/kernel/shell/shell.c.i
-.PHONY : src/kernel/shell/shell.i
-
-# target to preprocess a source file
-src/kernel/shell/shell.c.i:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.i
-.PHONY : src/kernel/shell/shell.c.i
-
-src/kernel/shell/shell.s: src/kernel/shell/shell.c.s
-.PHONY : src/kernel/shell/shell.s
-
-# target to generate assembly for a file
-src/kernel/shell/shell.c.s:
-	cd /workspaces/Toriganal-OS/build && $(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/src/kernel/shell/shell.c.s
-.PHONY : src/kernel/shell/shell.c.s
-
 src/kernel/string.o: src/kernel/string.c.o
 .PHONY : src/kernel/string.o
 
@@ -507,7 +559,15 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... iso"
+	@echo "... shell_payload"
 	@echo "... freeNT"
+	@echo "... src/installer/ata.o"
+	@echo "... src/installer/ata.i"
+	@echo "... src/installer/ata.s"
+	@echo "... src/installer/install.o"
+	@echo "... src/installer/install.i"
+	@echo "... src/installer/install.s"
 	@echo "... src/kernel/boot/boot64.o"
 	@echo "... src/kernel/boot/boot_detect.o"
 	@echo "... src/kernel/boot/boot_detect.i"
@@ -539,9 +599,6 @@ help:
 	@echo "... src/kernel/process/process.o"
 	@echo "... src/kernel/process/process.i"
 	@echo "... src/kernel/process/process.s"
-	@echo "... src/kernel/shell/shell.o"
-	@echo "... src/kernel/shell/shell.i"
-	@echo "... src/kernel/shell/shell.s"
 	@echo "... src/kernel/string.o"
 	@echo "... src/kernel/string.i"
 	@echo "... src/kernel/string.s"

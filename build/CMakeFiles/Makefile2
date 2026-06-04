@@ -64,158 +64,127 @@ CMAKE_BINARY_DIR = /workspaces/Toriganal-OS/build
 
 # The main recursive "all" target.
 all: freeNT/all
-all: shell/all
-all: pkgman/all
-all: gui/all
-all: apps/all
-all: drivers/all
-all: tools/mkisoboot/all
+all: sys/shell/all
+all: sys/gui/all
 .PHONY : all
 
 # The main recursive "preinstall" target.
 preinstall: freeNT/preinstall
-preinstall: shell/preinstall
-preinstall: pkgman/preinstall
-preinstall: gui/preinstall
-preinstall: apps/preinstall
-preinstall: drivers/preinstall
-preinstall: tools/mkisoboot/preinstall
+preinstall: sys/shell/preinstall
+preinstall: sys/gui/preinstall
 .PHONY : preinstall
 
 # The main recursive "clean" target.
 clean: freeNT/clean
-clean: shell/clean
-clean: pkgman/clean
-clean: gui/clean
-clean: apps/clean
-clean: drivers/clean
-clean: tools/mkisoboot/clean
+clean: sys/shell/clean
+clean: sys/gui/clean
 .PHONY : clean
-
-#=============================================================================
-# Directory level rules for directory apps
-
-# Recursive "all" directory target.
-apps/all: apps/CMakeFiles/snake.dir/all
-apps/all: apps/CMakeFiles/cli_app.dir/all
-apps/all: apps/CMakeFiles/gui_app.dir/all
-.PHONY : apps/all
-
-# Recursive "preinstall" directory target.
-apps/preinstall:
-.PHONY : apps/preinstall
-
-# Recursive "clean" directory target.
-apps/clean: apps/CMakeFiles/snake.dir/clean
-apps/clean: apps/CMakeFiles/cli_app.dir/clean
-apps/clean: apps/CMakeFiles/gui_app.dir/clean
-.PHONY : apps/clean
-
-#=============================================================================
-# Directory level rules for directory drivers
-
-# Recursive "all" directory target.
-drivers/all: drivers/CMakeFiles/net_driver.dir/all
-.PHONY : drivers/all
-
-# Recursive "preinstall" directory target.
-drivers/preinstall:
-.PHONY : drivers/preinstall
-
-# Recursive "clean" directory target.
-drivers/clean: drivers/CMakeFiles/net_driver.dir/clean
-.PHONY : drivers/clean
 
 #=============================================================================
 # Directory level rules for directory freeNT
 
 # Recursive "all" directory target.
 freeNT/all: freeNT/CMakeFiles/freeNT.dir/all
+freeNT/all: freeNT/src/installer/all
 .PHONY : freeNT/all
 
 # Recursive "preinstall" directory target.
-freeNT/preinstall:
+freeNT/preinstall: freeNT/src/installer/preinstall
 .PHONY : freeNT/preinstall
 
 # Recursive "clean" directory target.
+freeNT/clean: freeNT/CMakeFiles/shell_payload.dir/clean
 freeNT/clean: freeNT/CMakeFiles/freeNT.dir/clean
+freeNT/clean: freeNT/CMakeFiles/iso.dir/clean
+freeNT/clean: freeNT/src/installer/clean
 .PHONY : freeNT/clean
 
 #=============================================================================
-# Directory level rules for directory gui
+# Directory level rules for directory freeNT/src/installer
 
 # Recursive "all" directory target.
-gui/all: gui/CMakeFiles/gui_framework.dir/all
-gui/all: gui/CMakeFiles/desktop.dir/all
-.PHONY : gui/all
+freeNT/src/installer/all:
+.PHONY : freeNT/src/installer/all
 
 # Recursive "preinstall" directory target.
-gui/preinstall:
-.PHONY : gui/preinstall
+freeNT/src/installer/preinstall:
+.PHONY : freeNT/src/installer/preinstall
 
 # Recursive "clean" directory target.
-gui/clean: gui/CMakeFiles/gui_framework.dir/clean
-gui/clean: gui/CMakeFiles/desktop.dir/clean
-.PHONY : gui/clean
+freeNT/src/installer/clean:
+.PHONY : freeNT/src/installer/clean
 
 #=============================================================================
-# Directory level rules for directory pkgman
+# Directory level rules for directory sys/gui
 
 # Recursive "all" directory target.
-pkgman/all: pkgman/CMakeFiles/pkgman.dir/all
-.PHONY : pkgman/all
+sys/gui/all: sys/gui/CMakeFiles/gui_framework.dir/all
+sys/gui/all: sys/gui/CMakeFiles/desktop.dir/all
+.PHONY : sys/gui/all
 
 # Recursive "preinstall" directory target.
-pkgman/preinstall:
-.PHONY : pkgman/preinstall
+sys/gui/preinstall:
+.PHONY : sys/gui/preinstall
 
 # Recursive "clean" directory target.
-pkgman/clean: pkgman/CMakeFiles/pkgman.dir/clean
-.PHONY : pkgman/clean
+sys/gui/clean: sys/gui/CMakeFiles/gui_framework.dir/clean
+sys/gui/clean: sys/gui/CMakeFiles/desktop.dir/clean
+.PHONY : sys/gui/clean
 
 #=============================================================================
-# Directory level rules for directory shell
+# Directory level rules for directory sys/shell
 
 # Recursive "all" directory target.
-shell/all: shell/CMakeFiles/toriginal_shell.dir/all
-.PHONY : shell/all
+sys/shell/all: sys/shell/CMakeFiles/toriginal_shell.dir/all
+.PHONY : sys/shell/all
 
 # Recursive "preinstall" directory target.
-shell/preinstall:
-.PHONY : shell/preinstall
+sys/shell/preinstall:
+.PHONY : sys/shell/preinstall
 
 # Recursive "clean" directory target.
-shell/clean: shell/CMakeFiles/toriginal_shell.dir/clean
-.PHONY : shell/clean
+sys/shell/clean: sys/shell/CMakeFiles/toriginal_shell.dir/clean
+.PHONY : sys/shell/clean
 
 #=============================================================================
-# Directory level rules for directory tools/mkisoboot
+# Target rules for target freeNT/CMakeFiles/shell_payload.dir
 
-# Recursive "all" directory target.
-tools/mkisoboot/all: tools/mkisoboot/CMakeFiles/mkisoboot.dir/all
-.PHONY : tools/mkisoboot/all
+# All Build rule for target.
+freeNT/CMakeFiles/shell_payload.dir/all:
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/shell_payload.dir/build.make freeNT/CMakeFiles/shell_payload.dir/depend
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/shell_payload.dir/build.make freeNT/CMakeFiles/shell_payload.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=24 "Built target shell_payload"
+.PHONY : freeNT/CMakeFiles/shell_payload.dir/all
 
-# Recursive "preinstall" directory target.
-tools/mkisoboot/preinstall:
-.PHONY : tools/mkisoboot/preinstall
+# Build rule for subdir invocation for target.
+freeNT/CMakeFiles/shell_payload.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 1
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/shell_payload.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
+.PHONY : freeNT/CMakeFiles/shell_payload.dir/rule
 
-# Recursive "clean" directory target.
-tools/mkisoboot/clean: tools/mkisoboot/CMakeFiles/mkisoboot.dir/clean
-.PHONY : tools/mkisoboot/clean
+# Convenience name for target.
+shell_payload: freeNT/CMakeFiles/shell_payload.dir/rule
+.PHONY : shell_payload
+
+# clean rule for target.
+freeNT/CMakeFiles/shell_payload.dir/clean:
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/shell_payload.dir/build.make freeNT/CMakeFiles/shell_payload.dir/clean
+.PHONY : freeNT/CMakeFiles/shell_payload.dir/clean
 
 #=============================================================================
 # Target rules for target freeNT/CMakeFiles/freeNT.dir
 
 # All Build rule for target.
-freeNT/CMakeFiles/freeNT.dir/all:
+freeNT/CMakeFiles/freeNT.dir/all: freeNT/CMakeFiles/shell_payload.dir/all
 	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/depend
 	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/freeNT.dir/build.make freeNT/CMakeFiles/freeNT.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19 "Built target freeNT"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19 "Built target freeNT"
 .PHONY : freeNT/CMakeFiles/freeNT.dir/all
 
 # Build rule for subdir invocation for target.
 freeNT/CMakeFiles/freeNT.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 15
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 18
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/freeNT.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
 .PHONY : freeNT/CMakeFiles/freeNT.dir/rule
@@ -230,238 +199,108 @@ freeNT/CMakeFiles/freeNT.dir/clean:
 .PHONY : freeNT/CMakeFiles/freeNT.dir/clean
 
 #=============================================================================
-# Target rules for target shell/CMakeFiles/toriginal_shell.dir
+# Target rules for target freeNT/CMakeFiles/iso.dir
 
 # All Build rule for target.
-shell/CMakeFiles/toriginal_shell.dir/all:
-	$(MAKE) $(MAKESILENT) -f shell/CMakeFiles/toriginal_shell.dir/build.make shell/CMakeFiles/toriginal_shell.dir/depend
-	$(MAKE) $(MAKESILENT) -f shell/CMakeFiles/toriginal_shell.dir/build.make shell/CMakeFiles/toriginal_shell.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=33,34,35 "Built target toriginal_shell"
-.PHONY : shell/CMakeFiles/toriginal_shell.dir/all
+freeNT/CMakeFiles/iso.dir/all: freeNT/CMakeFiles/freeNT.dir/all
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/iso.dir/build.make freeNT/CMakeFiles/iso.dir/depend
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/iso.dir/build.make freeNT/CMakeFiles/iso.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=23 "Built target iso"
+.PHONY : freeNT/CMakeFiles/iso.dir/all
 
 # Build rule for subdir invocation for target.
-shell/CMakeFiles/toriginal_shell.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 3
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 shell/CMakeFiles/toriginal_shell.dir/all
+freeNT/CMakeFiles/iso.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 19
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 freeNT/CMakeFiles/iso.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : shell/CMakeFiles/toriginal_shell.dir/rule
+.PHONY : freeNT/CMakeFiles/iso.dir/rule
 
 # Convenience name for target.
-toriginal_shell: shell/CMakeFiles/toriginal_shell.dir/rule
+iso: freeNT/CMakeFiles/iso.dir/rule
+.PHONY : iso
+
+# clean rule for target.
+freeNT/CMakeFiles/iso.dir/clean:
+	$(MAKE) $(MAKESILENT) -f freeNT/CMakeFiles/iso.dir/build.make freeNT/CMakeFiles/iso.dir/clean
+.PHONY : freeNT/CMakeFiles/iso.dir/clean
+
+#=============================================================================
+# Target rules for target sys/shell/CMakeFiles/toriginal_shell.dir
+
+# All Build rule for target.
+sys/shell/CMakeFiles/toriginal_shell.dir/all:
+	$(MAKE) $(MAKESILENT) -f sys/shell/CMakeFiles/toriginal_shell.dir/build.make sys/shell/CMakeFiles/toriginal_shell.dir/depend
+	$(MAKE) $(MAKESILENT) -f sys/shell/CMakeFiles/toriginal_shell.dir/build.make sys/shell/CMakeFiles/toriginal_shell.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=25,26,27 "Built target toriginal_shell"
+.PHONY : sys/shell/CMakeFiles/toriginal_shell.dir/all
+
+# Build rule for subdir invocation for target.
+sys/shell/CMakeFiles/toriginal_shell.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 3
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 sys/shell/CMakeFiles/toriginal_shell.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
+.PHONY : sys/shell/CMakeFiles/toriginal_shell.dir/rule
+
+# Convenience name for target.
+toriginal_shell: sys/shell/CMakeFiles/toriginal_shell.dir/rule
 .PHONY : toriginal_shell
 
 # clean rule for target.
-shell/CMakeFiles/toriginal_shell.dir/clean:
-	$(MAKE) $(MAKESILENT) -f shell/CMakeFiles/toriginal_shell.dir/build.make shell/CMakeFiles/toriginal_shell.dir/clean
-.PHONY : shell/CMakeFiles/toriginal_shell.dir/clean
+sys/shell/CMakeFiles/toriginal_shell.dir/clean:
+	$(MAKE) $(MAKESILENT) -f sys/shell/CMakeFiles/toriginal_shell.dir/build.make sys/shell/CMakeFiles/toriginal_shell.dir/clean
+.PHONY : sys/shell/CMakeFiles/toriginal_shell.dir/clean
 
 #=============================================================================
-# Target rules for target pkgman/CMakeFiles/pkgman.dir
+# Target rules for target sys/gui/CMakeFiles/gui_framework.dir
 
 # All Build rule for target.
-pkgman/CMakeFiles/pkgman.dir/all:
-	$(MAKE) $(MAKESILENT) -f pkgman/CMakeFiles/pkgman.dir/build.make pkgman/CMakeFiles/pkgman.dir/depend
-	$(MAKE) $(MAKESILENT) -f pkgman/CMakeFiles/pkgman.dir/build.make pkgman/CMakeFiles/pkgman.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=29,30 "Built target pkgman"
-.PHONY : pkgman/CMakeFiles/pkgman.dir/all
+sys/gui/CMakeFiles/gui_framework.dir/all:
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/gui_framework.dir/build.make sys/gui/CMakeFiles/gui_framework.dir/depend
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/gui_framework.dir/build.make sys/gui/CMakeFiles/gui_framework.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=20,21,22 "Built target gui_framework"
+.PHONY : sys/gui/CMakeFiles/gui_framework.dir/all
 
 # Build rule for subdir invocation for target.
-pkgman/CMakeFiles/pkgman.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pkgman/CMakeFiles/pkgman.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : pkgman/CMakeFiles/pkgman.dir/rule
-
-# Convenience name for target.
-pkgman: pkgman/CMakeFiles/pkgman.dir/rule
-.PHONY : pkgman
-
-# clean rule for target.
-pkgman/CMakeFiles/pkgman.dir/clean:
-	$(MAKE) $(MAKESILENT) -f pkgman/CMakeFiles/pkgman.dir/build.make pkgman/CMakeFiles/pkgman.dir/clean
-.PHONY : pkgman/CMakeFiles/pkgman.dir/clean
-
-#=============================================================================
-# Target rules for target gui/CMakeFiles/gui_framework.dir
-
-# All Build rule for target.
-gui/CMakeFiles/gui_framework.dir/all:
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/gui_framework.dir/build.make gui/CMakeFiles/gui_framework.dir/depend
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/gui_framework.dir/build.make gui/CMakeFiles/gui_framework.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=22,23,24 "Built target gui_framework"
-.PHONY : gui/CMakeFiles/gui_framework.dir/all
-
-# Build rule for subdir invocation for target.
-gui/CMakeFiles/gui_framework.dir/rule: cmake_check_build_system
+sys/gui/CMakeFiles/gui_framework.dir/rule: cmake_check_build_system
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 3
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 gui/CMakeFiles/gui_framework.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 sys/gui/CMakeFiles/gui_framework.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : gui/CMakeFiles/gui_framework.dir/rule
+.PHONY : sys/gui/CMakeFiles/gui_framework.dir/rule
 
 # Convenience name for target.
-gui_framework: gui/CMakeFiles/gui_framework.dir/rule
+gui_framework: sys/gui/CMakeFiles/gui_framework.dir/rule
 .PHONY : gui_framework
 
 # clean rule for target.
-gui/CMakeFiles/gui_framework.dir/clean:
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/gui_framework.dir/build.make gui/CMakeFiles/gui_framework.dir/clean
-.PHONY : gui/CMakeFiles/gui_framework.dir/clean
+sys/gui/CMakeFiles/gui_framework.dir/clean:
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/gui_framework.dir/build.make sys/gui/CMakeFiles/gui_framework.dir/clean
+.PHONY : sys/gui/CMakeFiles/gui_framework.dir/clean
 
 #=============================================================================
-# Target rules for target gui/CMakeFiles/desktop.dir
+# Target rules for target sys/gui/CMakeFiles/desktop.dir
 
 # All Build rule for target.
-gui/CMakeFiles/desktop.dir/all: gui/CMakeFiles/gui_framework.dir/all
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/desktop.dir/build.make gui/CMakeFiles/desktop.dir/depend
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/desktop.dir/build.make gui/CMakeFiles/desktop.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=3,4 "Built target desktop"
-.PHONY : gui/CMakeFiles/desktop.dir/all
+sys/gui/CMakeFiles/desktop.dir/all: sys/gui/CMakeFiles/gui_framework.dir/all
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/desktop.dir/build.make sys/gui/CMakeFiles/desktop.dir/depend
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/desktop.dir/build.make sys/gui/CMakeFiles/desktop.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=1,2 "Built target desktop"
+.PHONY : sys/gui/CMakeFiles/desktop.dir/all
 
 # Build rule for subdir invocation for target.
-gui/CMakeFiles/desktop.dir/rule: cmake_check_build_system
+sys/gui/CMakeFiles/desktop.dir/rule: cmake_check_build_system
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 5
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 gui/CMakeFiles/desktop.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 sys/gui/CMakeFiles/desktop.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : gui/CMakeFiles/desktop.dir/rule
+.PHONY : sys/gui/CMakeFiles/desktop.dir/rule
 
 # Convenience name for target.
-desktop: gui/CMakeFiles/desktop.dir/rule
+desktop: sys/gui/CMakeFiles/desktop.dir/rule
 .PHONY : desktop
 
 # clean rule for target.
-gui/CMakeFiles/desktop.dir/clean:
-	$(MAKE) $(MAKESILENT) -f gui/CMakeFiles/desktop.dir/build.make gui/CMakeFiles/desktop.dir/clean
-.PHONY : gui/CMakeFiles/desktop.dir/clean
-
-#=============================================================================
-# Target rules for target apps/CMakeFiles/snake.dir
-
-# All Build rule for target.
-apps/CMakeFiles/snake.dir/all:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/depend
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=31,32 "Built target snake"
-.PHONY : apps/CMakeFiles/snake.dir/all
-
-# Build rule for subdir invocation for target.
-apps/CMakeFiles/snake.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 apps/CMakeFiles/snake.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : apps/CMakeFiles/snake.dir/rule
-
-# Convenience name for target.
-snake: apps/CMakeFiles/snake.dir/rule
-.PHONY : snake
-
-# clean rule for target.
-apps/CMakeFiles/snake.dir/clean:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/snake.dir/build.make apps/CMakeFiles/snake.dir/clean
-.PHONY : apps/CMakeFiles/snake.dir/clean
-
-#=============================================================================
-# Target rules for target apps/CMakeFiles/cli_app.dir
-
-# All Build rule for target.
-apps/CMakeFiles/cli_app.dir/all:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/depend
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=1,2 "Built target cli_app"
-.PHONY : apps/CMakeFiles/cli_app.dir/all
-
-# Build rule for subdir invocation for target.
-apps/CMakeFiles/cli_app.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 apps/CMakeFiles/cli_app.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : apps/CMakeFiles/cli_app.dir/rule
-
-# Convenience name for target.
-cli_app: apps/CMakeFiles/cli_app.dir/rule
-.PHONY : cli_app
-
-# clean rule for target.
-apps/CMakeFiles/cli_app.dir/clean:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/cli_app.dir/build.make apps/CMakeFiles/cli_app.dir/clean
-.PHONY : apps/CMakeFiles/cli_app.dir/clean
-
-#=============================================================================
-# Target rules for target apps/CMakeFiles/gui_app.dir
-
-# All Build rule for target.
-apps/CMakeFiles/gui_app.dir/all:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/depend
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=20,21 "Built target gui_app"
-.PHONY : apps/CMakeFiles/gui_app.dir/all
-
-# Build rule for subdir invocation for target.
-apps/CMakeFiles/gui_app.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 apps/CMakeFiles/gui_app.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : apps/CMakeFiles/gui_app.dir/rule
-
-# Convenience name for target.
-gui_app: apps/CMakeFiles/gui_app.dir/rule
-.PHONY : gui_app
-
-# clean rule for target.
-apps/CMakeFiles/gui_app.dir/clean:
-	$(MAKE) $(MAKESILENT) -f apps/CMakeFiles/gui_app.dir/build.make apps/CMakeFiles/gui_app.dir/clean
-.PHONY : apps/CMakeFiles/gui_app.dir/clean
-
-#=============================================================================
-# Target rules for target drivers/CMakeFiles/net_driver.dir
-
-# All Build rule for target.
-drivers/CMakeFiles/net_driver.dir/all:
-	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/depend
-	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=27,28 "Built target net_driver"
-.PHONY : drivers/CMakeFiles/net_driver.dir/all
-
-# Build rule for subdir invocation for target.
-drivers/CMakeFiles/net_driver.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 drivers/CMakeFiles/net_driver.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : drivers/CMakeFiles/net_driver.dir/rule
-
-# Convenience name for target.
-net_driver: drivers/CMakeFiles/net_driver.dir/rule
-.PHONY : net_driver
-
-# clean rule for target.
-drivers/CMakeFiles/net_driver.dir/clean:
-	$(MAKE) $(MAKESILENT) -f drivers/CMakeFiles/net_driver.dir/build.make drivers/CMakeFiles/net_driver.dir/clean
-.PHONY : drivers/CMakeFiles/net_driver.dir/clean
-
-#=============================================================================
-# Target rules for target tools/mkisoboot/CMakeFiles/mkisoboot.dir
-
-# All Build rule for target.
-tools/mkisoboot/CMakeFiles/mkisoboot.dir/all:
-	$(MAKE) $(MAKESILENT) -f tools/mkisoboot/CMakeFiles/mkisoboot.dir/build.make tools/mkisoboot/CMakeFiles/mkisoboot.dir/depend
-	$(MAKE) $(MAKESILENT) -f tools/mkisoboot/CMakeFiles/mkisoboot.dir/build.make tools/mkisoboot/CMakeFiles/mkisoboot.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/workspaces/Toriganal-OS/build/CMakeFiles --progress-num=25,26 "Built target mkisoboot"
-.PHONY : tools/mkisoboot/CMakeFiles/mkisoboot.dir/all
-
-# Build rule for subdir invocation for target.
-tools/mkisoboot/CMakeFiles/mkisoboot.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 tools/mkisoboot/CMakeFiles/mkisoboot.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /workspaces/Toriganal-OS/build/CMakeFiles 0
-.PHONY : tools/mkisoboot/CMakeFiles/mkisoboot.dir/rule
-
-# Convenience name for target.
-mkisoboot: tools/mkisoboot/CMakeFiles/mkisoboot.dir/rule
-.PHONY : mkisoboot
-
-# clean rule for target.
-tools/mkisoboot/CMakeFiles/mkisoboot.dir/clean:
-	$(MAKE) $(MAKESILENT) -f tools/mkisoboot/CMakeFiles/mkisoboot.dir/build.make tools/mkisoboot/CMakeFiles/mkisoboot.dir/clean
-.PHONY : tools/mkisoboot/CMakeFiles/mkisoboot.dir/clean
+sys/gui/CMakeFiles/desktop.dir/clean:
+	$(MAKE) $(MAKESILENT) -f sys/gui/CMakeFiles/desktop.dir/build.make sys/gui/CMakeFiles/desktop.dir/clean
+.PHONY : sys/gui/CMakeFiles/desktop.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

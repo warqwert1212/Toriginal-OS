@@ -12,6 +12,5 @@ freeNT/CMakeFiles/freeNT.dir/src/kernel/kernel.c.o: \
  /workspaces/Toriganal-OS/freeNT/src/kernel/include/string.h \
  /workspaces/Toriganal-OS/freeNT/src/kernel/include/shell.h \
  /workspaces/Toriganal-OS/freeNT/src/kernel/boot/boot_detect.h \
- /usr/lib/gcc/x86_64-linux-gnu/13/include/stdint.h \
- /usr/lib/gcc/x86_64-linux-gnu/13/include/stdint-gcc.h \
+ /workspaces/Toriganal-OS/freeNT/src/kernel/include/types.h \
  /workspaces/Toriganal-OS/freeNT/src/kernel/test_exe_data.h

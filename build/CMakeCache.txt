@@ -14,15 +14,6 @@
 # EXTERNAL cache entries
 ########################
 
-//Value Computed by CMake
-Applications_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/apps
-
-//Value Computed by CMake
-Applications_IS_TOP_LEVEL:STATIC=OFF
-
-//Value Computed by CMake
-Applications_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/apps
-
 //Path to a program.
 CMAKE_ADDR2LINE:FILEPATH=/usr/bin/addr2line
 
@@ -250,47 +241,35 @@ CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 // Studio IDE projects all commands are done without /nologo.
 CMAKE_VERBOSE_MAKEFILE:BOOL=FALSE
 
-//Value Computed by CMake
-Drivers_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/drivers
+//Path to a program.
+GRUB_MKRESCUE_EXE:FILEPATH=/usr/bin/grub-mkrescue
 
 //Value Computed by CMake
-Drivers_IS_TOP_LEVEL:STATIC=OFF
-
-//Value Computed by CMake
-Drivers_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/drivers
-
-//Value Computed by CMake
-GUI_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/gui
+GUI_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/sys/gui
 
 //Value Computed by CMake
 GUI_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
-GUI_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/gui
+GUI_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/sys/gui
 
 //Value Computed by CMake
-PackageManager_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/pkgman
+ToriginalOS_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/freeNT
 
 //Value Computed by CMake
-PackageManager_IS_TOP_LEVEL:STATIC=OFF
+ToriginalOS_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
-PackageManager_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/pkgman
+ToriginalOS_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/freeNT
 
 //Value Computed by CMake
-Toriginal_OS_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/shell
+Toriginal_OS_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/sys/shell
 
 //Value Computed by CMake
 Toriginal_OS_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
-Toriginal_OS_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/shell
-
-//Value Computed by CMake
-freeNT_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/freeNT
-
-//Value Computed by CMake
-freeNT_IS_TOP_LEVEL:STATIC=OFF
+Toriginal_OS_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/sys/shell
 
 //Value Computed by CMake
 freeNT_OS_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build
@@ -300,18 +279,6 @@ freeNT_OS_IS_TOP_LEVEL:STATIC=ON
 
 //Value Computed by CMake
 freeNT_OS_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS
-
-//Value Computed by CMake
-freeNT_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/freeNT
-
-//Value Computed by CMake
-mkisoboot_BINARY_DIR:STATIC=/workspaces/Toriganal-OS/build/tools/mkisoboot
-
-//Value Computed by CMake
-mkisoboot_IS_TOP_LEVEL:STATIC=OFF
-
-//Value Computed by CMake
-mkisoboot_SOURCE_DIR:STATIC=/workspaces/Toriganal-OS/tools/mkisoboot
 
 
 ########################
@@ -435,7 +402,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=8
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=5
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP

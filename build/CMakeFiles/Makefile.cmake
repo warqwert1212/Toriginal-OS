@@ -28,17 +28,14 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/usr/share/cmake-3.28/Modules/Platform/Linux.cmake"
   "/usr/share/cmake-3.28/Modules/Platform/UnixPaths.cmake"
   "/workspaces/Toriganal-OS/CMakeLists.txt"
-  "/workspaces/Toriganal-OS/apps/CMakeLists.txt"
   "CMakeFiles/3.28.3/CMakeASMCompiler.cmake"
   "CMakeFiles/3.28.3/CMakeCCompiler.cmake"
   "CMakeFiles/3.28.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/3.28.3/CMakeSystem.cmake"
-  "/workspaces/Toriganal-OS/drivers/CMakeLists.txt"
   "/workspaces/Toriganal-OS/freeNT/CMakeLists.txt"
-  "/workspaces/Toriganal-OS/gui/CMakeLists.txt"
-  "/workspaces/Toriganal-OS/pkgman/CMakeLists.txt"
-  "/workspaces/Toriganal-OS/shell/CMakeLists.txt"
-  "/workspaces/Toriganal-OS/tools/mkisoboot/CMakeLists.txt"
+  "/workspaces/Toriganal-OS/freeNT/src/installer/CMakeLists.txt"
+  "/workspaces/Toriganal-OS/sys/gui/CMakeLists.txt"
+  "/workspaces/Toriganal-OS/sys/shell/CMakeLists.txt"
   )
 
 # The corresponding makefile is:
@@ -51,24 +48,17 @@ set(CMAKE_MAKEFILE_OUTPUTS
 set(CMAKE_MAKEFILE_PRODUCTS
   "CMakeFiles/CMakeDirectoryInformation.cmake"
   "freeNT/CMakeFiles/CMakeDirectoryInformation.cmake"
-  "shell/CMakeFiles/CMakeDirectoryInformation.cmake"
-  "pkgman/CMakeFiles/CMakeDirectoryInformation.cmake"
-  "gui/CMakeFiles/CMakeDirectoryInformation.cmake"
-  "apps/CMakeFiles/CMakeDirectoryInformation.cmake"
-  "drivers/CMakeFiles/CMakeDirectoryInformation.cmake"
-  "tools/mkisoboot/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "freeNT/src/installer/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "sys/shell/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "sys/gui/CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
+  "freeNT/CMakeFiles/shell_payload.dir/DependInfo.cmake"
   "freeNT/CMakeFiles/freeNT.dir/DependInfo.cmake"
-  "shell/CMakeFiles/toriginal_shell.dir/DependInfo.cmake"
-  "pkgman/CMakeFiles/pkgman.dir/DependInfo.cmake"
-  "gui/CMakeFiles/gui_framework.dir/DependInfo.cmake"
-  "gui/CMakeFiles/desktop.dir/DependInfo.cmake"
-  "apps/CMakeFiles/snake.dir/DependInfo.cmake"
-  "apps/CMakeFiles/cli_app.dir/DependInfo.cmake"
-  "apps/CMakeFiles/gui_app.dir/DependInfo.cmake"
-  "drivers/CMakeFiles/net_driver.dir/DependInfo.cmake"
-  "tools/mkisoboot/CMakeFiles/mkisoboot.dir/DependInfo.cmake"
+  "freeNT/CMakeFiles/iso.dir/DependInfo.cmake"
+  "sys/shell/CMakeFiles/toriginal_shell.dir/DependInfo.cmake"
+  "sys/gui/CMakeFiles/gui_framework.dir/DependInfo.cmake"
+  "sys/gui/CMakeFiles/desktop.dir/DependInfo.cmake"
   )
