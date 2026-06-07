@@ -1,0 +1,17 @@
+#ifndef FREENT_KERNEL_H
+#define FREENT_KERNEL_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#define KERNEL_NAME        "freeNT"
+#define KERNEL_VERSION     "0.1"
+
+void kernel_main(
+    uint32_t multiboot_magic,
+    uint32_t multiboot_info
+);
+
+void kernel_panic(const char* reason);
+
+#endif
