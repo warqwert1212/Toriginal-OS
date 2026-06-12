@@ -20,11 +20,15 @@ typedef struct
     uint64_t base;
 } __attribute__((packed)) idtr_t;
 
+/* Backwards-compatible alias used elsewhere in the codebase */
+typedef idtr_t idt_ptr_t;
+
 void idt_init(void);
 
 void idt_set_gate(
     uint8_t vector,
-    void* handler,
+    uint64_t handler,
+    uint16_t selector,
     uint8_t flags
 );
 

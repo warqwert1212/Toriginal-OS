@@ -1,16 +1,13 @@
-# ============================================================================
+# =============================================================================
 # Toriginal OS - freeNT Build System
-# ============================================================================
+# =============================================================================
 
-CC      = gcc
-AS      = gcc
-LD      = ld
+CC  = gcc
+AS  = gcc
+LD  = ld
 
-KERNEL_DIR = root/freeNT/kernel\ 
-INCLUDE_DIR = root/freeNT/include
-BOOT_DIR = $(KERNEL_DIR)boot
-ISO_DIR = iso_root
-GRUB_CFG = $(ISO_DIR)/boot/grub/grub.cfg
+KDIR = root/freeNT/kernel
+INC  = root/freeNT/include
 
 CFLAGS = \
 	-m64 \
@@ -26,20 +23,18 @@ CFLAGS = \
 	-Wall \
 	-Wextra \
 	-O2 \
-	-I"$(INCLUDE_DIR)"
+	-I$(INC)
 
-ASFLAGS = \
-	-c \
-	-m64
+ASFLAGS = -c -m64
 
 LDFLAGS = \
 	-m elf_x86_64 \
-	-T "$(BOOT_DIR)/linker.ld" \
+	-T $(KDIR)/boot/linker.ld \
 	-z noexecstack
 
-# ============================================================================
-# Object files — every .c and .s in your kernel dir
-# ============================================================================
+# =============================================================================
+# Object files
+# =============================================================================
 
 OBJS = \
 	boot64.o \
@@ -50,7 +45,6 @@ OBJS = \
 	memory.o \
 	Pmm.o \
 	vmm.o \
-	idt.o \
 	interrups.o \
 	isr.o \
 	pic.o \
@@ -60,134 +54,118 @@ OBJS = \
 	keybord.o \
 	keyboard_wire.o \
 	keyboard_isr.o \
-	process.o \
 	syscall.o \
 	stubs.o \
+	runtim_stubs.o \
 	trploader.o \
 	loader_enhaced.o \
-	shell.o
+	process.o
 
-# ============================================================================
+# =============================================================================
 # Default target
-# ============================================================================
+# =============================================================================
 
 all: kernel.bin
 
-# ============================================================================
-# Assembly files
-# ============================================================================
+# =============================================================================
+# Assembly
+# =============================================================================
 
-boot64.o: "$(BOOT_DIR)/boot64.s"
-	$(AS) $(ASFLAGS) "$(BOOT_DIR)/boot64.s" -o boot64.o
+boot64.o: $(KDIR)/boot/boot64.s
+	$(AS) $(ASFLAGS) $(KDIR)/boot/boot64.s -o boot64.o
 
-interrupts_asm.o: "$(BOOT_DIR)/interrupts.s"
-	$(AS) $(ASFLAGS) "$(BOOT_DIR)/interrupts.s" -o interrupts_asm.o
+keyboard_isr.o: $(KDIR)/boot/keyboard_isr.s
+	$(AS) $(ASFLAGS) $(KDIR)/boot/keyboard_isr.s -o keyboard_isr.o
 
-keyboard_isr.o: "$(BOOT_DIR)/keyboard isr.s"
-	$(AS) $(ASFLAGS) "$(BOOT_DIR)/keyboard isr.s" -o keyboard_isr.o
-
-# ============================================================================
+# =============================================================================
 # C files
-# ============================================================================
+# =============================================================================
 
-kernel.o: "$(KERNEL_DIR)kernel.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)kernel.c" -o kernel.o
+kernel.o: $(KDIR)/kernel.c
+	$(CC) $(CFLAGS) -c $(KDIR)/kernel.c -o kernel.o
 
-serial.o: "$(KERNEL_DIR)serial.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)serial.c" -o serial.o
+serial.o: $(KDIR)/serial.c
+	$(CC) $(CFLAGS) -c $(KDIR)/serial.c -o serial.o
 
-vga.o: "$(KERNEL_DIR)vga.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)vga.c" -o vga.o
+vga.o: $(KDIR)/vga.c
+	$(CC) $(CFLAGS) -c $(KDIR)/vga.c -o vga.o
 
-string.o: "$(KERNEL_DIR)string.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)string.c" -o string.o
+string.o: $(KDIR)/string.c
+	$(CC) $(CFLAGS) -c $(KDIR)/string.c -o string.o
 
-memory.o: "$(KERNEL_DIR)memory.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)memory.c" -o memory.o
+memory.o: $(KDIR)/memory.c
+	$(CC) $(CFLAGS) -c $(KDIR)/memory.c -o memory.o
 
-Pmm.o: "$(KERNEL_DIR)Pmm.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)Pmm.c" -o Pmm.o
+Pmm.o: $(KDIR)/Pmm.c
+	$(CC) $(CFLAGS) -c $(KDIR)/Pmm.c -o Pmm.o
 
-vmm.o: "$(KERNEL_DIR)vmm.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)vmm.c" -o vmm.o
+vmm.o: $(KDIR)/vmm.c
+	$(CC) $(CFLAGS) -c $(KDIR)/vmm.c -o vmm.o
 
-idt.o: "$(KERNEL_DIR)idt.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)idt.c" -o idt.o
+interrups.o: $(KDIR)/interrups.c
+	$(CC) $(CFLAGS) -c $(KDIR)/interrups.c -o interrups.o
 
-interrups.o: "$(KERNEL_DIR)interrups.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)interrups.c" -o interrups.o
+isr.o: $(KDIR)/isr.c
+	$(CC) $(CFLAGS) -c $(KDIR)/isr.c -o isr.o
 
-isr.o: "$(KERNEL_DIR)isr.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)isr.c" -o isr.o
+pic.o: $(KDIR)/pic.c
+	$(CC) $(CFLAGS) -c $(KDIR)/pic.c -o pic.o
 
-pic.o: "$(KERNEL_DIR)pic.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)pic.c" -o pic.o
+pit.o: $(KDIR)/pit.c
+	$(CC) $(CFLAGS) -c $(KDIR)/pit.c -o pit.o
 
-pit.o: "$(KERNEL_DIR)pit.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)pit.c" -o pit.o
+timer.o: $(KDIR)/timer.c
+	$(CC) $(CFLAGS) -c $(KDIR)/timer.c -o timer.o
 
-timer.o: "$(KERNEL_DIR)timer.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)timer.c" -o timer.o
+panic.o: $(KDIR)/panic.c
+	$(CC) $(CFLAGS) -c $(KDIR)/panic.c -o panic.o
 
-panic.o: "$(KERNEL_DIR)panic.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)panic.c" -o panic.o
+keybord.o: $(KDIR)/keybord.c
+	$(CC) $(CFLAGS) -c $(KDIR)/keybord.c -o keybord.o
 
-keybord.o: "$(KERNEL_DIR)keybord.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)keybord.c" -o keybord.o
+keyboard_wire.o: $(KDIR)/keyboard_wire.c
+	$(CC) $(CFLAGS) -c $(KDIR)/keyboard_wire.c -o keyboard_wire.o
 
-keyboard_wire.o: "$(KERNEL_DIR)keyboard wire.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)keyboard wire.c" -o keyboard_wire.o
+syscall.o: $(KDIR)/syscall.c
+	$(CC) $(CFLAGS) -c $(KDIR)/syscall.c -o syscall.o
 
-process.o: "$(KERNEL_DIR)process.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)process.c" -o process.o
+stubs.o: $(KDIR)/stubs.c
+	$(CC) $(CFLAGS) -c $(KDIR)/stubs.c -o stubs.o
 
-syscall.o: "$(KERNEL_DIR)syscall.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)syscall.c" -o syscall.o
+runtim_stubs.o: $(KDIR)/runtime_stubs.c
+	$(CC) $(CFLAGS) -c $(KDIR)/runtime_stubs.c -o runtim_stubs.o
 
-stubs.o: "$(KERNEL_DIR)stubs.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)stubs.c" -o stubs.o
+trploader.o: $(KDIR)/trploader.c
+	$(CC) $(CFLAGS) -c $(KDIR)/trploader.c -o trploader.o
 
-trploader.o: "$(KERNEL_DIR)trploader.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)trploader.c" -o trploader.o
+loader_enhaced.o: $(KDIR)/loader_enhaced.c
+	$(CC) $(CFLAGS) -c $(KDIR)/loader_enhaced.c -o loader_enhaced.o
 
-loader_enhaced.o: "$(KERNEL_DIR)loader_enhaced.c"
-	$(CC) $(CFLAGS) -c "$(KERNEL_DIR)loader_enhaced.c" -o loader_enhaced.o
+process.o: $(KDIR)/process.c
+	$(CC) $(CFLAGS) -c $(KDIR)/process.c -o process.o
 
-shell.o: "$(BOOT_DIR)/shell.c"
-	$(CC) $(CFLAGS) -c "$(BOOT_DIR)/shell.c" -o shell.o
-
-# ============================================================================
+# =============================================================================
 # Link
-# ============================================================================
+# =============================================================================
 
 kernel.bin: $(OBJS)
 	$(LD) $(LDFLAGS) $(OBJS) -o kernel.bin
 
-# ============================================================================
+# =============================================================================
 # ISO
-# ============================================================================
+# =============================================================================
+
+ISO_DIR = iso_root
 
 iso: kernel.bin
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp kernel.bin $(ISO_DIR)/boot/kernel.bin
-	cp "$(ISO_DIR)/boot/grub/grub.cfg" "$(ISO_DIR)/boot/grub/grub.cfg" 2>/dev/null || true
-	@echo 'set timeout=5'                          > $(GRUB_CFG)
-	@echo 'set default=0'                         >> $(GRUB_CFG)
-	@echo ''                                       >> $(GRUB_CFG)
-	@echo 'menuentry "Toriginal OS" {'             >> $(GRUB_CFG)
-	@echo '    multiboot2 /boot/kernel.bin'        >> $(GRUB_CFG)
-	@echo '    boot'                               >> $(GRUB_CFG)
-	@echo '}'                                      >> $(GRUB_CFG)
-	@echo ''                                       >> $(GRUB_CFG)
-	@echo 'menuentry "Toriginal OS (serial debug)" {' >> $(GRUB_CFG)
-	@echo '    multiboot2 /boot/kernel.bin shell'  >> $(GRUB_CFG)
-	@echo '    boot'                               >> $(GRUB_CFG)
-	@echo '}'                                      >> $(GRUB_CFG)
+	cp root/freeNT/grub/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o ToriginalOS.iso $(ISO_DIR)
 
-# ============================================================================
-# Run in QEMU
-# ============================================================================
+# =============================================================================
+# Run
+# =============================================================================
 
 run: ToriginalOS.iso
 	qemu-system-x86_64 \
@@ -205,13 +183,11 @@ run-debug: ToriginalOS.iso
 		-d int,cpu_reset \
 		-no-reboot
 
-# ============================================================================
+# =============================================================================
 # Clean
-# ============================================================================
+# =============================================================================
 
 clean:
-	rm -f *.o
-	rm -f kernel.bin
-	rm -f ToriginalOS.iso
+	rm -f *.o kernel.bin ToriginalOS.iso
 
 .PHONY: all iso run run-debug clean

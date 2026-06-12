@@ -6,8 +6,8 @@
 // ==============================================================================
 
 #include <stdint.h>
-#include "../include/types.h"
-#include "../include/fs.h"
+#include "types.h"
+#include "fs.h"
 
 // Load and prepare a .trp file for a given process
 // Sets proc->context.rip on success for binary payloads

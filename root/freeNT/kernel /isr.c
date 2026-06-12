@@ -1,1 +1,0 @@
-void (*interrupt_handlers[256])(interrupt_frame_t*);
