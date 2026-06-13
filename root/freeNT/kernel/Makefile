@@ -144,6 +144,7 @@ loader_enhaced.o: $(KDIR)/loader_enhaced.c
 process.o: $(KDIR)/process.c
 	$(CC) $(CFLAGS) -c $(KDIR)/process.c -o process.o
 
+KERNEL_OBJS += kernel/trp_manifest.o
 # =============================================================================
 # Link
 # =============================================================================
@@ -191,3 +192,4 @@ clean:
 	rm -f *.o kernel.bin ToriginalOS.iso
 
 .PHONY: all iso run run-debug clean
+

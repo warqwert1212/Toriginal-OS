@@ -92,6 +92,12 @@ add_executable(freeNT
     src/kernel/pit.c
     src/kernel/ahci.c
 
+    # trp manifest handling
+    src/kernel/trp_manifest.c
+
+
+
+
     # Keyboard (new)
     src/kernel/drivers/keyboard.c
     src/kernel/drivers/keyboard_wire.c

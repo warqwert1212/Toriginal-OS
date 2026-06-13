@@ -1,25 +1,4 @@
-// ==============================================================================
-// TRP_LOADER.C - Toriginal Runtime Package Loader
-//
-// Flat TRP binary layout:
-//   [0..3]   magic            'T','R','P','K'  (0x4B505254)
-//   [4..7]   version          uint32 (1)
-//   [8..11]  manifest_offset  uint32 — byte offset to manifest text
-//   [12..15] manifest_len     uint32 — byte length of manifest
-//   [16..19] payload_offset   uint32 — byte offset to payload
-//   [20..23] payload_len      uint32 — byte length of payload
-//   [24..]   data             manifest text then payload bytes
-//
-// Manifest directives (one per line):
-//   /this is executable/
-//   /window_name:My App/
-//   /icon:/myapp/icons/app.ico/
-//   /lang:bin/        (bin, c, py)
-//   /version:1.0/
-//   /author:warqwert/
-//   /min_os_version:1.0/
-// ==============================================================================
-
+#include "../include/Trp manifest.h"
 #include "../include/trploader.h"
 #include "../include/fs.h"
 #include "../include/mm.h"
@@ -130,8 +109,23 @@ static int trp_execute_text(const uint8_t *payload, uint32_t len,
 }
 
 int trp_load(const char *filename, pid_t pid) {
-    serial_puts("[TRP] Loading: "); serial_puts(filename); serial_puts("\n");
-
+ {
+    char entry_file[256];
+ 
+    int gate = trp_manifest_run_gate(
+        (const char *)(buf + hdr->manifest_offset),  /* manifest text       */
+        hdr->manifest_len,                            /* length              */
+        entry_file,                                   /* receives entry path */
+        sizeof(entry_file),
+        0                                             /* 0 = CLI mode        */
+    );
+ 
+    if (gate != 0) {
+        /* Errors were already printed by run_gate. */
+        kfree(buf);
+        return -1;
+    }
+}
     inode_t stat;
     if (fs_stat(filename, &stat) != 0) { trp_log("File not found."); return -1; }
 
