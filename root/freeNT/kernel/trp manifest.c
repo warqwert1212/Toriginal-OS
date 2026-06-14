@@ -478,3 +478,360 @@ int trp_manifest_run_gate(const char  *manifest_text,
 
     return 0;
 }
+
+
+
+
+
+
+
+/*
+ * trp_manifest.c — Toriginal OS TRP Application Manifest v1.1
+ *
+ * Forgiving keyword-scan parser for manifest.txt files embedded in .TRP
+ * packages.  Keywords are matched case-insensitively anywhere on a line;
+ * unrecognised lines are silently ignored.  ALL errors are collected before
+ * reporting — execution never starts if any error exists.
+ */
+
+#include "Trp manifest.h"
+#include "string.h"
+#include "fs.h"
+#include "io.h"
+#include "keybord.h"
+#include "pmm.h"
+
+extern void serial_puts(const char *s);
+
+/* ── Internal utilities ──────────────────────────────────────────────────── */
+
+static char trp_to_lower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+/* Case-insensitive substring search. */
+static const char *ci_find(const char *haystack, const char *needle)
+{
+    if (!needle || !*needle) return haystack;
+    size_t nlen = strlen(needle);
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        size_t matched = 0;
+        while (*h && *n && trp_to_lower(*h) == trp_to_lower(*n)) {
+            h++; n++; matched++;
+        }
+        if (matched == nlen) return haystack;
+    }
+    return NULL;
+}
+
+/* Copy the value after a "directive/:" marker (trimmed) into dst. */
+static int extract_value(const char *line, const char *directive,
+                          char *dst, int dst_len)
+{
+    const char *p = ci_find(line, directive);
+    if (!p) return 0;
+
+    p += strlen(directive);
+    while (*p == ' ' || *p == '\t') p++;
+
+    int i = 0;
+    while (*p && *p != '\n' && *p != '\r' && i < dst_len - 1)
+        dst[i++] = *p++;
+
+    while (i > 0 && (dst[i-1] == ' ' || dst[i-1] == '\t')) i--;
+    dst[i] = '\0';
+
+    return (i > 0) ? 1 : 0;
+}
+
+static void int_to_dec(int n, char *buf, int buf_len)
+{
+    if (buf_len < 2) return;
+    if (n == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
+    char tmp[12]; int ti = 0;
+    while (n > 0 && ti < 11) { tmp[ti++] = (char)('0' + n % 10); n /= 10; }
+    int idx = 0;
+    while (ti > 0 && idx < buf_len - 1) buf[idx++] = tmp[--ti];
+    buf[idx] = '\0';
+}
+
+static void safe_copy(char *dst, const char *src, int dst_len)
+{
+    int i = 0;
+    while (src[i] && i < dst_len - 1) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
+static int str_append(char *dst, int cur_len, int cap, const char *src)
+{
+    while (*src && cur_len < cap - 1) dst[cur_len++] = *src++;
+    dst[cur_len] = '\0';
+    return cur_len;
+}
+
+static void add_error(trp_manifest_t *m, const char *msg, int line_no)
+{
+    if (m->error_count >= TRP_MANIFEST_MAX_ERRORS) return;
+
+    char *dst = m->errors[m->error_count];
+    int   cap = TRP_MANIFEST_ERROR_LEN;
+    int   len = 0;
+
+    len = str_append(dst, len, cap, msg);
+
+    if (line_no > 0) {
+        len = str_append(dst, len, cap, " (line ");
+        char nbuf[12];
+        int_to_dec(line_no, nbuf, sizeof(nbuf));
+        len = str_append(dst, len, cap, nbuf);
+        len = str_append(dst, len, cap, ")");
+    }
+
+    m->error_count++;
+}
+
+/* ── trp_manifest_parse ──────────────────────────────────────────────────── */
+
+int trp_manifest_parse(const char *text, uint32_t len, trp_manifest_t *out)
+{
+    memset(out, 0, sizeof(trp_manifest_t));
+
+    char     line[512];
+    uint32_t pos     = 0;
+    int      line_no = 0;
+    char     val[256];
+
+    while (pos < len) {
+        int llen = 0;
+        while (pos < len && text[pos] != '\n' && text[pos] != '\r' && llen < 511)
+            line[llen++] = text[pos++];
+        line[llen] = '\0';
+        while (pos < len && (text[pos] == '\n' || text[pos] == '\r')) pos++;
+        line_no++;
+
+        if (llen == 0) continue;
+
+        /* Execute at/: (required) */
+        if (ci_find(line, "Execute at/:")) {
+            int has_val = extract_value(line, "Execute at/:", val, sizeof(val));
+            if (!out->execute_at_found) {
+                out->execute_at_found = 1;
+                out->execute_at_line  = line_no;
+                if (has_val)
+                    safe_copy(out->execute_at, val, sizeof(out->execute_at));
+            } else if (has_val && out->fallback_count < TRP_MANIFEST_MAX_FALLBACKS) {
+                safe_copy(out->fallback_execute_at[out->fallback_count],
+                          val, sizeof(out->fallback_execute_at[0]));
+                out->fallback_count++;
+            }
+            continue;
+        }
+
+        if (ci_find(line, "Window name/:")) {
+            extract_value(line, "Window name/:", out->window_name, sizeof(out->window_name));
+            continue;
+        }
+        if (ci_find(line, "Icon/:")) {
+            extract_value(line, "Icon/:", out->icon, sizeof(out->icon));
+            continue;
+        }
+        if (ci_find(line, "Priority/:")) {
+            extract_value(line, "Priority/:", out->priority, sizeof(out->priority));
+            continue;
+        }
+        if (ci_find(line, "Execute if/:")) {
+            extract_value(line, "Execute if/:", out->execute_if, sizeof(out->execute_if));
+            continue;
+        }
+        if (ci_find(line, "mark executable/")) {
+            out->mark_executable = 1;
+            continue;
+        }
+        if (ci_find(line, "Language/:")) {
+            extract_value(line, "Language/:", out->language, sizeof(out->language));
+            continue;
+        }
+        if (ci_find(line, "Version/:")) {
+            extract_value(line, "Version/:", out->version, sizeof(out->version));
+            continue;
+        }
+        if (ci_find(line, "Assets/:")) {
+            extract_value(line, "Assets/:", out->assets, sizeof(out->assets));
+            continue;
+        }
+        if (ci_find(line, "Debug/:")) {
+            extract_value(line, "Debug/:", val, sizeof(val));
+            out->debug_mode = (ci_find(val, "true") != NULL) ? 1 : 0;
+            continue;
+        }
+        if (ci_find(line, "Resource request/:")) {
+            extract_value(line, "Resource request/:", val, sizeof(val));
+            if (ci_find(val, "high") != NULL) {
+                out->resource_request_high = 1;
+                out->resource_request_line = line_no;
+            }
+            continue;
+        }
+
+        /* Unknown line — silently ignored by design. */
+    }
+
+    if (!out->execute_at_found) {
+        add_error(out, "Error: no Execute at directive found", 0);
+    } else if (out->execute_at[0] == '\0') {
+        add_error(out, "Error: Execute at is empty", out->execute_at_line);
+    }
+
+    return (out->error_count > 0) ? -1 : 0;
+}
+
+/* ── trp_manifest_validate ───────────────────────────────────────────────── */
+
+int trp_manifest_validate(trp_manifest_t *out)
+{
+    if (out->execute_at_found && out->execute_at[0] != '\0') {
+        inode_t st;
+        if (fs_stat(out->execute_at, &st) != 0) {
+            char msg[TRP_MANIFEST_ERROR_LEN];
+            int  len = 0;
+            int  cap = TRP_MANIFEST_ERROR_LEN;
+
+            len = str_append(msg, len, cap, "Error: no file named '");
+            len = str_append(msg, len, cap, out->execute_at);
+            len = str_append(msg, len, cap, "'");
+
+            add_error(out, msg, out->execute_at_line);
+        }
+    }
+
+    return (out->error_count > 0) ? -1 : 0;
+}
+
+/* ── trp_manifest_print_errors ───────────────────────────────────────────── */
+
+void trp_manifest_print_errors(const trp_manifest_t *m, int gui_mode)
+{
+    if (m->error_count == 0) return;
+
+    if (gui_mode) {
+        io_put_string("\n+--------------------------------------+\n");
+        io_put_string(  "|  TRP Package Errors                  |\n");
+        io_put_string(  "+--------------------------------------+\n");
+        for (int i = 0; i < m->error_count; i++) {
+            io_put_string("|  ");
+            io_put_string(m->errors[i]);
+            io_put_string("\n");
+        }
+        io_put_string("+--------------------------------------+\n\n");
+    } else {
+        io_put_string("\nTRP Manifest Errors:\n");
+        serial_puts("\n[TRP] Manifest errors:\n");
+        for (int i = 0; i < m->error_count; i++) {
+            io_put_string("  ");
+            io_put_string(m->errors[i]);
+            io_put_string("\n");
+            serial_puts("  ");
+            serial_puts(m->errors[i]);
+            serial_puts("\n");
+        }
+        io_put_string("\n");
+    }
+}
+
+/* ── trp_manifest_resource_prompt ────────────────────────────────────────── */
+
+int trp_manifest_resource_prompt(int gui_mode)
+{
+    (void)gui_mode; /* same prompt for CLI and GUI in v1.1 */
+
+    io_put_string("\nThis program is requesting higher system resources.\n");
+    io_put_string("Allow? (Y/N): ");
+    serial_puts("[TRP] Resource request prompt displayed.\n");
+
+    for (;;) {
+        char c = keyboard_getc();
+        if (c == 'Y' || c == 'y') {
+            io_put_string("Y\n");
+            io_put_string("Resource request approved.\n");
+            serial_puts("[TRP] Resource request approved by user.\n");
+            return 1;
+        }
+        if (c == 'N' || c == 'n') {
+            io_put_string("N\n");
+            io_put_string("Running with standard resources.\n");
+            serial_puts("[TRP] Resource request denied by user.\n");
+            return 0;
+        }
+    }
+}
+
+/* Require at least 8 MB free before granting a "high" resource request. */
+static int system_can_support_high_resources(void)
+{
+    uint32_t free_kb = pmm_get_free_ram();
+    return (free_kb >= 8192) ? 1 : 0;
+}
+
+/* ── trp_manifest_run_gate ────────────────────────────────────────────────
+ *
+ * Full v1.1 execution gate. On success (0), *out is fully populated
+ * (execute_at, language, window_name, ...) for the caller (trploader.c) to
+ * act on. On failure (-1), all collected errors have already been printed.
+ * ------------------------------------------------------------------------ */
+int trp_manifest_run_gate(const char *manifest_text, uint32_t len,
+                           trp_manifest_t *out, int gui_mode)
+{
+    trp_manifest_parse(manifest_text, len, out);
+    trp_manifest_validate(out);
+
+    if (out->error_count > 0) {
+        trp_manifest_print_errors(out, gui_mode);
+        return -1;
+    }
+
+    if (out->resource_request_high) {
+        int user_approved = trp_manifest_resource_prompt(gui_mode);
+        int system_ok     = system_can_support_high_resources();
+
+        if (user_approved && !system_ok) {
+            add_error(out,
+                "Error: resource request denied (insufficient system capacity)",
+                out->resource_request_line);
+            trp_manifest_print_errors(out, gui_mode);
+            return -1;
+        }
+
+        if (!user_approved) {
+            serial_puts("[TRP] Continuing with standard resources.\n");
+        } else {
+            serial_puts("[TRP] Higher resources granted within system limits.\n");
+        }
+    }
+
+    serial_puts("[TRP v1.1] Manifest OK. Entry: ");
+    serial_puts(out->execute_at);
+    serial_puts("\n");
+
+    if (out->window_name[0]) { serial_puts("  Window   : "); serial_puts(out->window_name); serial_puts("\n"); }
+    if (out->icon[0])        { serial_puts("  Icon     : "); serial_puts(out->icon);         serial_puts("\n"); }
+    if (out->language[0])    { serial_puts("  Language : "); serial_puts(out->language);     serial_puts("\n"); }
+    if (out->version[0])     { serial_puts("  Version  : "); serial_puts(out->version);      serial_puts("\n"); }
+    if (out->priority[0])    { serial_puts("  Priority : "); serial_puts(out->priority);     serial_puts("\n"); }
+    if (out->execute_if[0])  { serial_puts("  Exec if  : "); serial_puts(out->execute_if);   serial_puts("\n"); }
+    if (out->assets[0])      { serial_puts("  Assets   : "); serial_puts(out->assets);       serial_puts("\n"); }
+    if (out->mark_executable) serial_puts("  [marked executable]\n");
+    if (out->debug_mode)      serial_puts("  [debug ON]\n");
+
+    if (out->fallback_count > 0) {
+        char nbuf[12];
+        int_to_dec(out->fallback_count, nbuf, sizeof(nbuf));
+        serial_puts("  Fallbacks : ");
+        serial_puts(nbuf);
+        serial_puts(" alternate entry point(s) registered\n");
+    }
+
+    return 0;
+}
