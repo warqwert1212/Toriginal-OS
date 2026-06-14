@@ -5,8 +5,8 @@
 // ==============================================================================
 
 #include <stdint.h>
-#include "../include/keybord.h"
-
+#include "idt.h"
+#include "keybord.h"
 void print_serial(const char* str);
 
 // ---------------------------------------------------------------------------
@@ -66,5 +66,34 @@ void keyboard_wire_idt(void) {
     print_serial("[KBD] IRQ1 wired to IDT vector 0x21.\n");
 
     // Now initialize the PS/2 controller and keyboard hardware
+    keyboard_init();
+}
+
+
+
+/* keyboard_wire.c — wire IRQ1 into the IDT and initialise the PS/2 driver.
+ *
+ * FIX: The old version defined a local struct kbd_idt_entry that was a
+ * different type from idt_entry_t in idt.h, causing a type-punning hazard.
+ * Now we just call the canonical idt_set_gate() directly.
+ */
+
+
+
+void serial_puts(const char *str);
+
+/* Defined in keyboard_isr.s */
+extern void keyboard_isr_stub(void);
+
+void keyboard_wire_idt(void)
+{
+    /* IRQ1 → IDT vector 0x21 (PIC1 base 0x20 + line 1) */
+    idt_set_gate(0x21,
+                 (uint64_t)(uintptr_t)keyboard_isr_stub,
+                 0x08,   /* kernel code segment */
+                 0x8E);  /* Present | Ring 0 | 64-bit interrupt gate */
+
+    serial_puts("[KBD] IRQ1 wired to IDT vector 0x21.\n");
+
     keyboard_init();
 }

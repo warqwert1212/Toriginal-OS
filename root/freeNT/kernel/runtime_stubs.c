@@ -215,3 +215,49 @@ void memory_init(void)
 {
     /* Stub: basic memory initialization already handled by mm_init_physical */
 }
+
+
+
+
+/* runtime_stubs.c — minimal stubs for symbols not yet implemented.
+ *
+ * FIXES:
+ *  - Removed fs_stat/fs_open/fs_read/fs_write/fs_close/fs_mkdir
+ *    (trpfs.c is the real implementation; linking both caused duplicate symbols)
+ *  - Removed isr0-isr31, irq0-irq15
+ *    (interrupts.c generates them dynamically; stubs caused linker conflicts)
+ *  - Removed memory_init stub (memory.c owns this)
+ *  - inb/outb are static inline in each .c that needs them
+ *  - pit_handler lives in pit.c (not here)
+ *  - load_idt weak stub kept for safety but boot64.s overrides it
+ */
+
+
+
+/* ── Port I/O (used by serial.c inline; kept here for any stub that needs it) */
+/* NOTE: inb/outb are defined as static inline in serial.c, interrupts.c, etc.
+ * We do NOT define them here as non-static to avoid conflicts. */
+
+/* ── I/O layer (delegates to serial) ─────────────────────────────────────── */
+extern void serial_puts(const char *str);
+extern void serial_putc(char c);
+
+void io_put_string(const char *s) { serial_puts(s); }
+void io_put_char(char c)          { serial_putc(c); }
+void io_clear_screen(void)        { /* no-op for now */ }
+void io_put_hex(uint64_t v)       { (void)v; }
+
+/* ── keyboard_irq_handler (called from keyboard_isr_stub assembly) ─────── */
+extern void keyboard_handler(void);
+void keyboard_irq_handler(void) { keyboard_handler(); }
+
+/* ── pit_handler is in pit.c; scheduler_yield is in process.c ─────────── */
+
+/* ── load_idt weak fallback (boot64.s provides the real one) ───────────── */
+__attribute__((weak))
+void load_idt(void *ptr) { (void)ptr; }
+
+/* ── OOBE / embedded shell stubs ────────────────────────────────────────── */
+/* shell binary symbols used by stubs.c */
+uint8_t _binary_toriginal_shell_bin_start[1] = { 0 };
+uint8_t _binary_toriginal_shell_bin_size      = 1;
