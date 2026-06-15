@@ -2,8 +2,10 @@
 #define IDT_H
 
 #include <stdint.h>
+#include "interrupts.h"   /* owns interrupt_frame_t, interrupt_handler_t */
 
-typedef struct {
+/* ── IDT gate descriptor — 16 bytes ─────────────────────────────────────── */
+typedef struct __attribute__((packed)) {
     uint16_t offset_low;
     uint16_t selector;
     uint8_t  ist;
@@ -11,21 +13,21 @@ typedef struct {
     uint16_t offset_mid;
     uint32_t offset_high;
     uint32_t zero;
-} __attribute__((packed)) idt_entry_t;
+} idt_entry_t;
 
-typedef struct {
+/* ── IDT pointer — passed to load_idt() ─────────────────────────────────── */
+typedef struct __attribute__((packed)) {
     uint16_t limit;
     uint64_t base;
-} __attribute__((packed)) idtr_t;
+} idt_ptr_t;
 
-typedef idtr_t idt_ptr_t;
+/* ── Gate flags ──────────────────────────────────────────────────────────── */
+#define IDT_INTERRUPT_GATE  0x8E
+#define IDT_TRAP_GATE       0x8F
+#define IDT_USER_GATE       0xEE
 
-/* The one true IDT array — defined in interrupts.c, extern'd everywhere else */
-extern idt_entry_t idt[256];
-
-/* Single authoritative signature used by both interrupts.c and keyboard_wire.c */
-void idt_set_gate(uint8_t vector, uint64_t handler, uint16_t selector, uint8_t flags);
-
+/* ── Public API ──────────────────────────────────────────────────────────── */
 void idt_init(void);
+void idt_set_gate(uint8_t num, uint64_t handler, uint16_t sel, uint8_t flags);
 
 #endif /* IDT_H */

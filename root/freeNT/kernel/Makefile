@@ -1,195 +1,91 @@
-# =============================================================================
-# Toriginal OS - freeNT Build System
-# =============================================================================
+# ── freeNT build system ──────────────────────────────────────────────────────
+CC      := x86_64-linux-gnu-gcc
+LD      := x86_64-linux-gnu-ld
+AS      := x86_64-linux-gnu-as
+MKISO   := grub-mkrescue
 
-CC  = gcc
-AS  = gcc
-LD  = ld
+SRC     := kernel
+BOOT    := kernel/boot
+OBJ     := obj
+BIN     := bin
+ISO_DIR := isodir
 
-KDIR = root/freeNT/kernel
-INC  = root/freeNT/include
+CFLAGS  := -ffreestanding -nostdlib -nostdinc -mno-red-zone \
+           -O2 -Wall -Wextra -I$(SRC)/include
 
-CFLAGS = \
-	-m64 \
-	-ffreestanding \
-	-fno-stack-protector \
-	-fno-pic \
-	-fno-pie \
-	-mno-red-zone \
-	-mno-mmx \
-	-mno-sse \
-	-mno-sse2 \
-	-mcmodel=kernel \
-	-Wall \
-	-Wextra \
-	-O2 \
-	-I$(INC)
+LDFLAGS := -T kernel64.ld --no-undefined -z noexecstack
 
-ASFLAGS = -c -m64
+# ── Collect sources ──────────────────────────────────────────────────────────
+C_SRCS    := $(wildcard $(SRC)/*.c)
+S_SRCS    := $(wildcard $(BOOT)/*.s) $(wildcard $(BOOT)/*.S)
 
-LDFLAGS = \
-	-m elf_x86_64 \
-	-T $(KDIR)/boot/linker.ld \
-	-z noexecstack
+C_OBJS    := $(patsubst $(SRC)/%.c,    $(OBJ)/%.o,        $(C_SRCS))
+S_OBJS    := $(patsubst $(BOOT)/%.s,   $(OBJ)/boot/%.o,   \
+             $(patsubst $(BOOT)/%.S,   $(OBJ)/boot/%.o,   $(S_SRCS)))
 
-# =============================================================================
-# Object files
-# =============================================================================
+# boot64 must link first so _start is at 0x200000
+OBJS := $(OBJ)/boot/boot64.o \
+        $(filter-out $(OBJ)/boot/boot64.o, $(S_OBJS)) \
+        $(C_OBJS)
 
-OBJS = \
-	boot64.o \
-	kernel.o \
-	serial.o \
-	vga.o \
-	string.o \
-	memory.o \
-	Pmm.o \
-	vmm.o \
-	interrups.o \
-	isr.o \
-	pic.o \
-	pit.o \
-	timer.o \
-	panic.o \
-	keybord.o \
-	keyboard_wire.o \
-	keyboard_isr.o \
-	syscall.o \
-	stubs.o \
-	runtim_stubs.o \
-	trploader.o \
-	loader_enhaced.o \
-	process.o
+# ── Rules ────────────────────────────────────────────────────────────────────
+.PHONY: all iso run clean tools
 
-# =============================================================================
-# Default target
-# =============================================================================
+all: iso
 
-all: kernel.bin
+# Create output dirs
+$(OBJ)/boot $(BIN) $(ISO_DIR)/boot/grub:
+	mkdir -p $@
 
-# =============================================================================
-# Assembly
-# =============================================================================
+# Compile C
+$(OBJ)/%.o: $(SRC)/%.c | $(OBJ)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-boot64.o: $(KDIR)/boot/boot64.s
-	$(AS) $(ASFLAGS) $(KDIR)/boot/boot64.s -o boot64.o
+# Assemble .s (lowercase — GAS, no preprocessor)
+$(OBJ)/boot/%.o: $(BOOT)/%.s | $(OBJ)/boot
+	$(AS) --64 $< -o $@
 
-keyboard_isr.o: $(KDIR)/boot/keyboard_isr.s
-	$(AS) $(ASFLAGS) $(KDIR)/boot/keyboard_isr.s -o keyboard_isr.o
+# Assemble .S (uppercase — GAS + C preprocessor)
+$(OBJ)/boot/%.o: $(BOOT)/%.S | $(OBJ)/boot
+	$(CC) $(CFLAGS) -x assembler-with-cpp -c $< -o $@
 
-# =============================================================================
-# C files
-# =============================================================================
-
-kernel.o: $(KDIR)/kernel.c
-	$(CC) $(CFLAGS) -c $(KDIR)/kernel.c -o kernel.o
-
-serial.o: $(KDIR)/serial.c
-	$(CC) $(CFLAGS) -c $(KDIR)/serial.c -o serial.o
-
-vga.o: $(KDIR)/vga.c
-	$(CC) $(CFLAGS) -c $(KDIR)/vga.c -o vga.o
-
-string.o: $(KDIR)/string.c
-	$(CC) $(CFLAGS) -c $(KDIR)/string.c -o string.o
-
-memory.o: $(KDIR)/memory.c
-	$(CC) $(CFLAGS) -c $(KDIR)/memory.c -o memory.o
-
-Pmm.o: $(KDIR)/Pmm.c
-	$(CC) $(CFLAGS) -c $(KDIR)/Pmm.c -o Pmm.o
-
-vmm.o: $(KDIR)/vmm.c
-	$(CC) $(CFLAGS) -c $(KDIR)/vmm.c -o vmm.o
-
-interrups.o: $(KDIR)/interrups.c
-	$(CC) $(CFLAGS) -c $(KDIR)/interrups.c -o interrups.o
-
-isr.o: $(KDIR)/isr.c
-	$(CC) $(CFLAGS) -c $(KDIR)/isr.c -o isr.o
-
-pic.o: $(KDIR)/pic.c
-	$(CC) $(CFLAGS) -c $(KDIR)/pic.c -o pic.o
-
-pit.o: $(KDIR)/pit.c
-	$(CC) $(CFLAGS) -c $(KDIR)/pit.c -o pit.o
-
-timer.o: $(KDIR)/timer.c
-	$(CC) $(CFLAGS) -c $(KDIR)/timer.c -o timer.o
-
-panic.o: $(KDIR)/panic.c
-	$(CC) $(CFLAGS) -c $(KDIR)/panic.c -o panic.o
-
-keybord.o: $(KDIR)/keybord.c
-	$(CC) $(CFLAGS) -c $(KDIR)/keybord.c -o keybord.o
-
-keyboard_wire.o: $(KDIR)/keyboard_wire.c
-	$(CC) $(CFLAGS) -c $(KDIR)/keyboard_wire.c -o keyboard_wire.o
-
-syscall.o: $(KDIR)/syscall.c
-	$(CC) $(CFLAGS) -c $(KDIR)/syscall.c -o syscall.o
-
-stubs.o: $(KDIR)/stubs.c
-	$(CC) $(CFLAGS) -c $(KDIR)/stubs.c -o stubs.o
-
-runtim_stubs.o: $(KDIR)/runtime_stubs.c
-	$(CC) $(CFLAGS) -c $(KDIR)/runtime_stubs.c -o runtim_stubs.o
-
-trploader.o: $(KDIR)/trploader.c
-	$(CC) $(CFLAGS) -c $(KDIR)/trploader.c -o trploader.o
-
-loader_enhaced.o: $(KDIR)/loader_enhaced.c
-	$(CC) $(CFLAGS) -c $(KDIR)/loader_enhaced.c -o loader_enhaced.o
-
-process.o: $(KDIR)/process.c
-	$(CC) $(CFLAGS) -c $(KDIR)/process.c -o process.o
-
-KERNEL_OBJS += kernel/trp_manifest.o
-# =============================================================================
 # Link
-# =============================================================================
+$(BIN)/kernel.elf: $(OBJS) kernel64.ld | $(BIN)
+	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+	@echo "── Verify ELF header ──"
+	@x86_64-linux-gnu-readelf -h $@ | grep -E "Class|Machine|Entry"
 
-kernel.bin: $(OBJS)
-	$(LD) $(LDFLAGS) $(OBJS) -o kernel.bin
+# grub.cfg
+$(ISO_DIR)/boot/grub/grub.cfg: | $(ISO_DIR)/boot/grub
+	@printf 'set timeout=3\nset default=0\n\nmenuentry "freeNT" {\n\tmultiboot2 /boot/kernel.elf\n\tboot\n}\n' > $@
 
-# =============================================================================
-# ISO
-# =============================================================================
+# Copy kernel into ISO tree
+$(ISO_DIR)/boot/kernel.elf: $(BIN)/kernel.elf | $(ISO_DIR)/boot/grub
+	cp $< $@
 
-ISO_DIR = iso_root
+# Pack ISO
+freeNT.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg
+	$(MKISO) -o $@ $(ISO_DIR) -d /usr/lib/grub/i386-pc
 
-iso: kernel.bin
-	mkdir -p $(ISO_DIR)/boot/grub
-	cp kernel.bin $(ISO_DIR)/boot/kernel.bin
-	cp root/freeNT/grub/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
-	grub-mkrescue -o ToriginalOS.iso $(ISO_DIR)
+iso: freeNT.iso
 
-# =============================================================================
-# Run
-# =============================================================================
-
-run: ToriginalOS.iso
+# Boot in QEMU — serial_puts() output appears in your terminal
+run: iso
 	qemu-system-x86_64 \
-		-cdrom ToriginalOS.iso \
-		-serial stdio \
-		-m 256M \
-		-vga std
+	    -cdrom freeNT.iso \
+	    -m 256M \
+	    -serial stdio \
+	    -display none \
+	    -no-reboot
 
-run-debug: ToriginalOS.iso
-	qemu-system-x86_64 \
-		-cdrom ToriginalOS.iso \
-		-serial stdio \
-		-m 256M \
-		-vga std \
-		-d int,cpu_reset \
-		-no-reboot
-
-# =============================================================================
-# Clean
-# =============================================================================
+# Install all required tools
+tools:
+	sudo apt update && sudo apt install -y \
+	    gcc-x86-64-linux-gnu \
+	    binutils-x86-64-linux-gnu \
+	    nasm xorriso grub-pc-bin mtools \
+	    qemu-system-x86
 
 clean:
-	rm -f *.o kernel.bin ToriginalOS.iso
-
-.PHONY: all iso run run-debug clean
-
+	rm -rf $(OBJ) $(BIN) $(ISO_DIR) freeNT.iso

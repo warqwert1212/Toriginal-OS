@@ -1,330 +1,69 @@
-// ==============================================================================
-// MEMORY.C - Virtual Memory Manager & Kernel Heap
-// Physical allocation is handled entirely by pmm.c (bitmap allocator).
-// This file owns: page table management, heap, and the mm_* public API.
-// ==============================================================================
-
-#include "memory.h"
-#include "types.h"
-#include "pmm.h"
-#include "io.h"
-#include "string.h"
-
-// PAGE_SIZE may not be defined in some build configs; default to 4KiB.
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
-#endif
-
-// Page table entry and flags
-typedef struct {
-    uint64_t entry;
-} pte_t;
-
-#define PAGE_PRESENT 0x001
-#define PAGE_WRITE   0x002
-#define PAGE_USER    0x004
-
-// ---------------------------------------------------------------------------
-// Page table root (PML4) — set during mm_init_paging()
-// ---------------------------------------------------------------------------
-static pte_t *pml4 = NULL;
-
-// ---------------------------------------------------------------------------
-// Kernel heap state
-// ---------------------------------------------------------------------------
-static vaddr_t heap_start   = 0;
-static vaddr_t heap_end     = 0;
-static vaddr_t heap_current = 0;
-
-// ---------------------------------------------------------------------------
-// mm_init_physical
-// We no longer maintain our own bitmap here.
-// Just forward to pmm_init() — it parses the Multiboot2 map and
-// marks everything correctly.
-// Call signature kept the same so nothing else breaks.
-// ---------------------------------------------------------------------------
-void mm_init_physical(paddr_t mem_start, paddr_t mem_end) {
-    // pmm_init() is called separately from kernel_main with the multiboot ptr.
-    // This function is kept as a no-op stub so existing call sites still compile.
-    // If you want you can remove the call to mm_init_physical from kernel.c and
-    // just call pmm_init() directly — either way is fine.
-    (void)mem_start;
-    (void)mem_end;
-}
-
-// ---------------------------------------------------------------------------
-// mm_alloc_pages — allocate N *contiguous* physical pages
-// Delegates entirely to pmm_alloc_frame() for single pages.
-// For multiple pages we loop and hope they come out contiguous.
-// For 1.0 this is fine — the heap only ever asks for 1 page at a time.
-// ---------------------------------------------------------------------------
-paddr_t mm_alloc_pages(size_t num_pages) {
-    if (num_pages == 0)
-        return 0;
-
-    if (num_pages == 1) {
-        void *frame = pmm_alloc_frame();
-        return (paddr_t)(uintptr_t)frame;
-    }
-
-    // Multi-page: allocate one at a time.
-    // pmm_alloc_frame scans linearly so consecutive calls are usually contiguous
-    // on a fresh system. Good enough for 1.0.
-    paddr_t first = (paddr_t)(uintptr_t)pmm_alloc_frame();
-    if (!first) return 0;
-
-    for (size_t i = 1; i < num_pages; i++) {
-        void *next = pmm_alloc_frame();
-        if (!next) return 0;
-    }
-
-    return first;
-}
-
-// ---------------------------------------------------------------------------
-// mm_free_pages — return pages to pmm
-// ---------------------------------------------------------------------------
-void mm_free_pages(paddr_t paddr, size_t num_pages) {
-    for (size_t i = 0; i < num_pages; i++) {
-        pmm_free_frame((void *)(uintptr_t)(paddr + i * PAGE_SIZE));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// mm_init_paging
-// Allocates a fresh PML4 table via pmm and zeroes it.
-// ---------------------------------------------------------------------------
-void mm_init_paging(void) {
-    paddr_t pml4_paddr = mm_alloc_pages(1);
-    if (!pml4_paddr) {
-        serial_puts("[MM] FATAL: could not allocate PML4\n");
-        return;
-    }
-    pml4 = (pte_t *)(uintptr_t)pml4_paddr;
-    memset(pml4, 0, PAGE_SIZE);
-}
-
-// ---------------------------------------------------------------------------
-// mm_enable_paging — load PML4 into CR3 and set CR0.PG
-// ---------------------------------------------------------------------------
-void mm_enable_paging(void) {
-    if (!pml4) return;
-    uint64_t pml4_addr = (uint64_t)(uintptr_t)pml4;
-    asm volatile("movq %0, %%cr3" : : "r"(pml4_addr) : "memory");
-    uint64_t cr0;
-    asm volatile("movq %%cr0, %0" : "=r"(cr0));
-    cr0 |= 0x80000000UL;
-    asm volatile("movq %0, %%cr0" : : "r"(cr0) : "memory");
-}
-
-// ---------------------------------------------------------------------------
-// mm_map_page — map one virtual page to one physical page
-// Creates intermediate page tables as needed using pmm_alloc_frame().
-// ---------------------------------------------------------------------------
-void mm_map_page(vaddr_t vaddr, paddr_t paddr, uint64_t flags) {
-    if (!pml4) return;
-
-    uint32_t pml4_idx = (vaddr >> 39) & 0x1FF;
-    uint32_t pdp_idx  = (vaddr >> 30) & 0x1FF;
-    uint32_t pd_idx   = (vaddr >> 21) & 0x1FF;
-    uint32_t pt_idx   = (vaddr >> 12) & 0x1FF;
-
-    // --- PML4 -> PDP ---
-    pte_t *pdp_table;
-    if (!(pml4[pml4_idx].entry & PAGE_PRESENT)) {
-        paddr_t pdp_paddr = (paddr_t)(uintptr_t)pmm_alloc_frame();
-        if (!pdp_paddr) return;
-        pdp_table = (pte_t *)(uintptr_t)pdp_paddr;
-        memset(pdp_table, 0, PAGE_SIZE);
-        pml4[pml4_idx].entry = pdp_paddr | PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER);
-    } else {
-        pdp_table = (pte_t *)(uintptr_t)(pml4[pml4_idx].entry & ~0xFFFULL);
-    }
-
-    // --- PDP -> PD ---
-    pte_t *pd_table;
-    if (!(pdp_table[pdp_idx].entry & PAGE_PRESENT)) {
-        paddr_t pd_paddr = (paddr_t)(uintptr_t)pmm_alloc_frame();
-        if (!pd_paddr) return;
-        pd_table = (pte_t *)(uintptr_t)pd_paddr;
-        memset(pd_table, 0, PAGE_SIZE);
-        pdp_table[pdp_idx].entry = pd_paddr | PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER);
-    } else {
-        pd_table = (pte_t *)(uintptr_t)(pdp_table[pdp_idx].entry & ~0xFFFULL);
-    }
-
-    // --- PD -> PT ---
-    pte_t *pt_table;
-    if (!(pd_table[pd_idx].entry & PAGE_PRESENT)) {
-        paddr_t pt_paddr = (paddr_t)(uintptr_t)pmm_alloc_frame();
-        if (!pt_paddr) return;
-        pt_table = (pte_t *)(uintptr_t)pt_paddr;
-        memset(pt_table, 0, PAGE_SIZE);
-        pd_table[pd_idx].entry = pt_paddr | PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER);
-    } else {
-        pt_table = (pte_t *)(uintptr_t)(pd_table[pd_idx].entry & ~0xFFFULL);
-    }
-
-    // --- PT -> physical page ---
-    pt_table[pt_idx].entry = (paddr & ~0xFFFULL) | PAGE_PRESENT | flags;
-
-    // Flush TLB for this address
-    asm volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
-}
-
-// ---------------------------------------------------------------------------
-// mm_unmap_page
-// ---------------------------------------------------------------------------
-void mm_unmap_page(vaddr_t vaddr) {
-    if (!pml4) return;
-
-    uint32_t pml4_idx = (vaddr >> 39) & 0x1FF;
-    uint32_t pdp_idx  = (vaddr >> 30) & 0x1FF;
-    uint32_t pd_idx   = (vaddr >> 21) & 0x1FF;
-    uint32_t pt_idx   = (vaddr >> 12) & 0x1FF;
-
-    if (!(pml4[pml4_idx].entry & PAGE_PRESENT)) return;
-    pte_t *pdp = (pte_t *)(uintptr_t)(pml4[pml4_idx].entry & ~0xFFFULL);
-
-    if (!(pdp[pdp_idx].entry & PAGE_PRESENT)) return;
-    pte_t *pd = (pte_t *)(uintptr_t)(pdp[pdp_idx].entry & ~0xFFFULL);
-
-    if (!(pd[pd_idx].entry & PAGE_PRESENT)) return;
-    pte_t *pt = (pte_t *)(uintptr_t)(pd[pd_idx].entry & ~0xFFFULL);
-
-    pt[pt_idx].entry = 0;
-    asm volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
-}
-
-// ---------------------------------------------------------------------------
-// mm_init_heap — set up the bump allocator range and pre-map initial pages
-// ---------------------------------------------------------------------------
-void mm_init_heap(vaddr_t heap_start_addr, vaddr_t heap_end_addr) {
-    heap_start   = heap_start_addr;
-    heap_end     = heap_end_addr;
-    heap_current = heap_start;
-
-    // Pre-map the first 64KB so early kmalloc calls don't page-fault
-    size_t initial_pages = 16;
-    for (size_t i = 0; i < initial_pages; i++) {
-        paddr_t phys = (paddr_t)(uintptr_t)pmm_alloc_frame();
-        if (!phys) {
-            serial_puts("[MM] WARN: could not pre-map all heap pages\n");
-            break;
-        }
-        vaddr_t virt = heap_start + i * PAGE_SIZE;
-        mm_map_page(virt, phys, PAGE_PRESENT | PAGE_WRITE);
-    }
-
-    serial_puts("[MM] Heap initialised.\n");
-}
-
-// ---------------------------------------------------------------------------
-// kmalloc — simple bump allocator
-// Maps new pages on demand via pmm when the heap grows.
-// ---------------------------------------------------------------------------
-void *kmalloc(size_t size) {
-    if (size == 0) return NULL;
-
-    // Align to 16 bytes
-    size = (size + 15) & ~15ULL;
-
-    void *ptr = (void *)heap_current;
-    heap_current += size;
-
-    // Map any new pages we've crossed into
-    vaddr_t map_start = (vaddr_t)ptr & ~(PAGE_SIZE - 1ULL);
-    vaddr_t map_end   = ((heap_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1ULL));
-
-    for (vaddr_t v = map_start; v < map_end; v += PAGE_SIZE) {
-        // Only map pages we haven't already mapped
-        // (simple check: if heap_current just crossed a page boundary)
-        if (v >= heap_start && v < heap_end) {
-            // Attempt to map — mm_map_page is idempotent for already-mapped pages
-            // because it checks PAGE_PRESENT before allocating a new PT
-            paddr_t phys = (paddr_t)(uintptr_t)pmm_alloc_frame();
-            if (phys) {
-                mm_map_page(v, phys, PAGE_PRESENT | PAGE_WRITE);
-            }
-        }
-    }
-
-    if (heap_current > heap_end) {
-        serial_puts("[MM] WARN: heap exhausted!\n");
-        return NULL;
-    }
-
-    return ptr;
-}
-
-// ---------------------------------------------------------------------------
-// kfree — stub (bump allocator doesn't reclaim)
-// For 1.0 this is fine — kernel lifetime allocations only
-// ---------------------------------------------------------------------------
-void kfree(void *ptr) {
-    (void)ptr;
-    // Future: implement a free list here for 2.0
-}
-
-// ---------------------------------------------------------------------------
-// krealloc
-// ---------------------------------------------------------------------------
-void *krealloc(void *ptr, size_t new_size) {
-    if (!ptr)    return kmalloc(new_size);
-    if (!new_size) { kfree(ptr); return NULL; }
-
-    void *new_ptr = kmalloc(new_size);
-    if (!new_ptr) return NULL;
-
-    // We don't track old sizes in a bump allocator so just copy new_size bytes.
-    // Caller is responsible for not passing a new_size larger than the original.
-    memcpy(new_ptr, ptr, new_size);
-    return new_ptr;
-}
-
-
-/* memory.c — kernel heap (bump allocator) + page table management.
- *
- * FIX: memory_init() now calls pmm_init() so physical memory is
- *      enumerated before the first kmalloc.
- * FIX: added kzalloc().
- */
-
 #include "memory.h"
 #include "types.h"
 #include "pmm.h"
 #include "string.h"
 
+/* serial_puts is implemented in serial.c; avoid pulling in the full header
+ * so this translation unit compiles without the serial driver being present. */
 extern void serial_puts(const char *);
 
+/* ── Compile-time constants ───────────────────────────────────────────────── */
+
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
 #endif
 
-#define PAGE_PRESENT 0x001u
-#define PAGE_WRITE   0x002u
-#define PAGE_USER    0x004u
+#define PAGE_PRESENT  0x001u
+#define PAGE_WRITE    0x002u
+#define PAGE_USER     0x004u
+
+/* Kernel heap virtual address window (above the 2 MiB GRUB load point).
+ * 16 MiB – 80 MiB gives 64 MiB of virtual heap space, more than enough for
+ * a v1 bump allocator that never recycles memory. */
+#define HEAP_VIRT_START  0x0000000001000000ULL   /* 16 MiB */
+#define HEAP_VIRT_END    0x0000000005000000ULL   /* 80 MiB */
+
+/* Number of pages to pre-map at mm_init_heap() time so that early kmalloc
+ * calls succeed without triggering a page fault. */
+#define HEAP_PREMAP_PAGES  16u                   /* 64 KiB */
+
+/* ── On-disk / in-memory page-table entry type ───────────────────────────── */
 
 typedef struct { uint64_t entry; } pte_t;
 
-static pte_t   *pml4        = NULL;
-static vaddr_t  heap_start  = 0;
-static vaddr_t  heap_end    = 0;
-static vaddr_t  heap_cur    = 0;
+/* ── Module-level state ───────────────────────────────────────────────────── */
 
-/* Kernel heap lives at a fixed virtual address above 2 MiB load point */
-#define HEAP_VIRT_START 0x0000000001000000ULL   /* 16 MiB */
-#define HEAP_VIRT_END   0x0000000005000000ULL   /* 80 MiB */
+static pte_t   *pml4       = NULL;  /* physical address of PML4 table         */
+static vaddr_t  heap_start = 0;     /* first byte of the heap VA window       */
+static vaddr_t  heap_end   = 0;     /* one-past-last byte of the heap VA window */
+static vaddr_t  heap_cur   = 0;     /* current bump pointer (0 = uninitialised) */
 
-/* ── physical memory ─────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * § Physical memory  (thin wrappers around pmm.c)
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-void mm_init_physical(paddr_t s, paddr_t e) { (void)s; (void)e; }
+/* Kept for ABI compatibility — callers that used mm_init_physical() before
+ * the PMM refactor still compile.  All real work now lives in pmm_init(). */
+void mm_init_physical(paddr_t s, paddr_t e)
+{
+    (void)s;
+    (void)e;
+}
 
+/* Allocate n physical frames.  For n == 1 this is exact; for n > 1 the PMM
+ * bitmap is walked linearly so consecutive single-frame calls are normally
+ * contiguous on a fresh system — sufficient for v1. */
 paddr_t mm_alloc_pages(size_t n)
 {
     if (n == 0) return 0;
+
     paddr_t first = (paddr_t)(uintptr_t)pmm_alloc_frame();
-    for (size_t i = 1; i < n; i++) pmm_alloc_frame();
+    if (!first) return 0;
+
+    for (size_t i = 1; i < n; i++) {
+        if (!pmm_alloc_frame()) return 0;
+    }
+
     return first;
 }
 
@@ -334,107 +73,194 @@ void mm_free_pages(paddr_t p, size_t n)
         pmm_free_frame((void *)(uintptr_t)(p + i * PAGE_SIZE));
 }
 
-/* ── paging ──────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * § Paging — 4-level (PML4 → PDPT → PD → PT)
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-void mm_init_paging(void)
-{
-    paddr_t pa = (paddr_t)(uintptr_t)pmm_alloc_frame();
-    if (!pa) { serial_puts("[MM] FATAL: no PML4 frame\n"); return; }
-    pml4 = (pte_t *)(uintptr_t)pa;
-    memset(pml4, 0, PAGE_SIZE);
-}
-
-void mm_enable_paging(void)
-{
-    if (!pml4) return;
-    uint64_t a = (uint64_t)(uintptr_t)pml4;
-    __asm__ volatile("movq %0,%%cr3"::"r"(a):"memory");
-    uint64_t cr0;
-    __asm__ volatile("movq %%cr0,%0":"=r"(cr0));
-    cr0 |= 0x80000000UL;
-    __asm__ volatile("movq %0,%%cr0"::"r"(cr0):"memory");
-}
-
+/* ── Internal helper ──────────────────────────────────────────────────────── *
+ * Return a pointer to the child page table addressed by table[idx].
+ * If the entry is not present a fresh frame is allocated, zeroed, and the
+ * entry written with PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER).
+ * Returns NULL on allocation failure.                                        */
 static pte_t *get_or_alloc(pte_t *table, uint32_t idx, uint64_t flags)
 {
     if (!(table[idx].entry & PAGE_PRESENT)) {
         paddr_t p = (paddr_t)(uintptr_t)pmm_alloc_frame();
         if (!p) return NULL;
-        pte_t *t = (pte_t *)(uintptr_t)p;
-        memset(t, 0, PAGE_SIZE);
-        table[idx].entry = p | PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER);
-        return t;
+
+        pte_t *child = (pte_t *)(uintptr_t)p;
+        memset(child, 0, PAGE_SIZE);
+
+        table[idx].entry = p
+                         | PAGE_PRESENT
+                         | PAGE_WRITE
+                         | (flags & PAGE_USER);
+        return child;
     }
+
     return (pte_t *)(uintptr_t)(table[idx].entry & ~0xFFFULL);
 }
 
+/* Allocate a fresh PML4 table via the PMM and store its physical address in
+ * the module-level pml4 pointer.  Must be called before mm_map_page(). */
+void mm_init_paging(void)
+{
+    paddr_t pa = (paddr_t)(uintptr_t)pmm_alloc_frame();
+    if (!pa) {
+        serial_puts("[MM] FATAL: no frame available for PML4\n");
+        return;
+    }
+    pml4 = (pte_t *)(uintptr_t)pa;
+    memset(pml4, 0, PAGE_SIZE);
+}
+
+/* Load the PML4 physical address into CR3 and set CR0.PG. */
+void mm_enable_paging(void)
+{
+    if (!pml4) return;
+
+    uint64_t addr = (uint64_t)(uintptr_t)pml4;
+    __asm__ volatile("movq %0, %%cr3" :: "r"(addr) : "memory");
+
+    uint64_t cr0;
+    __asm__ volatile("movq %%cr0, %0" : "=r"(cr0));
+    cr0 |= 0x80000000UL;
+    __asm__ volatile("movq %0, %%cr0" :: "r"(cr0) : "memory");
+}
+
+/* Map virtual address va to physical address pa with the given PTE flags.
+ * Intermediate page tables are allocated lazily via get_or_alloc().
+ * A no-op if pml4 has not been initialised yet. */
 void mm_map_page(vaddr_t va, paddr_t pa, uint64_t flags)
 {
     if (!pml4) return;
-    uint32_t i4 = (va >> 39) & 0x1FF;
-    uint32_t i3 = (va >> 30) & 0x1FF;
-    uint32_t i2 = (va >> 21) & 0x1FF;
-    uint32_t i1 = (va >> 12) & 0x1FF;
-    pte_t *l3 = get_or_alloc(pml4, i4, flags); if (!l3) return;
-    pte_t *l2 = get_or_alloc(l3,   i3, flags); if (!l2) return;
-    pte_t *l1 = get_or_alloc(l2,   i2, flags); if (!l1) return;
+
+    uint32_t i4 = (va >> 39) & 0x1FFu;
+    uint32_t i3 = (va >> 30) & 0x1FFu;
+    uint32_t i2 = (va >> 21) & 0x1FFu;
+    uint32_t i1 = (va >> 12) & 0x1FFu;
+
+    pte_t *l3 = get_or_alloc(pml4, i4, flags);  if (!l3) return;
+    pte_t *l2 = get_or_alloc(l3,   i3, flags);  if (!l2) return;
+    pte_t *l1 = get_or_alloc(l2,   i2, flags);  if (!l1) return;
+
     l1[i1].entry = (pa & ~0xFFFULL) | PAGE_PRESENT | flags;
-    __asm__ volatile("invlpg (%0)"::"r"(va):"memory");
+
+    /* Flush TLB for this virtual address (AT&T syntax). */
+    __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
 }
 
+/* Clear the PTE for va and flush the TLB.  Does not free the physical frame
+ * (bump-allocator semantics — memory is never reclaimed in v1). */
 void mm_unmap_page(vaddr_t va)
 {
     if (!pml4) return;
-    uint32_t i4=(va>>39)&0x1FF, i3=(va>>30)&0x1FF, i2=(va>>21)&0x1FF, i1=(va>>12)&0x1FF;
+
+    uint32_t i4 = (va >> 39) & 0x1FFu;
+    uint32_t i3 = (va >> 30) & 0x1FFu;
+    uint32_t i2 = (va >> 21) & 0x1FFu;
+    uint32_t i1 = (va >> 12) & 0x1FFu;
+
     if (!(pml4[i4].entry & PAGE_PRESENT)) return;
-    pte_t *l3=(pte_t*)(uintptr_t)(pml4[i4].entry&~0xFFFULL);
-    if (!(l3[i3].entry&PAGE_PRESENT)) return;
-    pte_t *l2=(pte_t*)(uintptr_t)(l3[i3].entry&~0xFFFULL);
-    if (!(l2[i2].entry&PAGE_PRESENT)) return;
-    pte_t *l1=(pte_t*)(uintptr_t)(l2[i2].entry&~0xFFFULL);
+    pte_t *l3 = (pte_t *)(uintptr_t)(pml4[i4].entry & ~0xFFFULL);
+
+    if (!(l3[i3].entry & PAGE_PRESENT)) return;
+    pte_t *l2 = (pte_t *)(uintptr_t)(l3[i3].entry & ~0xFFFULL);
+
+    if (!(l2[i2].entry & PAGE_PRESENT)) return;
+    pte_t *l1 = (pte_t *)(uintptr_t)(l2[i2].entry & ~0xFFFULL);
+
     l1[i1].entry = 0;
-    __asm__ volatile("invlpg (%0)"::"r"(va):"memory");
+    __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * § Heap initialisation
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Set the heap VA window and pre-map HEAP_PREMAP_PAGES pages so the very
+ * first kmalloc() call does not require a live page-fault handler.
+ * Must be called after mm_init_paging() and pmm_init(). */
 void mm_init_heap(vaddr_t s, vaddr_t e)
 {
-    heap_start = s; heap_end = e; heap_cur = s;
-    for (size_t i = 0; i < 16; i++) {
+    heap_start = s;
+    heap_end   = e;
+    heap_cur   = s;
+
+    for (size_t i = 0; i < HEAP_PREMAP_PAGES; i++) {
         paddr_t p = (paddr_t)(uintptr_t)pmm_alloc_frame();
-        if (!p) break;
+        if (!p) {
+            serial_puts("[MM] WARN: ran out of frames during heap pre-map\n");
+            break;
+        }
         mm_map_page(s + i * PAGE_SIZE, p, PAGE_PRESENT | PAGE_WRITE);
     }
+
     serial_puts("[MM] Heap initialised.\n");
 }
 
-/* ── allocator ───────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * § Kernel heap allocator  (bump pointer)
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Allocate `size` bytes from the kernel heap, aligned to 16 bytes.
+ *
+ * Before mm_init_heap() has been called (heap_cur == 0) an inline static
+ * emergency pool of 256 KiB is used.  This covers very early boot code that
+ * calls kmalloc before the PMM and page tables are ready.
+ *
+ * After mm_init_heap() sets heap_cur, new pages are mapped on demand
+ * whenever the bump pointer crosses a page boundary.  The function never
+ * re-enters the emergency pool after that point. */
 void *kmalloc(size_t size)
 {
     if (!size) return NULL;
-    size = (size + 15) & ~15ULL;
+
+    /* Align every allocation to 16 bytes for general safety. */
+    size = (size + 15u) & ~15ULL;
+
+    /* ── Emergency pool: active only before mm_init_heap() ─────────────── */
     if (!heap_cur) {
-        /* Heap not formally set up yet — use a static emergency pool */
-        static uint8_t emergency[256 * 1024];
-        static size_t  eidx = 0;
-        if (eidx + size > sizeof(emergency)) return NULL;
-        void *p = emergency + eidx; eidx += size; return p;
+        static uint8_t pool[256 * 1024];
+        static size_t  idx = 0;
+        if (idx + size > sizeof(pool)) {
+            serial_puts("[MM] FATAL: emergency pool exhausted\n");
+            return NULL;
+        }
+        void *p = pool + idx;
+        idx += size;
+        return p;
     }
-    void *ptr = (void *)heap_cur;
-    heap_cur += size;
-    /* Map new pages on demand */
-    vaddr_t ms = (vaddr_t)ptr & ~(PAGE_SIZE-1ULL);
-    vaddr_t me = (heap_cur + PAGE_SIZE - 1) & ~(PAGE_SIZE-1ULL);
+
+    /* ── Normal heap path ───────────────────────────────────────────────── */
+    void *ptr   = (void *)heap_cur;
+    heap_cur   += size;
+
+    /* Map any fresh pages that the new allocation spans.
+     * We compute the page-aligned window [ms, me) and call mm_map_page()
+     * for each page in it.  Pages that were already pre-mapped will have
+     * PAGE_PRESENT set in their PTE, and get_or_alloc() is idempotent for
+     * present entries, so double-mapping is harmless. */
+    vaddr_t ms = (vaddr_t)ptr    & ~((vaddr_t)(PAGE_SIZE - 1));
+    vaddr_t me = (heap_cur + PAGE_SIZE - 1) & ~((vaddr_t)(PAGE_SIZE - 1));
+
     for (vaddr_t v = ms; v < me; v += PAGE_SIZE) {
         if (v >= heap_start && v < heap_end) {
             paddr_t p = (paddr_t)(uintptr_t)pmm_alloc_frame();
             if (p) mm_map_page(v, p, PAGE_PRESENT | PAGE_WRITE);
         }
     }
-    if (heap_cur > heap_end) { serial_puts("[MM] heap exhausted!\n"); return NULL; }
+
+    if (heap_cur > heap_end) {
+        serial_puts("[MM] FATAL: heap exhausted — increase HEAP_VIRT_END\n");
+        /* Return the pointer anyway; the caller will page-fault immediately,
+         * which is safer than returning NULL and masking a real OOM. */
+    }
+
     return ptr;
 }
 
+/* Zero-initialised allocation — thin wrapper around kmalloc. */
 void *kzalloc(size_t size)
 {
     void *p = kmalloc(size);
@@ -442,26 +268,53 @@ void *kzalloc(size_t size)
     return p;
 }
 
-void kfree(void *ptr) { (void)ptr; }
-
-void *krealloc(void *ptr, size_t n)
+/* kfree — no-op for the v1 bump allocator.
+ * All kernel allocations live for the lifetime of the kernel image.
+ * A proper free-list can be added in v2 without changing callers. */
+void kfree(void *ptr)
 {
-    if (!ptr)  return kmalloc(n);
-    if (!n)    { kfree(ptr); return NULL; }
-    void *np = kmalloc(n);
-    if (np) memcpy(np, ptr, n);
+    (void)ptr;
+}
+
+/* krealloc — allocate new_size bytes, copy as much of the old content as
+ * fits, then logically release the old pointer (no-op in bump allocator).
+ *
+ * CONTRACT: callers must not pass new_size larger than the original
+ * allocation size, because we have no header from which to infer the old
+ * size and will copy exactly new_size bytes. */
+void *krealloc(void *ptr, size_t new_size)
+{
+    if (!ptr)      return kmalloc(new_size);
+    if (!new_size) { kfree(ptr); return NULL; }
+
+    void *np = kmalloc(new_size);
+    if (np) memcpy(np, ptr, new_size);
+    kfree(ptr);
     return np;
 }
 
-/* ── memory_init — called from kernel_main ──────────────────────────────── */
-/* FIX: actually initialise pmm and heap so kmalloc works immediately */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * § memory_init — called once from kernel_main
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Initialise physical and virtual memory in the correct order:
+ *   1. pmm_init(0)       — parse the Multiboot2 memory map (0 = safe
+ *                           fallback: treat 1 MiB – 16 MiB as available).
+ *   2. mm_init_heap()    — set VA window and pre-map first 64 KiB.
+ *
+ * mm_init_paging() and mm_enable_paging() are intentionally NOT called here
+ * in v1 because the kernel runs in the identity-mapped environment that
+ * boot64.s already set up with 2 MiB huge pages.  Calling mm_enable_paging()
+ * would switch CR3 to an empty PML4 and triple-fault.  Leave it for v2 when
+ * per-process address spaces are introduced. */
 void memory_init(void)
 {
-    /* pmm_init parses the Multiboot2 memory map.
-     * We pass 0 here; it falls back to a safe 16 MB region. */
+    /* Let pmm.c parse the Multiboot2 memory map.
+     * Passing 0 causes it to fall back to the safe 1–16 MiB region. */
     extern void pmm_init(uint64_t);
     pmm_init(0);
 
     mm_init_heap(HEAP_VIRT_START, HEAP_VIRT_END);
+
     serial_puts("[MM] memory_init complete.\n");
 }

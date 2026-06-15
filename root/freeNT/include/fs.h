@@ -51,4 +51,12 @@ int fs_seek(fd_t fd, int64_t offset, int whence);
 int fs_mkdir(const char *path, int mode);
 int fs_stat(const char *path, inode_t *stat);
 
+
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 #endif
+
+#endif
+

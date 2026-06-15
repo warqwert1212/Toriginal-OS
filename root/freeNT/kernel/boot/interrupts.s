@@ -1,282 +1,178 @@
-.intel_syntax noprefix
+/* =============================================================================
+ * interrupts.s  —  ISR stubs + load_idt
+ *
+ * FIXES vs original:
+ *   1. File declared .intel_syntax noprefix but is assembled by GAS
+ *      (GNU Assembler) which defaults to AT&T syntax.  The mismatch meant
+ *      every instruction was mis-parsed → assembler errors / wrong opcodes.
+ *      Rewritten entirely in AT&T syntax (the same dialect used by boot64.s
+ *      and keyboard_isr.s).
+ *   2. load_idt used "lidt [rdi]" (Intel) → corrected to "lidt (%rdi)".
+ *   3. "mov rdi, offset msgN" (Intel) → "leaq msgN(%rip), %rdi" (AT&T,
+ *      RIP-relative, required for -mcmodel=kernel).
+ *   4. "jmp $" (infinite loop) → "1: hlt; jmp 1b" so the CPU halts
+ *      rather than spinning at 100 % and burning the host.
+ *   5. IRQ stubs sent no EOI — GRUB/firmware leaves PIC in an unknown
+ *      state; without EOI every subsequent IRQ is masked.  Stubs now send
+ *      the correct EOI byte(s) before iretq.
+ *      (interrupts.c's dynamic stubs also do this, but these static stubs
+ *       are fallbacks registered before interrupts_init() runs.)
+ * ============================================================================= */
 
 .section .text
 
+/* ── load_idt — called from interrupts.c with pointer in %rdi ─────────── */
 .global load_idt
-
-.global isr0
-.global isr1
-.global isr2
-.global isr3
-.global isr4
-.global isr5
-.global isr6
-.global isr7
-.global isr8
-.global isr9
-.global isr10
-.global isr11
-.global isr12
-.global isr13
-.global isr14
-.global isr15
-.global isr16
-.global isr17
-.global isr18
-.global isr19
-.global isr20
-.global isr21
-.global isr22
-.global isr23
-.global isr24
-.global isr25
-.global isr26
-.global isr27
-.global isr28
-.global isr29
-.global isr30
-.global isr31
-
-.global irq0
-.global irq1
-.global irq2
-.global irq3
-.global irq4
-.global irq5
-.global irq6
-.global irq7
-.global irq8
-.global irq9
-.global irq10
-.global irq11
-.global irq12
-.global irq13
-.global irq14
-.global irq15
-
-.extern panic
-
 load_idt:
-    lidt [rdi]
+    lidt (%rdi)
     ret
 
-/* ========================= */
-/* CPU Exceptions            */
-/* ========================= */
+/* ── PIC EOI helpers (inlined as byte sequences) ─────────────────────── */
+/* outb(0x20, 0x20) – master EOI */
+.macro eoi_master
+    movb $0x20, %al
+    outb %al, $0x20
+.endm
 
-isr0:
+/* outb(0xA0, 0x20) + outb(0x20, 0x20) – slave + master EOI */
+.macro eoi_both
+    movb $0x20, %al
+    outb %al, $0xA0
+    outb %al, $0x20
+.endm
+
+/* ── CPU exception stubs (vectors 0-31) ──────────────────────────────── */
+/* These call panic() with a string describing the fault.
+ * RIP-relative addressing is required with -mcmodel=kernel.             */
+
+.macro isr_stub num, msg_sym
+.global isr\num
+isr\num:
     cli
-    mov rdi, offset msg0
+    leaq \msg_sym(%rip), %rdi
     call panic
-    jmp $
+1:  hlt
+    jmp 1b
+.endm
 
-isr1:
-    cli
-    mov rdi, offset msg1
-    call panic
-    jmp $
+isr_stub  0, msg0
+isr_stub  1, msg1
+isr_stub  2, msg2
+isr_stub  3, msg3
+isr_stub  4, msg4
+isr_stub  5, msg5
+isr_stub  6, msg6
+isr_stub  7, msg7
+isr_stub  8, msg8
+isr_stub  9, msg9
+isr_stub 10, msg10
+isr_stub 11, msg11
+isr_stub 12, msg12
+isr_stub 13, msg13
+isr_stub 14, msg14
+isr_stub 15, msg15
+isr_stub 16, msg16
+isr_stub 17, msg17
+isr_stub 18, msg18
+isr_stub 19, msg19
+isr_stub 20, msg20
+isr_stub 21, msg21
+isr_stub 22, msg22
+isr_stub 23, msg23
+isr_stub 24, msg24
+isr_stub 25, msg25
+isr_stub 26, msg26
+isr_stub 27, msg27
+isr_stub 28, msg28
+isr_stub 29, msg29
+isr_stub 30, msg30
+isr_stub 31, msg31
 
-isr2:
-    cli
-    mov rdi, offset msg2
-    call panic
-    jmp $
+/* ── Hardware IRQ stubs (vectors 32-47, IRQ 0-15) ────────────────────── */
+/* FIX 5: send EOI before returning so the PIC unmasks future interrupts  */
 
-isr3:
-    cli
-    mov rdi, offset msg3
-    call panic
-    jmp $
+.global irq0
+irq0:
+    eoi_master
+    iretq
 
-isr4:
-    cli
-    mov rdi, offset msg4
-    call panic
-    jmp $
+.global irq1
+irq1:
+    eoi_master
+    iretq
 
-isr5:
-    cli
-    mov rdi, offset msg5
-    call panic
-    jmp $
+.global irq2
+irq2:
+    eoi_master
+    iretq
 
-isr6:
-    cli
-    mov rdi, offset msg6
-    call panic
-    jmp $
+.global irq3
+irq3:
+    eoi_master
+    iretq
 
-isr7:
-    cli
-    mov rdi, offset msg7
-    call panic
-    jmp $
+.global irq4
+irq4:
+    eoi_master
+    iretq
 
-isr8:
-    cli
-    mov rdi, offset msg8
-    call panic
-    jmp $
+.global irq5
+irq5:
+    eoi_master
+    iretq
 
-isr9:
-    cli
-    mov rdi, offset msg9
-    call panic
-    jmp $
+.global irq6
+irq6:
+    eoi_master
+    iretq
 
-isr10:
-    cli
-    mov rdi, offset msg10
-    call panic
-    jmp $
+.global irq7
+irq7:
+    eoi_master
+    iretq
 
-isr11:
-    cli
-    mov rdi, offset msg11
-    call panic
-    jmp $
+/* IRQ 8-15 come from the slave PIC — need slave+master EOI */
+.global irq8
+irq8:
+    eoi_both
+    iretq
 
-isr12:
-    cli
-    mov rdi, offset msg12
-    call panic
-    jmp $
+.global irq9
+irq9:
+    eoi_both
+    iretq
 
-isr13:
-    cli
-    mov rdi, offset msg13
-    call panic
-    jmp $
+.global irq10
+irq10:
+    eoi_both
+    iretq
 
-isr14:
-    cli
-    mov rdi, offset msg14
-    call panic
-    jmp $
+.global irq11
+irq11:
+    eoi_both
+    iretq
 
-isr15:
-    cli
-    mov rdi, offset msg15
-    call panic
-    jmp $
+.global irq12
+irq12:
+    eoi_both
+    iretq
 
-isr16:
-    cli
-    mov rdi, offset msg16
-    call panic
-    jmp $
+.global irq13
+irq13:
+    eoi_both
+    iretq
 
-isr17:
-    cli
-    mov rdi, offset msg17
-    call panic
-    jmp $
+.global irq14
+irq14:
+    eoi_both
+    iretq
 
-isr18:
-    cli
-    mov rdi, offset msg18
-    call panic
-    jmp $
+.global irq15
+irq15:
+    eoi_both
+    iretq
 
-isr19:
-    cli
-    mov rdi, offset msg19
-    call panic
-    jmp $
-
-isr20:
-    cli
-    mov rdi, offset msg20
-    call panic
-    jmp $
-
-isr21:
-    cli
-    mov rdi, offset msg21
-    call panic
-    jmp $
-
-isr22:
-    cli
-    mov rdi, offset msg22
-    call panic
-    jmp $
-
-isr23:
-    cli
-    mov rdi, offset msg23
-    call panic
-    jmp $
-
-isr24:
-    cli
-    mov rdi, offset msg24
-    call panic
-    jmp $
-
-isr25:
-    cli
-    mov rdi, offset msg25
-    call panic
-    jmp $
-
-isr26:
-    cli
-    mov rdi, offset msg26
-    call panic
-    jmp $
-
-isr27:
-    cli
-    mov rdi, offset msg27
-    call panic
-    jmp $
-
-isr28:
-    cli
-    mov rdi, offset msg28
-    call panic
-    jmp $
-
-isr29:
-    cli
-    mov rdi, offset msg29
-    call panic
-    jmp $
-
-isr30:
-    cli
-    mov rdi, offset msg30
-    call panic
-    jmp $
-
-isr31:
-    cli
-    mov rdi, offset msg31
-    call panic
-    jmp $
-
-/* ========================= */
-/* IRQ STUBS                 */
-/* ========================= */
-
-irq0:  iretq
-irq1:  iretq
-irq2:  iretq
-irq3:  iretq
-irq4:  iretq
-irq5:  iretq
-irq6:  iretq
-irq7:  iretq
-irq8:  iretq
-irq9:  iretq
-irq10: iretq
-irq11: iretq
-irq12: iretq
-irq13: iretq
-irq14: iretq
-irq15: iretq
-
+/* ── Exception message strings ───────────────────────────────────────── */
 .section .rodata
 
 msg0:  .asciz "EXCEPTION 0: Divide By Zero"
@@ -284,30 +180,33 @@ msg1:  .asciz "EXCEPTION 1: Debug"
 msg2:  .asciz "EXCEPTION 2: NMI"
 msg3:  .asciz "EXCEPTION 3: Breakpoint"
 msg4:  .asciz "EXCEPTION 4: Overflow"
-msg5:  .asciz "EXCEPTION 5: Bound Range"
+msg5:  .asciz "EXCEPTION 5: Bound Range Exceeded"
 msg6:  .asciz "EXCEPTION 6: Invalid Opcode"
 msg7:  .asciz "EXCEPTION 7: Device Not Available"
 msg8:  .asciz "EXCEPTION 8: Double Fault"
-msg9:  .asciz "EXCEPTION 9"
-msg10: .asciz "EXCEPTION 10"
-msg11: .asciz "EXCEPTION 11"
-msg12: .asciz "EXCEPTION 12"
+msg9:  .asciz "EXCEPTION 9: Coprocessor Segment Overrun"
+msg10: .asciz "EXCEPTION 10: Invalid TSS"
+msg11: .asciz "EXCEPTION 11: Segment Not Present"
+msg12: .asciz "EXCEPTION 12: Stack Segment Fault"
 msg13: .asciz "EXCEPTION 13: General Protection Fault"
 msg14: .asciz "EXCEPTION 14: Page Fault"
-msg15: .asciz "EXCEPTION 15"
-msg16: .asciz "EXCEPTION 16"
-msg17: .asciz "EXCEPTION 17"
-msg18: .asciz "EXCEPTION 18"
-msg19: .asciz "EXCEPTION 19"
-msg20: .asciz "EXCEPTION 20"
-msg21: .asciz "EXCEPTION 21"
-msg22: .asciz "EXCEPTION 22"
-msg23: .asciz "EXCEPTION 23"
-msg24: .asciz "EXCEPTION 24"
-msg25: .asciz "EXCEPTION 25"
-msg26: .asciz "EXCEPTION 26"
-msg27: .asciz "EXCEPTION 27"
-msg28: .asciz "EXCEPTION 28"
-msg29: .asciz "EXCEPTION 29"
-msg30: .asciz "EXCEPTION 30"
-msg31: .asciz "EXCEPTION 31"
+msg15: .asciz "EXCEPTION 15: Reserved"
+msg16: .asciz "EXCEPTION 16: x87 FPU Error"
+msg17: .asciz "EXCEPTION 17: Alignment Check"
+msg18: .asciz "EXCEPTION 18: Machine Check"
+msg19: .asciz "EXCEPTION 19: SIMD Floating-Point"
+msg20: .asciz "EXCEPTION 20: Virtualization"
+msg21: .asciz "EXCEPTION 21: Control Protection"
+msg22: .asciz "EXCEPTION 22: Reserved"
+msg23: .asciz "EXCEPTION 23: Reserved"
+msg24: .asciz "EXCEPTION 24: Reserved"
+msg25: .asciz "EXCEPTION 25: Reserved"
+msg26: .asciz "EXCEPTION 26: Reserved"
+msg27: .asciz "EXCEPTION 27: Reserved"
+msg28: .asciz "EXCEPTION 28: Hypervisor Injection"
+msg29: .asciz "EXCEPTION 29: VMM Communication"
+msg30: .asciz "EXCEPTION 30: Security Exception"
+msg31: .asciz "EXCEPTION 31: Reserved"
+
+/* Mark stack as non-executable (suppresses linker warning) */
+.section .note.GNU-stack,"",@progbits
