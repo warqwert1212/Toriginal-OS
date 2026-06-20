@@ -27,6 +27,27 @@ OUTPUT_ARCH(i386:x86-64)
 
 ENTRY(_start)
 
+/* ── Explicit program headers ────────────────────────────────────────────
+ * Gives precise control over segment permissions (R+X text, R-only
+ * rodata, R+W data — proper W^X separation instead of one big RWX blob).
+ *
+ * NOTE: the original bug that kept .multiboot out of any PT_LOAD segment
+ * (and therefore ~48 KiB into the file, past GRUB's 8 KiB header-scan
+ * window) was NOT a PHDRS problem — it was that kernel/boot/boot64.s
+ * declared ".section .multiboot" with no flags, so the assembler never
+ * marked it ALLOC, and a non-ALLOC section is excluded from every
+ * PT_LOAD segment's address range regardless of linker-script segment
+ * assignment. The real fix is boot64.s now using
+ * ".section .multiboot, \"ax\"" (alloc + executable). PHDRS stays for
+ * the permission-separation benefit, not as the fix for that bug. */
+PHDRS
+{
+    text    PT_LOAD FLAGS(5) ;   /* R+X: .multiboot + .text             */
+    rodata  PT_LOAD FLAGS(4) ;   /* R                                    */
+    data    PT_LOAD FLAGS(6) ;   /* R+W: .data + .bss                    */
+    stack   PT_GNU_STACK FLAGS(6) ;
+}
+
 SECTIONS
 {
     /* ── Load address ────────────────────────────────────────────────────
@@ -39,11 +60,14 @@ SECTIONS
 
     /* ── .multiboot — must be within first 8 KiB of the ELF ────────────
      * GRUB searches the first 8 KiB of the image for the multiboot2
-     * header.  KEEP() prevents the linker from discarding it as unused. */
-    .multiboot ALIGN(8) :
+     * header.  KEEP() prevents the linker from discarding it as unused.
+     * Explicitly assigned to the `text` PT_LOAD segment (see PHDRS above)
+     * so it is guaranteed to be first in the file, not just first in
+     * virtual-address order. */
+    .multiboot ALIGN(8) : 
     {
         KEEP(*(.multiboot))
-    }
+    } :text
 
     /* ── .text — executable code ─────────────────────────────────────── */
     .text ALIGN(4K) :
@@ -53,7 +77,7 @@ SECTIONS
         *(.text*)
         *(.gnu.linkonce.t*)
         __text_end = .;
-    }
+    } :text
 
     /* ── .rodata — read-only data (strings, constant tables) ─────────── */
     .rodata ALIGN(4K) :
@@ -62,7 +86,7 @@ SECTIONS
         *(.rodata*)
         *(.gnu.linkonce.r*)
         __rodata_end = .;
-    }
+    } :rodata
 
     /* ── .data — initialised read-write data ────────────────────────── */
     .data ALIGN(4K) :
@@ -84,7 +108,7 @@ SECTIONS
         *(.stub_table)
 
         __data_end = .;
-    }
+    } :data
 
     /* ── .bss — zero-initialised data ───────────────────────────────── *
      * The boot stub (boot64.s) does not explicitly zero BSS today.
@@ -102,7 +126,7 @@ SECTIONS
         *(.bss*)
         *(.gnu.linkonce.b*)
         __bss_end = .;
-    }
+    } :data
 
     __bss_size   = __bss_end - __bss_start;
     __kernel_end = .;

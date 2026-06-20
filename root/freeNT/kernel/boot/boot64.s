@@ -5,7 +5,16 @@
 .set MB2_CHECKSUM,   -(MB2_MAGIC + MB2_ARCH + MB2_LENGTH)
 
 /* ── Multiboot2 header ────────────────────────────────────────────────── */
-.section .multiboot
+/* FIX: ".section .multiboot" alone has NO section flags, which means the
+ * linker does not mark it ALLOC — without ALLOC, the section is excluded
+ * from every PT_LOAD segment's virtual-address range entirely (even
+ * with an explicit PHDRS assignment), so it gets shoved to an arbitrary
+ * file offset far past the first 8 KiB GRUB scans for the multiboot2
+ * header, and the image silently fails to boot ("no bootable medium").
+ * "a" = allocatable (occupies memory at runtime), "x" = executable
+ * (matches the surrounding .text segment so it shares the same PT_LOAD
+ * region instead of forcing a second loadable segment). */
+.section .multiboot, "ax"
 .align 8
 
 multiboot_header:

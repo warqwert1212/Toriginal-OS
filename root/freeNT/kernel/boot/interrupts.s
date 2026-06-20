@@ -17,6 +17,12 @@
  *      the correct EOI byte(s) before iretq.
  *      (interrupts.c's dynamic stubs also do this, but these static stubs
  *       are fallbacks registered before interrupts_init() runs.)
+ *
+ * NOTE: as of the current kernel.c wiring, idt_init() (interrups.c)
+ * builds its own dynamic stub_table for ALL 256 vectors and points the
+ * live IDT at those, not at the isrN/irqN labels below. Those labels are
+ * therefore currently unreferenced by the IDT but kept here as documented,
+ * ready-to-wire fallbacks (and this file is still required for load_idt).
  * ============================================================================= */
 
 .section .text

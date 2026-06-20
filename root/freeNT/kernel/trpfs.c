@@ -12,8 +12,7 @@
 #include "string.h"
 #include "memory.h"
 #include "pit.h"
-
-void serial_puts(const char *s);
+#include "serial.h"
 
 /* ── Scratch buffers ───────────────────────────────────────────────────────
  * The kernel is single-threaded/cooperative, so a small set of dedicated

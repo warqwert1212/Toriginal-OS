@@ -2,8 +2,9 @@
 #include "string.h"
 #include "fs.h"
 #include "io.h"
-#include "keybord.h"
+#include "keyboard.h"
 #include "pmm.h"
+#include "serial.h"
 
 /* trp_manifest.c — TRP Application Manifest parser v1.1
  *
@@ -11,11 +12,9 @@
  *  - File was entirely duplicated (two copies concatenated) — removed duplicate.
  *  - Include now uses "trp_manifest.h" (no space in filename).
  *  - trp_manifest_run_gate() signature unified with header.
+ *  - keybord.h -> keyboard.h (typo fix), serial_puts/putc via serial.h
+ *    instead of ad-hoc externs.
  */
-
-
-extern void serial_puts(const char *s);
-extern void serial_putc(char c);
 
 /* ── internal helpers ────────────────────────────────────────────────────── */
 

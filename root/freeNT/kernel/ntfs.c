@@ -5,8 +5,7 @@
 
 #include "ntfs.h"
 #include "string.h"
-
-void serial_puts(const char *s);
+#include "serial.h"
 
 /* ── byte-level helpers (NTFS structures are little-endian, unaligned) ──── */
 

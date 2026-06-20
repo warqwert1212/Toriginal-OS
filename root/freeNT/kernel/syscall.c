@@ -4,13 +4,12 @@
 // ==============================================================================
 
 #include <stdint.h>
+#include "serial.h"
 
 #define MSR_EFER   0xC0000080
 #define MSR_STAR   0xC0000081
 #define MSR_LSTAR  0xC0000082
 #define MSR_SFMASK 0xC0000084
-
-void serial_puts(const char *str);
 
 static inline void wrmsr(uint32_t msr, uint64_t val) {
     __asm__ volatile("wrmsr"

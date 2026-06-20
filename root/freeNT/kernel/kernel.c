@@ -1,6 +1,11 @@
 /* =============================================================================
  * kernel.c - Toriginal OS freeNT Kernel Entry Point
  * Only includes headers that actually exist in root/freeNT/include/
+ *
+ * FIX: removed the duplicate kernel_os_shell() stub that used to live here
+ * (it halted forever and would conflict with the real shell loop in
+ * kernel/shell.c, which now lives alongside this file and implements
+ * kernel_os_shell() for real via kernel_shell_loop()).
  * ============================================================================= */
 
 #include "kernel.h"
@@ -11,23 +16,25 @@
 #include "idt.h"
 #include "pic.h"
 #include "pit.h"
-#include "keybord.h"
+#include "keyboard.h"
 #include "panic.h"
+#include "fs.h"
+#include "process.h"
 
 /* =============================================================================
  * Forward declarations for functions in other .c files
  * ============================================================================= */
 
-/* interrups.c */
+/* interrupts.c */
 void interrupts_init(void);
 
 /* syscall.c */
 void syscall_init(void);
 
-/* keyboard wire.c */
+/* keyboard_wire.c */
 void keyboard_wire_idt(void);
 
-/* boot/shell.c - our shell, not built yet, stubbed below */
+/* shell.c — the real OS shell loop (installed, interactive command prompt) */
 void kernel_os_shell(void);
 
 /* =============================================================================
@@ -125,6 +132,18 @@ static void kernel_init(void) {
     keyboard_wire_idt();
     kprint("[3/5] Keyboard OK\n");
 
+    kprint("[4/5] Filesystem init...\n");
+    fs_init();
+    kprint("[4/5] Filesystem OK\n");
+
+    kprint("[5/5] Process subsystem init...\n");
+    process_init();
+    scheduler_init();
+    kprint("[5/5] Process subsystem OK\n");
+
+    syscall_init();
+    kprint("[+] Syscall gate ready.\n");
+
     kprint("\nKernel ready.\n\n");
     kernel_initialized = 1;
 }
@@ -173,19 +192,5 @@ void kernel_panic(const char *reason) {
     serial_write("\nKERNEL PANIC: ");
     serial_write(reason);
     serial_write("\n");
-    for (;;) __asm__ volatile("hlt");
-}
-
-/* =============================================================================
- * kernel_os_shell stub — replaced when we build the real shell
- * ============================================================================= */
-
-void kernel_os_shell(void) {
-    kprint("================================================\n");
-    kprint("        Welcome to Toriginal OS v1.0\n");
-    kprint("        Shell coming soon...\n");
-    kprint("================================================\n");
-    kprint("\n  Kernel is running. Halting until shell is ready.\n");
-    serial_write("[shell] stub - halting\n");
     for (;;) __asm__ volatile("hlt");
 }

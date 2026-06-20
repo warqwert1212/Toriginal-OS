@@ -2,10 +2,7 @@
 #include "types.h"
 #include "pmm.h"
 #include "string.h"
-
-/* serial_puts is implemented in serial.c; avoid pulling in the full header
- * so this translation unit compiles without the serial driver being present. */
-extern void serial_puts(const char *);
+#include "serial.h"
 
 /* ── Compile-time constants ───────────────────────────────────────────────── */
 

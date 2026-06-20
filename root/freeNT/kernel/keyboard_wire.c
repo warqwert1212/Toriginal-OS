@@ -1,9 +1,9 @@
 #include <stdint.h>
 #include "idt.h"
-#include "keybord.h"
+#include "keyboard.h"
 
-/* serial_puts is defined in serial.c */
-extern void serial_puts(const char *str);
+/* serial_puts is declared in serial.h (implemented in serial.c) */
+#include "serial.h"
 
 /* keyboard_isr_stub is defined in keyboard_isr.s */
 extern void keyboard_isr_stub(void);

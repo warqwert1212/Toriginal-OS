@@ -9,7 +9,13 @@ OBJ     := obj
 BIN     := bin
 ISO_DIR := isodir
 
-CFLAGS  := -ffreestanding -nostdlib -nostdinc -mno-red-zone -O2 -Wall -Wextra -Iinclude -Ikernel -I/usr/lib/gcc/x86_64-linux-gnu/13/include
+# FIX: was hardcoded "-I/usr/lib/gcc/x86_64-linux-gnu/13/include", which
+# breaks the moment the Codespaces image ships a different GCC major
+# version. Ask gcc itself where its freestanding headers (stdint.h,
+# stddef.h, stdarg.h, etc — NOT full libc) live.
+GCC_FREESTANDING_INCLUDE := $(shell $(CC) -print-file-name=include)
+
+CFLAGS  := -ffreestanding -nostdlib -nostdinc -mno-red-zone -O2 -Wall -Wextra -Iinclude -Ikernel -I$(GCC_FREESTANDING_INCLUDE)
 LDFLAGS := -T kernel/boot/kernel64.ld --no-undefined -z noexecstack
 
 C_SRCS  := $(wildcard $(SRC)/*.c)

@@ -5,6 +5,7 @@
 #include "io.h"
 #include "string.h"
 #include "process.h"
+#include "serial.h"
 
 /* trploader.c — TRP package loader
  *
@@ -14,6 +15,7 @@
  *  - Local trp_manifest_t renamed to trp_pkg_manifest_t to avoid shadowing
  *    the global typedef from trp_manifest.h.
  *  - trp_manifest_run_gate() call uses correct 5-arg signature.
+ *  - Normalized to #include "serial.h" instead of ad-hoc externs.
  */
 
 #define TRP_MAGIC 0x4B505254u   /* 'TRPK' */
@@ -36,9 +38,6 @@ typedef struct {
     char author[64];
     char min_os_version[16];
 } trp_pkg_manifest_t;
-
-extern void serial_puts(const char *s);
-extern void serial_putc(char c);
 
 static void trp_log(const char *msg)
 {

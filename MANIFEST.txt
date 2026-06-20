@@ -1,0 +1,15 @@
+This tracks every file from the uploaded docs and its disposition:
+KEEP    = copy as-is into final tree
+FIX     = copy with edits
+RENAME  = copy under corrected filename
+DELETE  = do not include in final tree (dead/duplicate/fictional)
+NEW     = file I am writing that did not exist before
+deleting vmm.c / vmm.h - confirmed dead/incompatible code, not referenced by Makefile build
+renamed interrups.c -> interrupts.c (typo fix), fixed misleading load_idt comment
+DELETING isr.c - dead unused global, confusing duplicate-ish name vs interrupts.c's handlers[]
+DELETING trp_manifest.c.bak - triple-duplicated dead content, pure clutter, not part of build (Makefile only globs *.c)
+DELETING root/installer/string.c - redundant duplicate of kernel/string.c (which now has strchr/memmove too), would cause duplicate-symbol link errors if both compiled
+MOVING root/installer/installer.c + installer.h into root/freeNT/kernel/ and root/freeNT/include/ so the flat Makefile's $(wildcard kernel/*.c) picks it up
+FIXED shell.c: install OS / status commands now call the real installer_run()/installer_print_status() instead of a broken inline duplicate that never mounted a filesystem
+root/sys/gui/* - NOT added to kernel build. Requires a framebuffer/VBE driver, PS/2 mouse driver, and VFS file-existence shims that do not exist yet. Documented as a follow-up, not silently dropped.
+DELETING root/freeNT/kernel/Makefile - broken/non-functional duplicate (wrong relative paths for kernel64.ld, include/, boot/). root/freeNT/Makefile is the one true build entry point.

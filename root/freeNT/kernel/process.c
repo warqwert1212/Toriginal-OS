@@ -2,6 +2,7 @@
 #include "mm.h"
 #include "string.h"
 #include "io.h"
+#include "serial.h"     /* FIX: was calling serial_puts/serial_putc with no declaration */
 #include "loader.h"     // use the real loader, not load_and_execute_user_elf
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,9 @@ void process_init(void) {
 // process_create
 // ---------------------------------------------------------------------------
 process_t *process_create(const char *name, uint8_t priority) {
+    (void)name; /* TODO(v2): store process name for ps/debugging; not yet
+                 * tracked in process_t, so explicitly mark unused for now
+                 * rather than silently ignoring -Wunused-parameter. */
     if (next_pid >= MAX_PROCESSES) return NULL;
 
     process_t *proc = (process_t *)kmalloc(sizeof(process_t));

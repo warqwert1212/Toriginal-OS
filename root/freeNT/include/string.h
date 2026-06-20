@@ -18,6 +18,8 @@ char* strncpy(char* dest,
               const char* src,
               size_t n);
 
+char *strchr(const char *s, int c);
+
 void* memset(void* ptr,
              int value,
              size_t size);
@@ -25,6 +27,10 @@ void* memset(void* ptr,
 void* memcpy(void* dest,
              const void* src,
              size_t size);
+
+void* memmove(void* dest,
+              const void* src,
+              size_t size);
 
 int memcmp(const void* a,
            const void* b,

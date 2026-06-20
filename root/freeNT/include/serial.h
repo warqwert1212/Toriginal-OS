@@ -17,4 +17,11 @@ void serial_write(const char *str);
 void serial_write_hex(uint64_t value);
 void serial_write_dec(uint64_t value);
 
+/* Convenience aliases (defined in serial.c) — declared here so every
+ * caller can `#include "serial.h"` instead of sprinkling ad-hoc
+ * `extern void serial_puts(const char *);` declarations everywhere. */
+void serial_puts(const char *str);
+void serial_putc(char c);
+void print_serial(const char *str);
+
 #endif

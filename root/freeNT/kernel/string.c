@@ -69,6 +69,20 @@ char* strncpy(char* dest,
     return ret;
 }
 
+/* FIX: added — declared in string.h, needed by anything that scans for a
+ * delimiter character (e.g. future path/manifest parsing). Mirrors the
+ * implementation already present in root/installer/string.c so both
+ * copies of the kernel C library behave identically. */
+char *strchr(const char *s, int c)
+{
+    while (*s) {
+        if (*s == (char)c)
+            return (char *)s;
+        s++;
+    }
+    return (c == '\0') ? (char *)s : NULL;
+}
+
 void* memset(void* ptr,
              int value,
              size_t size)
@@ -90,6 +104,29 @@ void* memcpy(void* dest,
 
     while(size--)
         *d++ = *s++;
+
+    return dest;
+}
+
+/* FIX: added — declared in string.h. Unlike memcpy, memmove is safe for
+ * overlapping regions (copies backward when dest > src). */
+void* memmove(void* dest, const void* src, size_t size)
+{
+    unsigned char* d = dest;
+    const unsigned char* s = src;
+
+    if (d == s || size == 0)
+        return dest;
+
+    if (d < s) {
+        while (size--)
+            *d++ = *s++;
+    } else {
+        d += size;
+        s += size;
+        while (size--)
+            *(--d) = *(--s);
+    }
 
     return dest;
 }

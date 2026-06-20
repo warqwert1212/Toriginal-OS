@@ -4,8 +4,7 @@
 // ==============================================================================
 
 #include "pmm.h"
-
-void print_serial(const char *str);
+#include "serial.h"
 
 // Multiboot2 tag types
 #define MB2_TAG_END   0
