@@ -59,23 +59,23 @@ $(BIN)/kernel.elf: $(OBJS) kernel/boot/kernel64.ld | $(BIN)
 	@x86_64-linux-gnu-readelf -h $@ | grep -E "Class|Machine|Entry"
 
 $(ISO_DIR)/boot/grub/grub.cfg: | $(ISO_DIR)/boot/grub
-	@printf 'set timeout=3\nset default=0\n\nmenuentry "toriginal OS" {\n\tmultiboot2 /boot/kernel.elf\n\tboot\n}\n' > $@
+	@printf 'set timeout=3\nset default=0\n\nmenuentry "toriginal_OS" {\n\tmultiboot2 /boot/kernel.elf\n\tboot\n}\n' > $@
 
 $(ISO_DIR)/boot/kernel.elf: $(BIN)/kernel.elf | $(ISO_DIR)/boot/grub
 	cp $< $@
 
-toriginal OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg
+toriginal_OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg
 	$(MKISO) -o $@ $(ISO_DIR) -d /usr/lib/grub/i386-pc
 
-iso: toriginal OS.iso
+iso: toriginal_OS.iso
 
 run: iso
-	qemu-system-x86_64 -cdrom toriginal OS.iso -m 256M -serial stdio -no-reboot
+	qemu-system-x86_64 -cdrom toriginal_OS.iso -m 256M -serial stdio -no-reboot
 
 # run-headless: useful for CI or Codespaces where there is no display.
 # All shell I/O goes through the serial port (stdin/stdout).
 run-headless: iso
-	qemu-system-x86_64 -cdrom toriginal OS.iso -m 256M -serial stdio -display none -no-reboot
+	qemu-system-x86_64 -cdrom toriginal_OS.iso -m 256M -serial stdio -display none -no-reboot
 
 tools:
 	sudo apt update && sudo apt install -y \
@@ -83,4 +83,4 @@ tools:
 	    nasm xorriso grub-pc-bin mtools qemu-system-x86
 
 clean:
-	rm -rf $(OBJ) $(BIN) $(ISO_DIR) toriginal OS.iso
+	rm -rf $(OBJ) $(BIN) $(ISO_DIR) toriginal_OS.iso
