@@ -1,0 +1,754 @@
+/* sys/shell/shell.c - Toriginal OS CLI + package manager */
+
+#include "io.h"
+#include "string.h"
+#include "fs.h"
+#include "trpfs.h"
+#include "trploader.h"
+#include "process.h"
+#include "loader.h"
+#include "serial.h"
+#include "installer.h"
+#include "memory.h"
+#include "vga.h"
+#include "rtc.h"
+
+#define OS_NAME    "Toriginal OS"
+#define OS_VERSION "1.0"
+#define KERNEL_NAME "freeNT"
+#define BUILD_ARCH  "x86-64"
+
+/* TRP package header magic */
+#define TRP_MAGIC 0x4B505254u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t manifest_offset;
+    uint32_t manifest_len;
+    uint32_t payload_offset;
+    uint32_t payload_len;
+} __attribute__((packed)) trp_hdr_t;
+
+/* Package index lives at /pkgs/index.txt - one entry per line: name */
+#define PKG_DIR   "/pkgs"
+#define PKG_INDEX "/pkgs/index.txt"
+
+static char g_cwd[256] = "/";
+static char g_username[32] = "user";
+static int  g_username_loaded = 0;
+
+/* Exposed so kernel/shell.c can build the prompt (os~$ vs os/folder~$) */
+const char *sys_shell_get_cwd(void) { return g_cwd; }
+
+/* Read "username=..." out of /toriginal_os/config.ini, once, cached. */
+static void load_username(void) {
+    if (g_username_loaded) return;
+    g_username_loaded = 1;
+    if (!trpfs_is_mounted()) return;
+
+    fd_t fd = fs_open("/toriginal_os/config.ini", O_RDONLY, 0);
+    if (fd < 0) return;
+    char buf[256];
+    ssize_t n = fs_read(fd, buf, sizeof(buf) - 1);
+    fs_close(fd);
+    if (n <= 0) return;
+    buf[n] = '\0';
+
+    const char *key = "username=";
+    size_t klen = strlen(key);
+    for (char *p = buf; *p; p++) {
+        if (strncmp(p, key, klen) == 0) {
+            p += klen;
+            int i = 0;
+            while (*p && *p != '\n' && i < (int)sizeof(g_username) - 1) {
+                g_username[i++] = *p++;
+            }
+            g_username[i] = '\0';
+            return;
+        }
+    }
+}
+
+static const char *month_name(uint8_t m) {
+    static const char *names[] = {
+        "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+    };
+    if (m < 1 || m > 12) return "???";
+    return names[m - 1];
+}
+
+static void u2s(uint32_t v, char *out) {
+    out[0] = (char)('0' + (v / 10) % 10);
+    out[1] = (char)('0' + v % 10);
+    out[2] = '\0';
+}
+
+/* Rebuild and redraw the top status bar: "username | Mon DD YYYY  HH:MM:SS" */
+void sys_shell_update_statusbar(void) {
+    if (!trpfs_is_mounted()) return;
+    load_username();
+
+    rtc_time_t t;
+    rtc_read(&t);
+
+    char hh[3], mm[3], ss[3];
+    u2s(t.hour, hh); u2s(t.minute, mm); u2s(t.second, ss);
+
+    char bar[80];
+    int n = 0;
+    bar[n++] = ' ';
+    for (const char *p = g_username; *p && n < 30; p++) bar[n++] = *p;
+    bar[n++] = ' '; bar[n++] = '|'; bar[n++] = ' ';
+    for (const char *p = month_name(t.month); *p; p++) bar[n++] = *p;
+    bar[n++] = ' ';
+    char dd[3]; u2s(t.day, dd);
+    bar[n++] = dd[0]; bar[n++] = dd[1]; bar[n++] = ' ';
+    /* year */
+    uint16_t y = t.year;
+    char ybuf[5]; ybuf[0]=(char)('0'+(y/1000)%10); ybuf[1]=(char)('0'+(y/100)%10);
+    ybuf[2]=(char)('0'+(y/10)%10); ybuf[3]=(char)('0'+y%10); ybuf[4]='\0';
+    for (int i=0;i<4;i++) bar[n++]=ybuf[i];
+    bar[n++] = ' '; bar[n++] = ' ';
+    bar[n++] = hh[0]; bar[n++] = hh[1]; bar[n++] = ':';
+    bar[n++] = mm[0]; bar[n++] = mm[1]; bar[n++] = ':';
+    bar[n++] = ss[0]; bar[n++] = ss[1];
+    bar[n] = '\0';
+
+    vga_draw_statusbar(bar);
+}
+
+/* ── helpers ─────────────────────────────────────────────────────────────── */
+
+static void print_u64(uint64_t v) {
+    if (!v) { io_put_char('0'); return; }
+    char t[21]; int i = 0;
+    while (v) { t[i++] = '0' + (char)(v % 10); v /= 10; }
+    while (i--) io_put_char(t[i]);
+}
+
+static void print_size(uint64_t b) {
+    if      (b >= 1024*1024) { print_u64(b/(1024*1024)); io_put_string(" MB"); }
+    else if (b >= 1024)      { print_u64(b/1024);        io_put_string(" KB"); }
+    else                     { print_u64(b);             io_put_string(" B");  }
+}
+
+static void resolve_path(const char *arg, char *dst, size_t n) {
+    if (!arg || !arg[0]) { strncpy(dst, g_cwd, n-1); dst[n-1]='\0'; return; }
+    if (arg[0] == '/') { strncpy(dst, arg, n-1); dst[n-1]='\0'; return; }
+    size_t cl = strlen(g_cwd);
+    strncpy(dst, g_cwd, n-1); dst[n-1]='\0';
+    if (cl > 0 && dst[cl-1] != '/' && cl < n-1) dst[cl++]='/', dst[cl]='\0';
+    size_t di = cl;
+    for (size_t ai = 0; arg[ai] && di < n-1; ai++, di++) dst[di]=arg[ai];
+    dst[di]='\0';
+}
+
+/* Collapse "." and ".." segments in-place. "/a/b/../c" -> "/a/c".
+ * Never escapes above root: "/.." stays "/". */
+static void normalize_path(char *path) {
+    char *segs[64];
+    int nseg = 0;
+
+    char tmp[256];
+    strncpy(tmp, path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    char *tok = tmp;
+    char *out = path;
+    *out = '\0';
+
+    /* Walk segments separated by '/' */
+    char *p = tmp;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char *start = p;
+        while (*p && *p != '/') p++;
+        size_t seglen = (size_t)(p - start);
+        if (*p) *p++ = '\0';
+
+        if (seglen == 1 && start[0] == '.') {
+            continue; /* "." - no-op */
+        }
+        if (seglen == 2 && start[0] == '.' && start[1] == '.') {
+            if (nseg > 0) nseg--; /* pop last segment, can't go above root */
+            continue;
+        }
+        if (nseg < 64) segs[nseg++] = start;
+    }
+    (void)tok;
+
+    if (nseg == 0) { path[0] = '/'; path[1] = '\0'; return; }
+
+    for (int i = 0; i < nseg; i++) {
+        *out++ = '/';
+        size_t l = strlen(segs[i]);
+        memcpy(out, segs[i], l);
+        out += l;
+    }
+    *out = '\0';
+}
+
+/* Resolve + normalize in one step - every path-taking command should use
+ * this instead of calling resolve_path directly, so ".." always works. */
+static void resolve_and_normalize(const char *arg, char *dst, size_t n) {
+    resolve_path(arg, dst, n);
+    normalize_path(dst);
+}
+
+static char *split_first(char *buf) {
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == ' ') {
+            buf[i] = '\0';
+            char *r = buf + i + 1;
+            while (*r == ' ') r++;
+            return *r ? r : NULL;
+        }
+    }
+    return NULL;
+}
+
+static int need_fs(const char *cmd) {
+    if (trpfs_is_mounted()) return 1;
+    io_put_string(cmd);
+    io_put_string(": filesystem not mounted - run 'install' first\n");
+    return 0;
+}
+
+/* write a NUL-terminated string to an open fd */
+static void fd_puts(fd_t fd, const char *s) {
+    fs_write(fd, s, strlen(s));
+}
+
+/* ── commands ────────────────────────────────────────────────────────────── */
+
+static void cmd_help(void) {
+    io_put_string("\n");
+    io_put_string("help - show this command list\n");
+    io_put_string("sysver - show OS and kernel version\n");
+    io_put_string("uname - one-line system info\n");
+    io_put_string("cls - clear the screen\n");
+    io_put_string("pwd - print current directory\n");
+    io_put_string("cd <path> - change directory (use .. to go up)\n");
+    io_put_string("ls [path] - list directory contents\n");
+    io_put_string("mkdir <path> - create a directory\n");
+    io_put_string("touch <path> - create an empty file\n");
+    io_put_string("rm <path> - delete a file\n");
+    io_put_string("cat <path> - print a file to screen\n");
+    io_put_string("write <path> <text> - write text into a file\n");
+    io_put_string("echo <text> - print text\n");
+    io_put_string("run <path.trp> - execute a TRP package\n");
+    io_put_string("trpbuild <folder> - build a .trp from a folder\n");
+    io_put_string("trpm list - list installed packages\n");
+    io_put_string("trpm install <pkg.trp> - install a TRP package\n");
+    io_put_string("trpm remove <name> - remove an installed package\n");
+    io_put_string("free - show heap memory stats\n");
+    io_put_string("settings - open the settings menu\n");
+    io_put_string("install - install Toriginal OS to disk\n");
+    io_put_string("status - show filesystem status\n");
+    io_put_string("halt - halt the system\n");
+    io_put_string("reboot - restart the system\n");
+    io_put_string("\n");
+}
+
+static void cmd_sysver(void) {
+    io_put_string(OS_NAME " v" OS_VERSION " (" KERNEL_NAME "/" BUILD_ARCH ")\n");
+    io_put_string("heap . TRPFS . PS/2 kbd+mouse . PIT . TRP packages\n");
+}
+
+static void cmd_cls(void) { io_clear_screen(); }
+static void cmd_pwd(void) { io_put_string(g_cwd); io_put_char('\n'); }
+
+static void cmd_cd(const char *arg) {
+    if (!arg || !arg[0]) { g_cwd[0]='/'; g_cwd[1]='\0'; return; }
+    if (!need_fs("cd")) return;
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    inode_t st;
+    if (fs_stat(path, &st) != 0) {
+        io_put_string("cd: not found: "); io_put_string(path); io_put_char('\n'); return;
+    }
+    if (!FS_IS_DIR(st.mode)) {
+        io_put_string("cd: not a directory: "); io_put_string(path); io_put_char('\n'); return;
+    }
+    strncpy(g_cwd, path, sizeof(g_cwd)-1);
+    size_t l = strlen(g_cwd);
+    if (l > 1 && g_cwd[l-1] == '/') g_cwd[l-1] = '\0';
+}
+
+static int ls_cb(const char *name, uint8_t nlen, uint8_t type, void *ctx) {
+    (void)ctx;
+    io_put_string("  ");
+    if (type == FILE_TYPE_DIR) io_put_char('[');
+    for (uint8_t i = 0; i < nlen; i++) io_put_char(name[i]);
+    if (type == FILE_TYPE_DIR) io_put_char(']');
+    io_put_char('\n');
+    return 0;
+}
+
+static void cmd_ls(const char *arg) {
+    if (!need_fs("ls")) return;
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    inode_t st;
+    if (fs_stat(path, &st) != 0) {
+        io_put_string("ls: not found: "); io_put_string(path); io_put_char('\n'); return;
+    }
+    if (!FS_IS_DIR(st.mode)) {
+        io_put_string("  "); io_put_string(path);
+        io_put_string("  ("); print_size(st.size); io_put_string(")\n"); return;
+    }
+    io_put_string(path); io_put_string(":\n");
+    if (fs_readdir(path, ls_cb, NULL) != 0)
+        io_put_string("ls: read error\n");
+}
+
+static void cmd_mkdir(const char *arg) {
+    if (!arg||!arg[0]) { io_put_string("usage: mkdir <path>\n"); return; }
+    if (!need_fs("mkdir")) return;
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    if (fs_mkdir(path, 0755) == 0) {
+        io_put_string("mkdir: created "); io_put_string(path); io_put_char('\n');
+    } else {
+        io_put_string("mkdir: failed (exists or bad path)\n");
+    }
+}
+
+static void cmd_touch(const char *arg) {
+    if (!arg||!arg[0]) { io_put_string("usage: touch <path>\n"); return; }
+    if (!need_fs("touch")) return;
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    fd_t fd = fs_open(path, O_WRONLY|O_CREAT, 0644);
+    if (fd < 0) { io_put_string("touch: failed\n"); return; }
+    fs_close(fd);
+    io_put_string("touch: created "); io_put_string(path); io_put_char('\n');
+}
+
+static void cmd_rm(const char *arg) {
+    if (!arg||!arg[0]) { io_put_string("usage: rm <path>\n"); return; }
+    if (!need_fs("rm")) return;
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    if (fs_unlink(path) == 0) {
+        io_put_string("rm: removed "); io_put_string(path); io_put_char('\n');
+    } else {
+        io_put_string("rm: failed (not found or is a directory)\n");
+    }
+}
+
+static void cmd_cat(const char *arg) {
+    if (!arg||!arg[0]) { io_put_string("usage: cat <path>\n"); return; }
+    if (!need_fs("cat")) return;
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    fd_t fd = fs_open(path, O_RDONLY, 0);
+    if (fd < 0) { io_put_string("cat: cannot open: "); io_put_string(path); io_put_char('\n'); return; }
+    char buf[512]; ssize_t n;
+    while ((n = fs_read(fd, buf, sizeof(buf)-1)) > 0) { buf[n]='\0'; io_put_string(buf); }
+    io_put_char('\n');
+    fs_close(fd);
+}
+
+static void cmd_write(const char *arg) {
+    if (!arg||!arg[0]) { io_put_string("usage: write <path> <text>\n"); return; }
+    if (!need_fs("write")) return;
+    char abuf[256]; strncpy(abuf, arg, sizeof(abuf)-1); abuf[sizeof(abuf)-1]='\0';
+    char *text = split_first(abuf);
+    if (!text||!text[0]) { io_put_string("write: no text given\n"); return; }
+    char path[256]; resolve_and_normalize(abuf, path, sizeof(path));
+    fd_t fd = fs_open(path, O_WRONLY|O_CREAT, 0644);
+    if (fd < 0) { io_put_string("write: cannot open: "); io_put_string(path); io_put_char('\n'); return; }
+    ssize_t w = fs_write(fd, text, strlen(text));
+    char nl = '\n'; fs_write(fd, &nl, 1);
+    fs_close(fd);
+    print_u64((uint64_t)w); io_put_string(" bytes written to "); io_put_string(path); io_put_char('\n');
+}
+
+static void cmd_echo(const char *arg) {
+    if (arg && arg[0]) io_put_string(arg);
+    io_put_char('\n');
+}
+
+static void cmd_run(const char *arg) {
+    if (!arg||!arg[0]) { io_put_string("usage: run <path.trp>\n"); return; }
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    io_put_string("run: loading "); io_put_string(path); io_put_string(" ...\n");
+    process_t *proc = process_create(path, 1);
+    if (!proc) { io_put_string("run: failed to create process\n"); return; }
+    if (loader_load_executable(path, proc->pid) == 0) {
+        process_start(proc->pid);
+    } else {
+        io_put_string("run: loader rejected "); io_put_string(path); io_put_char('\n');
+    }
+}
+
+static void cmd_free(void) {
+    uint64_t al=0,ar=0,ac=0,fr=0;
+    heap_get_stats(&al,&ar,&ac,&fr);
+    io_put_string("heap  total : "); print_size(ar);               io_put_char('\n');
+    io_put_string("      used  : "); print_size(al);               io_put_char('\n');
+    io_put_string("      free  : "); print_size(ar>al?ar-al:0);    io_put_char('\n');
+}
+
+static void cmd_halt(void) {
+    io_put_string("Halted.\n");
+    __asm__ volatile("cli");
+    while (1) __asm__ volatile("hlt");
+}
+
+static void cmd_reboot(void) {
+    io_put_string("Rebooting...\n");
+    __asm__ volatile("cli");
+    for (volatile int i=0;i<100000;i++);
+    __asm__ volatile("mov $0xFE,%%al;out %%al,$0x64":::"al");
+    while (1) __asm__ volatile("hlt");
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * trpbuild <folder>
+ *
+ * Folder structure on TRPFS:
+ *   /myapp/
+ *     manifest.txt      - TRP manifest text
+ *     code/             - payload files (first file used as binary payload)
+ *
+ * Produces: /myapp.trp
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Callback that captures the first regular file name found in a directory */
+typedef struct { char name[128]; int found; } first_file_ctx_t;
+static int first_file_cb(const char *name, uint8_t nlen, uint8_t type, void *ctx) {
+    first_file_ctx_t *c = (first_file_ctx_t *)ctx;
+    if (!c->found && type == FILE_TYPE_REGULAR) {
+        uint8_t copy = nlen < 127 ? nlen : 127;
+        for (uint8_t i = 0; i < copy; i++) c->name[i] = name[i];
+        c->name[copy] = '\0';
+        c->found = 1;
+    }
+    return 0;
+}
+
+static void cmd_trpbuild(const char *arg) {
+    if (!arg || !arg[0]) {
+        io_put_string("usage: trpbuild <folder>\n");
+        io_put_string("  folder must contain manifest.txt and a code/ subfolder\n");
+        return;
+    }
+    if (!need_fs("trpbuild")) return;
+
+    /* Resolve the source folder */
+    char folder[256];
+    resolve_and_normalize(arg, folder, sizeof(folder));
+
+    /* Verify it's a directory */
+    inode_t st;
+    if (fs_stat(folder, &st) != 0 || !FS_IS_DIR(st.mode)) {
+        io_put_string("trpbuild: not a directory: "); io_put_string(folder); io_put_char('\n');
+        return;
+    }
+
+    /* Read manifest.txt */
+    char manifest_path[280];
+    strncpy(manifest_path, folder, sizeof(manifest_path)-20);
+    size_t fl = strlen(manifest_path);
+    if (fl > 0 && manifest_path[fl-1] != '/') manifest_path[fl++] = '/';
+    strncpy(manifest_path + fl, "manifest.txt", sizeof(manifest_path)-fl-1);
+
+    fd_t mfd = fs_open(manifest_path, O_RDONLY, 0);
+    if (mfd < 0) {
+        io_put_string("trpbuild: missing manifest.txt in "); io_put_string(folder); io_put_char('\n');
+        return;
+    }
+    char manifest_buf[2048];
+    ssize_t mlen = fs_read(mfd, manifest_buf, sizeof(manifest_buf)-1);
+    fs_close(mfd);
+    if (mlen <= 0) { io_put_string("trpbuild: manifest.txt is empty\n"); return; }
+    manifest_buf[mlen] = '\0';
+
+    /* Find first file inside code/ subfolder as the payload */
+    char code_path[280];
+    strncpy(code_path, folder, sizeof(code_path)-10);
+    fl = strlen(code_path);
+    if (fl > 0 && code_path[fl-1] != '/') code_path[fl++] = '/';
+    strncpy(code_path + fl, "code", sizeof(code_path)-fl-1);
+
+    first_file_ctx_t ffc = { .found = 0 };
+    fs_readdir(code_path, first_file_cb, &ffc);
+
+    uint8_t  *payload     = NULL;
+    uint32_t  payload_len = 0;
+
+    if (ffc.found) {
+        char payload_path[300];
+        strncpy(payload_path, code_path, sizeof(payload_path)-80);
+        size_t cl = strlen(payload_path);
+        if (payload_path[cl-1] != '/') payload_path[cl++] = '/';
+        strncpy(payload_path + cl, ffc.name, sizeof(payload_path)-cl-1);
+
+        inode_t pst;
+        if (fs_stat(payload_path, &pst) == 0 && pst.size > 0) {
+            fd_t pfd = fs_open(payload_path, O_RDONLY, 0);
+            if (pfd >= 0) {
+                payload = (uint8_t *)kmalloc((size_t)pst.size);
+                if (payload) {
+                    ssize_t pr = fs_read(pfd, payload, (size_t)pst.size);
+                    payload_len = pr > 0 ? (uint32_t)pr : 0;
+                }
+                fs_close(pfd);
+            }
+        }
+    }
+
+    /* Build output path: <folder>.trp */
+    char out_path[300];
+    strncpy(out_path, folder, sizeof(out_path)-6);
+    /* Strip trailing slash */
+    size_t ol = strlen(out_path);
+    if (ol > 1 && out_path[ol-1] == '/') out_path[--ol] = '\0';
+    strncpy(out_path + ol, ".trp", sizeof(out_path)-ol-1);
+
+    fd_t ofd = fs_open(out_path, O_WRONLY|O_CREAT, 0755);
+    if (ofd < 0) {
+        io_put_string("trpbuild: cannot create output: "); io_put_string(out_path); io_put_char('\n');
+        if (payload) kfree(payload);
+        return;
+    }
+
+    /* Write TRP header + manifest + payload */
+    trp_hdr_t hdr;
+    hdr.magic           = TRP_MAGIC;
+    hdr.version         = 1;
+    hdr.manifest_offset = (uint32_t)sizeof(hdr);
+    hdr.manifest_len    = (uint32_t)mlen;
+    hdr.payload_offset  = hdr.manifest_offset + hdr.manifest_len;
+    hdr.payload_len     = payload_len;
+
+    fs_write(ofd, &hdr,         sizeof(hdr));
+    fs_write(ofd, manifest_buf, (size_t)mlen);
+    if (payload && payload_len) fs_write(ofd, payload, payload_len);
+    fs_close(ofd);
+
+    if (payload) kfree(payload);
+
+    io_put_string("trpbuild: built "); io_put_string(out_path);
+    io_put_string(" (manifest="); print_u64((uint64_t)mlen); io_put_string("B");
+    if (payload_len) { io_put_string(", payload="); print_u64(payload_len); io_put_string("B"); }
+    io_put_string(")\n");
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * trpm - package manager
+ *   trpm list
+ *   trpm install <pkg.trp>
+ *   trpm remove  <name>
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Ensure /pkgs directory and /pkgs/index.txt exist */
+static void pkg_ensure_dir(void) {
+    inode_t st;
+    if (fs_stat(PKG_DIR, &st) != 0) fs_mkdir(PKG_DIR, 0755);
+    if (fs_stat(PKG_INDEX, &st) != 0) {
+        fd_t fd = fs_open(PKG_INDEX, O_WRONLY|O_CREAT, 0644);
+        if (fd >= 0) fs_close(fd);
+    }
+}
+
+/* List all lines in index.txt */
+typedef struct { int count; } list_ctx_t;
+
+static void cmd_trpm_list(void) {
+    if (!need_fs("trpm")) return;
+    pkg_ensure_dir();
+
+    fd_t fd = fs_open(PKG_INDEX, O_RDONLY, 0);
+    if (fd < 0) { io_put_string("trpm: cannot read index\n"); return; }
+
+    char buf[1024]; ssize_t n = fs_read(fd, buf, sizeof(buf)-1);
+    fs_close(fd);
+
+    if (n <= 0) { io_put_string("trpm: no packages installed\n"); return; }
+    buf[n] = '\0';
+
+    io_put_string("Installed packages:\n");
+    /* Walk lines */
+    char *p = buf;
+    int count = 0;
+    while (*p) {
+        char *nl = p;
+        while (*nl && *nl != '\n') nl++;
+        if (nl > p) {
+            io_put_string("  "); 
+            char tmp = *nl; *nl = '\0';
+            io_put_string(p);
+            *nl = tmp;
+            io_put_char('\n');
+            count++;
+        }
+        if (*nl == '\n') nl++;
+        p = nl;
+    }
+    if (!count) io_put_string("  (none)\n");
+}
+
+static void cmd_trpm_install(const char *arg) {
+    if (!arg || !arg[0]) { io_put_string("usage: trpm install <pkg.trp>\n"); return; }
+    if (!need_fs("trpm")) return;
+    pkg_ensure_dir();
+
+    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+
+    /* Verify it's a valid TRP */
+    inode_t st;
+    if (fs_stat(path, &st) != 0) {
+        io_put_string("trpm: not found: "); io_put_string(path); io_put_char('\n'); return;
+    }
+    if (st.size < sizeof(trp_hdr_t)) {
+        io_put_string("trpm: file too small to be a TRP package\n"); return;
+    }
+
+    fd_t fd = fs_open(path, O_RDONLY, 0);
+    if (fd < 0) { io_put_string("trpm: cannot open package\n"); return; }
+    trp_hdr_t hdr;
+    fs_read(fd, &hdr, sizeof(hdr));
+    fs_close(fd);
+
+    if (hdr.magic != TRP_MAGIC) {
+        io_put_string("trpm: invalid TRP magic - not a valid package\n"); return;
+    }
+
+    /* Derive package name from filename (strip path and .trp) */
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;
+    char pkgname[128]; strncpy(pkgname, base, sizeof(pkgname)-1); pkgname[sizeof(pkgname)-1]='\0';
+    size_t nl = strlen(pkgname);
+    if (nl > 4 && strcmp(pkgname + nl - 4, ".trp") == 0) pkgname[nl-4] = '\0';
+
+    /* Copy .trp into /pkgs/<name>.trp */
+    char dest[256];
+    strncpy(dest, PKG_DIR "/", sizeof(dest)-1);
+    size_t dl = strlen(dest);
+    strncpy(dest + dl, pkgname, sizeof(dest)-dl-6);
+    strncpy(dest + strlen(dest), ".trp", 5);
+
+    /* Copy file contents */
+    fd_t src = fs_open(path, O_RDONLY, 0);
+    fd_t dst = fs_open(dest, O_WRONLY|O_CREAT, 0755);
+    if (src < 0 || dst < 0) {
+        io_put_string("trpm: copy failed\n");
+        if (src >= 0) fs_close(src);
+        if (dst >= 0) fs_close(dst);
+        return;
+    }
+    char cbuf[512]; ssize_t nr;
+    while ((nr = fs_read(src, cbuf, sizeof(cbuf))) > 0)
+        fs_write(dst, cbuf, (size_t)nr);
+    fs_close(src); fs_close(dst);
+
+    /* Append name to index */
+    fd_t idx = fs_open(PKG_INDEX, O_WRONLY|O_CREAT, 0644);
+    if (idx >= 0) {
+        fs_seek(idx, 0, 2); /* seek to end */
+        fd_puts(idx, pkgname);
+        fd_puts(idx, "\n");
+        fs_close(idx);
+    }
+
+    io_put_string("trpm: installed "); io_put_string(pkgname);
+    io_put_string(" -> "); io_put_string(dest); io_put_char('\n');
+    io_put_string("      run it with: run "); io_put_string(dest); io_put_char('\n');
+}
+
+static void cmd_trpm_remove(const char *arg) {
+    if (!arg || !arg[0]) { io_put_string("usage: trpm remove <name>\n"); return; }
+    if (!need_fs("trpm")) return;
+
+    /* Remove the .trp file from /pkgs/ */
+    char dest[256];
+    strncpy(dest, PKG_DIR "/", sizeof(dest)-1);
+    size_t dl = strlen(dest);
+    strncpy(dest + dl, arg, sizeof(dest)-dl-6);
+    strncpy(dest + strlen(dest), ".trp", 5);
+
+    if (fs_unlink(dest) != 0) {
+        io_put_string("trpm: package not found: "); io_put_string(arg); io_put_char('\n'); return;
+    }
+
+    /* Rebuild index without this entry */
+    fd_t fd = fs_open(PKG_INDEX, O_RDONLY, 0);
+    char old_idx[2048]; ssize_t on = 0;
+    if (fd >= 0) { on = fs_read(fd, old_idx, sizeof(old_idx)-1); fs_close(fd); }
+    if (on > 0) old_idx[on] = '\0'; else old_idx[0] = '\0';
+
+    fd_t wfd = fs_open(PKG_INDEX, O_WRONLY|O_CREAT, 0644);
+    if (wfd >= 0) {
+        char *p = old_idx;
+        while (*p) {
+            char *nl = p;
+            while (*nl && *nl != '\n') nl++;
+            size_t ll = (size_t)(nl - p);
+            /* Write line only if it doesn't match the removed name */
+            if (ll != strlen(arg) || strncmp(p, arg, ll) != 0) {
+                fs_write(wfd, p, ll);
+                fs_write(wfd, "\n", 1);
+            }
+            if (*nl == '\n') nl++;
+            p = nl;
+        }
+        fs_close(wfd);
+    }
+
+    io_put_string("trpm: removed "); io_put_string(arg); io_put_char('\n');
+}
+
+static void cmd_trpm(const char *arg) {
+    if (!arg || !arg[0]) {
+        io_put_string("usage: trpm <list|install|remove> [args]\n"); return;
+    }
+    char abuf[256]; strncpy(abuf, arg, sizeof(abuf)-1); abuf[sizeof(abuf)-1]='\0';
+    char *rest = split_first(abuf);
+
+    if (strcmp(abuf, "list")    == 0) { cmd_trpm_list();           return; }
+    if (strcmp(abuf, "install") == 0) { cmd_trpm_install(rest);    return; }
+    if (strcmp(abuf, "remove")  == 0) { cmd_trpm_remove(rest);     return; }
+
+    io_put_string("trpm: unknown subcommand '"); io_put_string(abuf);
+    io_put_string("' - use list, install, remove\n");
+}
+
+/* ── dispatch ────────────────────────────────────────────────────────────── */
+
+void sys_shell_dispatch(const char *line) {
+    if (!line) return;
+    while (*line == ' ') line++;
+    if (!*line) return;
+
+    char buf[256]; strncpy(buf, line, sizeof(buf)-1); buf[sizeof(buf)-1]='\0';
+    char *arg = split_first(buf);
+    char *cmd = buf;
+
+    if (strcmp(cmd,"help")     ==0) { cmd_help();                  return; }
+    if (strcmp(cmd,"sysver")   ==0) { cmd_sysver();                return; }
+    if (strcmp(cmd,"uname")    ==0) { io_put_string(KERNEL_NAME " " OS_NAME " " OS_VERSION " " BUILD_ARCH "\n"); return; }
+    if (strcmp(cmd,"cls")      ==0) { cmd_cls();                   return; }
+    if (strcmp(cmd,"pwd")      ==0) { cmd_pwd();                   return; }
+    if (strcmp(cmd,"cd")       ==0) { cmd_cd(arg);                 return; }
+    if (strcmp(cmd,"ls")       ==0) { cmd_ls(arg);                 return; }
+    if (strcmp(cmd,"mkdir")    ==0) { cmd_mkdir(arg);              return; }
+    if (strcmp(cmd,"touch")    ==0) { cmd_touch(arg);              return; }
+    if (strcmp(cmd,"rm")       ==0) { cmd_rm(arg);                 return; }
+    if (strcmp(cmd,"cat")      ==0) { cmd_cat(arg);                return; }
+    if (strcmp(cmd,"write")    ==0) { cmd_write(arg);              return; }
+    if (strcmp(cmd,"echo")     ==0) { cmd_echo(arg);               return; }
+    if (strcmp(cmd,"run")      ==0) { cmd_run(arg);                return; }
+    if (strcmp(cmd,"trpbuild") ==0) { cmd_trpbuild(arg);           return; }
+    if (strcmp(cmd,"trpm")     ==0) { cmd_trpm(arg);               return; }
+    if (strcmp(cmd,"free")     ==0) { cmd_free();                  return; }
+    if (strcmp(cmd,"install")  ==0) {
+        installer_run();
+        g_username_loaded = 0; /* force re-read in case account changed */
+        if (trpfs_is_mounted()) vga_set_statusbar_enabled(1);
+        return;
+    }
+    if (strcmp(cmd,"status")   ==0) { installer_print_status();    return; }
+    if (strcmp(cmd,"halt")     ==0) { cmd_halt();                  return; }
+    if (strcmp(cmd,"reboot")   ==0) { cmd_reboot();                return; }
+
+    io_put_string("unknown command: '"); io_put_string(cmd); io_put_string("'  (type 'help')\n");
+}
