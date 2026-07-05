@@ -35,6 +35,15 @@ static int  history_next  = 0;
 static int  cursor_visible = 1;
 static uint64_t cursor_last_toggle = 0;
 
+/* Real-time status bar clock: previously the bar only refreshed when a
+ * command was dispatched or the prompt redrew, so the displayed time
+ * only advanced once per Enter press. This loop already busy-polls
+ * pit_get_milliseconds() every iteration for the cursor blink, so we
+ * piggyback a second, independent 1-second timer here to keep the
+ * clock ticking live regardless of whether anything is typed. */
+#define STATUSBAR_REFRESH_MS 1000
+static uint64_t statusbar_last_update = 0;
+
 /* ── Serial fallback input (for headless QEMU testing) ──────────────────── */
 static char serial_getc_nb(void) {
     uint8_t lsr;
@@ -49,6 +58,15 @@ static char serial_getc_nb(void) {
 
 static char shell_getc(void) {
     while (1) {
+        /* Refresh the status bar clock on its own cadence, independent of
+         * whatever else this loop is doing — checked every spin, so it
+         * keeps ticking even while the person is actively typing. */
+        uint64_t sb_now = pit_get_milliseconds();
+        if (sb_now - statusbar_last_update >= STATUSBAR_REFRESH_MS) {
+            sys_shell_update_statusbar();
+            statusbar_last_update = sb_now;
+        }
+
         char k = keyboard_getc_nb();
         if (k) {
             cursor_visible = 1;
