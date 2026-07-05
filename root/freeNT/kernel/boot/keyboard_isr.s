@@ -26,14 +26,16 @@ keyboard_isr_stub:
     push %r14
     push %r15
 
-#    Align stack to 16 bytes for System V ABI (required before any call)
-    sub $8, %rsp
+#    Stack alignment check: the CPU already pushed RFLAGS+CS+RIP (24 bytes)
+#    on IRQ entry, and the 15 pushes above add 120 bytes: 24+120=144, which
+#    is already a multiple of 16. The extra "sub $8, %rsp" that used to be
+#    here past-aligned the stack by 8 bytes at the call site, corrupting
+#    the callee's view of the stack — this is the actual cause of the
+#    garbled/repeating scancode data, not anything in keyboard.c's C code.
+#    No adjustment needed; call directly.
 
 #    Call the C handler (keyboard_irq_handler reads scancode + EOI)
     call keyboard_irq_handler
-
-#    Restore stack alignment
-    add $8, %rsp
 
 #    Restore all registers
     pop %r15

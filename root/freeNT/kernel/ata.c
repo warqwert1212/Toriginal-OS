@@ -133,9 +133,16 @@ static int ata_write_sector(uint32_t lba, const void *buf) {
     const uint16_t *p = (const uint16_t *)buf;
     for (int i = 0; i < 256; i++) outw(ATA_DATA, p[i]);
 
+    /* The drive reasserts BSY internally right after the last data word
+     * while it finishes committing the sector — issuing FLUSH CACHE
+     * immediately after the write loop races that busy window and PIIX3
+     * (correctly) rejects it: "guest issued command 0xe7 while controller
+     * busy". Wait for BSY to clear from the write itself before flushing. */
+    if (ata_wait_not_busy() != 0) return -1;
+
     /* Flush cache so the write is durable before we report success. */
     outb(ATA_COMMAND, 0xE7);
-    ata_wait_not_busy();
+    if (ata_wait_not_busy() != 0) return -1;
     return 0;
 }
 
