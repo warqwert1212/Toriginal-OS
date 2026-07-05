@@ -26,13 +26,13 @@ keyboard_isr_stub:
     push %r14
     push %r15
 
-#    Stack alignment check: the CPU already pushed RFLAGS+CS+RIP (24 bytes)
-#    on IRQ entry, and the 15 pushes above add 120 bytes: 24+120=144, which
-#    is already a multiple of 16. The extra "sub $8, %rsp" that used to be
-#    here past-aligned the stack by 8 bytes at the call site, corrupting
-#    the callee's view of the stack — this is the actual cause of the
-#    garbled/repeating scancode data, not anything in keyboard.c's C code.
-#    No adjustment needed; call directly.
+#    Stack alignment: the CPU already pushed RIP+CS+RFLAGS (24 bytes) on
+#    IRQ entry (no privilege change, since IRQs fire while already in ring
+#    0), and the 15 pushes above add 120 bytes: 24+120=144, a multiple of
+#    16. RSP is already correctly aligned for the call below — do NOT
+#    "sub $8, %rsp" here, that knocks it 8 bytes OFF alignment instead of
+#    fixing it. (This build passes -mno-sse/-mno-sse2, so misalignment
+#    won't fault on movaps, but it's still wrong and worth keeping fixed.)
 
 #    Call the C handler (keyboard_irq_handler reads scancode + EOI)
     call keyboard_irq_handler
