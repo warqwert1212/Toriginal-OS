@@ -1,9 +1,16 @@
 /* =============================================================================
  * keyboard.c — PS/2 keyboard driver (set 1 scancodes)
  *
- * Rewritten from scratch. Owns: 8042 controller setup, the IRQ1 handler
- * (scancode -> ASCII / special-key translation), a ring buffer of decoded
- * keys, and modifier-key state (shift/ctrl/alt/caps/num).
+ * Owns: 8042 controller setup, the IRQ1 handler (scancode -> ASCII / special-
+ * key translation), a ring buffer of decoded keys, and modifier-key state
+ * (shift/ctrl/alt/caps/num).
+ *
+ * FIX (this revision): keyboard_init() now (1) reads/modifies/writes the
+ * 8042 controller configuration byte to set the IRQ1-enable bit, and
+ * (2) unmasks IRQ1 on the master PIC. Without both of these the keyboard
+ * scans and ACKs commands fine but never actually raises IRQ1 — total
+ * silence, no input. This was the root cause of the "no input registering
+ * at all" bug under VirtualBox.
  * ============================================================================= */
 
 #include <stdint.h>
@@ -17,9 +24,15 @@
 #define I8042_STATUS_OUT_FULL 0x01
 #define I8042_STATUS_IN_FULL  0x02
 
-/* Master PIC command port / EOI code */
-#define PIC1_CMD 0x20
-#define PIC_EOI  0x20
+/* 8042 controller-level commands (sent to I8042_CMD, not the keyboard) */
+#define I8042_CMD_READ_CFG   0x20  /* read controller configuration byte  */
+#define I8042_CMD_WRITE_CFG  0x60  /* write controller configuration byte */
+#define I8042_CFG_IRQ1_EN    0x01  /* config byte bit 0: port-1 IRQ enable */
+
+/* Master PIC command/data ports, EOI code, and IRQ1's mask bit */
+#define PIC1_CMD  0x20
+#define PIC1_DATA 0x21
+#define PIC_EOI   0x20
 
 /* ── ring buffer of decoded keys (ASCII or KEY_* special codes) ────────── */
 #define KEYBOARD_BUFFER_SIZE 256
@@ -94,6 +107,16 @@ static void keyboard_command(uint8_t cmd)
 {
     kbc_send_data(cmd);
     kbc_recv_data();
+}
+
+/* Unmask IRQ1 on the master PIC (clear bit 1 of the interrupt mask
+ * register at 0x21). If a PIC remap routine masked everything at boot,
+ * this is required or the CPU never sees the interrupt at all. */
+static void pic1_unmask_irq1(void)
+{
+    uint8_t mask = inb(PIC1_DATA);
+    mask &= (uint8_t)~(1 << 1);
+    outb(PIC1_DATA, mask);
 }
 
 /* ── scancode set 1 -> ASCII tables (US QWERTY) ─────────────────────────── */
@@ -277,16 +300,30 @@ void keyboard_init(void)
     mod_shift = mod_ctrl = mod_alt = mod_caps = mod_num = 0;
     pending_e0 = 0;
 
-    /* Reset the controller interface, then force scancode set 1 so the
-     * decode tables above stay valid regardless of what the firmware or
-     * a previous OS left the keyboard set to. */
+    /* Reset the controller interface. */
     kbc_send_cmd(0xAD); /* disable keyboard interface   */
     kbc_send_cmd(0xAE); /* enable keyboard interface    */
 
+    /* Read the controller configuration byte, force the IRQ1-enable bit
+     * on, write it back. Do this BEFORE talking scancode-set commands to
+     * the keyboard itself — some virtual 8042 implementations don't like
+     * controller-level and keyboard-level commands interleaved. */
+    kbc_send_cmd(I8042_CMD_READ_CFG);
+    uint8_t cfg = kbc_recv_data();
+    cfg |= I8042_CFG_IRQ1_EN;
+    kbc_send_cmd(I8042_CMD_WRITE_CFG);
+    kbc_send_data(cfg);
+
+    /* Force scancode set 1 so the decode tables above stay valid
+     * regardless of what firmware or a previous OS left the keyboard on. */
     keyboard_command(0xF5);         /* disable scanning              */
     kbc_send_data(0xF0);            /* "set scancode set" ...         */
     kbc_recv_data();
     kbc_send_data(0x01);            /* ... = set 1                    */
     kbc_recv_data();
     keyboard_command(0xF4);         /* re-enable scanning             */
+
+    /* Unmask IRQ1 on the PIC last, once the controller/keyboard are
+     * fully configured, so we don't eat a spurious interrupt mid-init. */
+    pic1_unmask_irq1();
 }

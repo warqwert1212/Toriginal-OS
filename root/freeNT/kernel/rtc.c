@@ -23,14 +23,27 @@ static uint8_t bcd_to_bin(uint8_t v) {
     return (uint8_t)((v & 0x0F) + ((v / 16) * 10));
 }
 
+static int cmos_wait_not_updating(void) {
+    /* Bounded — a real RTC never holds this flag for more than ~244us,
+     * so any reasonable timeout is generous. Returns -1 on timeout so
+     * the caller can fall back gracefully instead of hanging forever. */
+    for (uint32_t i = 0; i < 100000u; i++) {
+        if (!cmos_update_in_progress()) return 0;
+    }
+    return -1;
+}
+
 void rtc_read(rtc_time_t *out) {
     /* Wait for any in-progress update to finish, then read twice to
-     * confirm we didn't catch a tick mid-update (standard CMOS dance). */
+     * confirm we didn't catch a tick mid-update (standard CMOS dance).
+     * Every wait/retry loop below is bounded — no path here can spin
+     * forever regardless of CMOS timing quirks under virtualization. */
     uint8_t sec, min, hour, day, month, year;
     uint8_t sec2, min2, hour2, day2, month2, year2;
 
+    int attempts = 0;
     do {
-        while (cmos_update_in_progress()) { }
+        cmos_wait_not_updating();
         sec   = cmos_read(0x00);
         min   = cmos_read(0x02);
         hour  = cmos_read(0x04);
@@ -38,15 +51,16 @@ void rtc_read(rtc_time_t *out) {
         month = cmos_read(0x08);
         year  = cmos_read(0x09);
 
-        while (cmos_update_in_progress()) { }
+        cmos_wait_not_updating();
         sec2   = cmos_read(0x00);
         min2   = cmos_read(0x02);
         hour2  = cmos_read(0x04);
         day2   = cmos_read(0x07);
         month2 = cmos_read(0x08);
         year2  = cmos_read(0x09);
-    } while (sec != sec2 || min != min2 || hour != hour2 ||
-             day != day2 || month != month2 || year != year2);
+    } while ((sec != sec2 || min != min2 || hour != hour2 ||
+              day != day2 || month != month2 || year != year2) &&
+             ++attempts < 10);
 
     uint8_t regB = cmos_read(0x0B);
     int is_bcd    = !(regB & 0x04);
