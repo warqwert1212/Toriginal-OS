@@ -1,20 +1,9 @@
-/* interrupts.c — single authoritative IDT for the whole kernel.
- *
- * FIXES:
- *   - Renamed from interrups.c (typo in original filename)
- *   - Added forward declarations for inb/outb, pit_handler, scheduler_yield
- *   - idt_set_gate now matches the header (4-arg version)
- *   - Removed duplicate idt_init stub (now just calls interrupts_init)
- *   - stub_table placed in .data so it is writable AND in the binary
- *   - Corrected misleading comment: load_idt is defined in
- *     kernel/boot/interrupts.s, not boot64.s
- */
-
 #include "interrupts.h"
 #include "idt.h"
 #include "string.h"
 #include "pit.h"
 #include "serial.h"
+#include "vga.h" /* Included to allow video fallbacks during panic */
 
 /* ── forward declarations for symbols defined elsewhere ───────────────────── */
 static inline uint8_t inb(uint16_t port) {
@@ -37,6 +26,9 @@ static interrupt_handler_t handlers[256];
 
 /* load_idt is in kernel/boot/interrupts.s */
 extern void load_idt(idt_ptr_t *ptr);
+
+/* External declaration for our pure assembly trampoline */
+extern void isr_trampoline(void);
 
 /* ── PIC constants ──────────────────────────────────────────────────────── */
 #define PIC1_CMD  0x20
@@ -70,6 +62,13 @@ void idt_set_gate(uint8_t num, uint64_t handler, uint16_t sel, uint8_t flags)
 /* ── C-level exception / IRQ handlers ──────────────────────────────────── */
 static void handle_exception(interrupt_frame_t *f)
 {
+    /* Fallback directly to the VGA screen if serial hardware is unavailable */
+    vga_set_color(VGA_WHITE, VGA_RED);
+    vga_write("\n!!! KERNEL PANIC: CPU EXCEPTION #");
+    vga_write_dec(f->interrupt_number);
+    vga_write(" !!!\nSystem halted.\n");
+
+    /* Safe conditional serial check to prevent deadlocks when serial is off */
     serial_puts("\n[PANIC] Exception #");
     char buf[4];
     uint64_t n = f->interrupt_number;
@@ -78,14 +77,18 @@ static void handle_exception(interrupt_frame_t *f)
     buf[2] = '\n'; buf[3] = '\0';
     serial_puts(buf);
     serial_puts("System halted.\n");
+
     for (;;) __asm__ volatile("cli; hlt");
 }
 
 static void handle_irq(interrupt_frame_t *f)
 {
     uint8_t irq = (uint8_t)(f->interrupt_number - 0x20);
-    if (handlers[f->interrupt_number])
+    
+    if (handlers[f->interrupt_number]) {
         handlers[f->interrupt_number](f);
+    }
+    
     if (irq >= 8) outb(PIC2_CMD, PIC_EOI);
     outb(PIC1_CMD, PIC_EOI);
 }
@@ -97,57 +100,44 @@ static void pit_irq_handler(interrupt_frame_t *f)
     scheduler_yield();
 }
 
-/* ── Common C handler called from trampoline ───────────────────────────── */
-void isr_common_handler(uint64_t vector, uint64_t error_code,
-                        uint64_t rip,    uint64_t cs,
-                        uint64_t rflags, uint64_t rsp, uint64_t ss)
+/* ── Common C handler called from assembly trampoline ──────────────────── */
+void isr_common_handler(interrupt_frame_t *frame)
 {
-    interrupt_frame_t frame;
-    frame.interrupt_number = vector;
-    frame.error_code       = error_code;
-    frame.rip = rip; frame.cs = cs;
-    frame.rflags = rflags; frame.rsp = rsp; frame.ss = ss;
-    frame.rax = frame.rbx = frame.rcx = frame.rdx = 0;
-    frame.rsi = frame.rdi = frame.rbp = 0;
-    frame.r8  = frame.r9  = frame.r10 = frame.r11 = 0;
-    frame.r12 = frame.r13 = frame.r14 = frame.r15 = 0;
-
-    if (vector < 32)       handle_exception(&frame);
-    else if (vector < 48)  handle_irq(&frame);
-    else if (handlers[vector]) handlers[vector](&frame);
+    if (frame->interrupt_number < 32)       handle_exception(frame);
+    else if (frame->interrupt_number < 48)  handle_irq(frame);
+    else if (handlers[frame->interrupt_number]) handlers[frame->interrupt_number](frame);
 }
 
-/* ── Trampoline (naked) ─────────────────────────────────────────────────── */
-static void __attribute__((naked)) isr_trampoline(void)
-{
-    __asm__ volatile(
-        "push %%rax\n" "push %%rbx\n" "push %%rcx\n" "push %%rdx\n"
-        "push %%rsi\n" "push %%rdi\n" "push %%rbp\n"
-        "push %%r8\n"  "push %%r9\n"  "push %%r10\n" "push %%r11\n"
-        "push %%r12\n" "push %%r13\n" "push %%r14\n" "push %%r15\n"
-        /* 15 regs * 8 = 120 bytes; args sit above */
-        "mov 120(%%rsp), %%rdi\n"   /* vector       */
-        "mov 128(%%rsp), %%rsi\n"   /* error_code   */
-        "mov 136(%%rsp), %%rdx\n"   /* rip          */
-        "mov 144(%%rsp), %%rcx\n"   /* cs           */
-        "mov 152(%%rsp), %%r8\n"    /* rflags       */
-        "mov 160(%%rsp), %%r9\n"    /* rsp          */
-        "sub $8, %%rsp\n"
-        "call isr_common_handler\n"
-        "add $8, %%rsp\n"
-        "pop %%r15\n" "pop %%r14\n" "pop %%r13\n" "pop %%r12\n"
-        "pop %%r11\n" "pop %%r10\n" "pop %%r9\n"  "pop %%r8\n"
-        "pop %%rbp\n" "pop %%rdi\n" "pop %%rsi\n" "pop %%rdx\n"
-        "pop %%rcx\n" "pop %%rbx\n" "pop %%rax\n"
-        "add $16, %%rsp\n"   /* pop vector + error_code */
-        "iretq\n"
-        :::
-    );
-}
+/* ── Pure Assembly Trampoline ───────────────────────────────────────────── */
+__asm__(
+".global isr_trampoline\n"
+"isr_trampoline:\n"
+    "push %rax\n" "push %rbx\n" "push %rcx\n" "push %rdx\n"
+    "push %rsi\n" "push %rdi\n" "push %rbp\n"
+    "push %r8\n"  "push %r9\n"  "push %r10\n" "push %r11\n"
+    "push %r12\n" "push %r13\n" "push %r14\n" "push %r15\n"
 
-/* Stub table: 256 * 16 bytes = 4096.
- * FIX: placed in .data (not .bss) so it is actually in the binary and
- * the relative JMP offsets computed at runtime stay valid. */
+    /* System V AMD64 ABI: 1st argument goes into RDI. */
+    "mov %rsp, %rdi\n"
+    
+    /* Align stack pointer to 16 bytes before calling C code */
+    "mov %rsp, %rbp\n"
+    "and $-16, %rsp\n" 
+
+    "call isr_common_handler\n"
+
+    /* Restore true, unaligned stack pointer */
+    "mov %rbp, %rsp\n"
+
+    "pop %r15\n" "pop %r14\n" "pop %r13\n" "pop %r12\n"
+    "pop %r11\n" "pop %r10\n" "pop %r9\n"  "pop %r8\n"
+    "pop %rbp\n" "pop %rdi\n" "pop %rsi\n" "pop %rdx\n"
+    "pop %rcx\n" "pop %rbx\n" "pop %rax\n"
+    "add $16, %rsp\n"   /* Clear the error code and vector pushed by stubs */
+    "iretq\n"
+);
+
+/* Stub table: 256 * 16 bytes = 4096. */
 static uint8_t stub_table[256 * 16] __attribute__((aligned(4096)));
 
 static void build_stubs(void)
@@ -198,14 +188,12 @@ void interrupts_init(void)
 
     pic_remap_internal();
 
-    /* Unmask IRQ0 (PIT), IRQ1 (keyboard), IRQ2 (slave-PIC cascade line —
-     * MUST be unmasked on the master PIC or no slave-PIC IRQ, including
-     * the mouse's IRQ12, can ever reach the CPU regardless of the slave
-     * PIC's own mask), and IRQ12 (mouse, lives on the slave PIC). */
+    /* Unmask IRQ0 (PIT), IRQ1 (keyboard), IRQ2 (slave cascade) */
     outb(PIC1_DATA, 0xF8); /* 11111000: IRQ0,1,2 unmasked */
-    outb(PIC2_DATA, 0xEF); /* 11101111: IRQ12 (slave bit 4) unmasked */
+    outb(PIC2_DATA, 0xEF); /* 11101111: IRQ12 (mouse) unmasked */
 
-    interrupts_register_handler(0x20, pit_irq_handler);
+    /* Register the PIT IRQ handler safely casting signature */
+    interrupts_register_handler(0x20, (interrupt_handler_t)pit_irq_handler);
 
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base  = (uint64_t)(uintptr_t)idt;

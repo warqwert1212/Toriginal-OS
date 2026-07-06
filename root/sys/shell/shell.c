@@ -310,20 +310,6 @@ static void fd_puts(fd_t fd, const char *s) {
 /* ── commands ────────────────────────────────────────────────────────────── */
 
 static void cmd_help(void) {
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    io_put_string("\n");
-    
     io_put_string("copy <src> <dst> - copy a regular file           | write <path> <text> - write text into a file\n");
     io_put_string("echo <text> - print text                         | cat <path> - print a file to screen\n");
     io_put_string("run <path.trp> - execute a TRP package           | rm <path> - delete a file\n");

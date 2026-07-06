@@ -234,6 +234,12 @@ void vga_putc(char c)
         vga_scroll();
     }
 
+    /*
+     * COMPILER ORDERING FENCE:
+     * Prevents the compiler from aggressively caching or reordering index parameters 
+     * when interacting with outb instructions. Crucial for high-speed naked loops.
+     */
+    __asm__ volatile("" ::: "memory");
     vga_update_cursor();
 }
 

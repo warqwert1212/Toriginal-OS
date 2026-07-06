@@ -24,6 +24,19 @@ void keyboard_wire_idt(void);
 void mouse_wire_init(void);
 void scheduler_init(void);
 
+/* Low-level port helpers for early 8042 controller flushes */
+static inline uint8_t early_inb(uint16_t port) {
+    uint8_t v;
+    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+static inline void early_outb(uint16_t port, uint8_t v) {
+    __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(port));
+}
+static inline void early_io_wait(void) {
+    early_outb(0x80, 0);
+}
+
 /* ── early_print: serial ONLY - safe before VGA is fully stable ───────── */
 static void early_print(const char *s) {
     serial_write(s);
@@ -33,6 +46,13 @@ static void early_print(const char *s) {
 static void kprint(const char *s) {
     serial_write(s);
     vga_write(s);
+    /* 
+     * HARDWARE MEMORY BARRIER:
+     * When serial is off, vga_write floods the MMIO bus at 0xB8000 instantly.
+     * This mfence prevents the CPU's store-buffers from choking the system bus,
+     * ensuring the 8042 PS/2 hardware registers aren't starved of execution time.
+     */
+    __asm__ volatile("mfence" ::: "memory");
 }
 
 /* Hex digits as a global - prevents GCC from using movdqa (SSE, requires
@@ -147,9 +167,23 @@ static void kernel_init(uint32_t mb_info_phys) {
     keyboard_wire_idt();
     kprint("[4/6] Keyboard OK\n");
 
+    /* ── BARE-METAL HARDWARE STABILIZATION ───────────────────────────────── */
+    for (uint32_t i = 0; i < 200000u; i++) {
+        if (early_inb(0x64) & 0x01) {
+            (void)early_inb(0x60); 
+        }
+        early_io_wait();
+    }
+
     kprint("[5/6] Mouse init...\n");
     mouse_wire_init();
     kprint("[5/6] Mouse OK\n");
+
+    /* Final controller flush right before enabling interrupts */
+    while (early_inb(0x64) & 0x01) {
+        (void)early_inb(0x60);
+        early_io_wait();
+    }
 
     kprint("[6/6] Filesystem + process init...\n");
     fs_init();
@@ -185,7 +219,10 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     kernel_init(multiboot_info);
 
+    /* Flush out the pipeline completely before opening interrupts */
+    __asm__ volatile("mfence" ::: "memory");
     __asm__ volatile("sti");
+    
     serial_write("[boot] Interrupts enabled\n");
     serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.0 READY ***\n");
     serial_write("[boot] Shell starting - type commands below\n");

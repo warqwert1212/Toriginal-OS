@@ -1,17 +1,7 @@
 #include "mouse.h"
 #include "string.h"
+#include <stdint.h>
 
-/* ── Port I/O ──────────────────────────────────────────────────────────────
- * FIX: this used to be wrapped in "#ifdef __GLIBC__", which meant inb/outb
- * were only defined when building under glibc (a hosted dev/test
- * environment) — but __GLIBC__ is never defined in the actual freestanding
- * cross-compile (-ffreestanding -nostdlib -nostdinc) that builds the real
- * kernel, so inb()/outb() were UNDEFINED in the build that matters, while
- * a hosted test build got fake stubs that always return 0xFF and do
- * nothing. That's backwards. Every other kernel driver (interrupts.c,
- * keyboard.c, pit.c, serial.c) defines real inb/outb unconditionally —
- * mouse.c now does the same, since this file is only ever compiled as
- * part of the freestanding kernel build. */
 static inline uint8_t inb(uint16_t port) {
     uint8_t value;
     __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
@@ -22,25 +12,14 @@ static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
+/* Force a tiny hardware delay on the motherboard bus to protect raw CPU speeds */
+static inline void io_wait(void) {
+    outb(0x80, 0);
+}
+
 /* ==============================================================================
  * MOUSE.C — PS/2 Mouse Driver Implementation
- *
- * Hardware protocol (PS/2, 3-byte packets):
- *   Byte 0: [Y-overflow | X-overflow | Y-sign | X-sign | Always 1 | Middle | Right | Left]
- *   Byte 1: X delta magnitude (0-255)
- *   Byte 2: Y delta magnitude (0-255)
- *
- * The sign bits in Byte 0 extend the magnitude bytes to signed 9-bit values.
- * PS/2 Y increases upward; screen Y increases downward, so we negate dy.
- *
- * Controller setup:
- *   - 8042 controller is at ports 0x60 (data) and 0x64 (status/cmd)
- *   - Port 0x64 bit 0: output buffer full (data ready)
- *   - Port 0x64 bit 1: input buffer full (controller busy)
- *   - Mouse packets arrive on IRQ12 (PIC vector 0x2C after remap).
  * ============================================================================== */
-
-#include <stdint.h>
 
 /* ─ 8042 I/O ports ─────────────────────────────────────────────────────── */
 #define I8042_DATA   0x60
@@ -70,19 +49,20 @@ static mouse_driver_t g_mouse = {0};
 /* ─ Utility: wait for controller status ─────────────────────────────────── */
 
 static void wait_input_empty(void) {
-    /* Spin until input buffer is empty (controller ready for command) */
-    int timeout = 100000;
-    while ((inb(I8042_STATUS) & STATUS_IN_FULL) && timeout--) {
-        /* busy-wait */
+    /* Spin until input buffer is empty, using volatile deep checking to prevent optimization */
+    for (volatile uint32_t i = 0; i < 500000u; i++) {
+        if (!(inb(I8042_STATUS) & STATUS_IN_FULL)) return;
+        io_wait();
     }
 }
 
-static void wait_output_full(void) {
-    /* Spin until output buffer is full (data ready to read) */
-    int timeout = 100000;
-    while (!(inb(I8042_STATUS) & STATUS_OUT_FULL) && timeout--) {
-        /* busy-wait */
+static int wait_output_full(void) {
+    /* Spin until output buffer is full. Returns -1 if hardware times out. */
+    for (volatile uint32_t i = 0; i < 500000u; i++) {
+        if (inb(I8042_STATUS) & STATUS_OUT_FULL) return 0;
+        io_wait();
     }
+    return -1;
 }
 
 /* ─ 8042 communication: send commands to mouse through the controller ───── */
@@ -97,8 +77,10 @@ static void send_to_mouse(uint8_t cmd) {
 }
 
 static uint8_t recv_from_mouse(void) {
-    /* Read the mouse's response (if any). Usually 0xFA = ACK. */
-    wait_output_full();
+    /* Read the mouse's response safely. Usually 0xFA = ACK. */
+    if (wait_output_full() < 0) {
+        return 0; /* Fallback baseline to prevent hard locking the boot loop */
+    }
     return inb(I8042_DATA);
 }
 
@@ -106,18 +88,38 @@ static uint8_t recv_from_mouse(void) {
 
 void mouse_init(void) {
     memset(&g_mouse, 0, sizeof(g_mouse));
-    g_mouse.screen_w = 320;     /* safe defaults; caller should call */
-    g_mouse.screen_h = 200;     /* mouse_set_bounds() with real values */
+    g_mouse.screen_w = 320;     /* safe defaults */
+    g_mouse.screen_h = 200;     
     
-    /* Enable the mouse port on the 8042 controller */
+    /* 1. Enable the auxiliary mouse port on the 8042 controller */
     wait_input_empty();
     outb(I8042_CMD, 0xA8);     /* "Enable auxiliary port (mouse)" */
+    io_wait();
     
-    /* Send the mouse the "enable data reporting" command */
+    /* 2. Configure the 8042 Controller Byte to route IRQ12 interrupts properly */
+    wait_input_empty();
+    outb(I8042_CMD, 0x20);     /* Command 0x20: Read Controller Configuration Byte */
+    uint8_t status = recv_from_mouse();
+    
+    status |= 0x02;            /* Bit 1: Enable IRQ12 (Mouse Interrupt) */
+    status &= (uint8_t)~0x20;  /* Bit 5: Disable Mouse Clock Inhibit (turn line on) */
+    
+    wait_input_empty();
+    outb(I8042_CMD, 0x60);     /* Command 0x60: Write Controller Configuration Byte */
+    wait_input_empty();
+    outb(I8042_DATA, status);  /* Push the updated configuration byte */
+    io_wait();
+    
+    /* 3. Send the mouse the "enable data reporting" command */
     send_to_mouse(0xF4);        /* 0xF4 = Enable Data Reporting */
     recv_from_mouse();          /* Wait for ACK (0xFA) */
+    io_wait();
     
-    /* The mouse is now streaming 3-byte packets on IRQ12 */
+    /* Flush out remaining byte artifacts so they do not jam the line */
+    while (inb(I8042_STATUS) & STATUS_OUT_FULL) {
+        (void)inb(I8042_DATA);
+        io_wait();
+    }
 }
 
 /* ─ Bounds ─────────────────────────────────────────────────────────────── */
@@ -189,9 +191,6 @@ void mouse_irq_handler(void) {
     /* ── Accumulate deltas for polling code ────────────────────────────── */
     g_mouse.dx += dx;
     g_mouse.dy += dy;
-    
-    /* Overflow check (bits 6, 7 in b0) — would be here if we cared,
-     * but typically we just trust the deltas. */
 }
 
 /* ─ Polled state query ──────────────────────────────────────────────────── */
