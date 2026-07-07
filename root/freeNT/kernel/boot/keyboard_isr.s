@@ -1,7 +1,15 @@
-/* ==============================================================================
+/* =============================================================================
  * KEYBOARD_ISR.S - IRQ1 Interrupt Service Routine Stub
- * Saves full CPU state, calls C handler, restores, sends EOI, returns
- * AT&T syntax to match your existing boot64.S style
+ *
+ * Rewritten from scratch. Saves all general-purpose registers, calls the
+ * C handler with a correctly 16-byte-aligned stack at the call site,
+ * restores everything, and returns via iretq.
+ *
+ * Alignment math: on entry to this stub, the CPU has already pushed
+ * RFLAGS, CS, RIP (24 bytes) for a same-privilege interrupt with no error
+ * code. The 15 pushes below add 15*8 = 120 bytes. 24 + 120 = 144, which
+ * is already a multiple of 16 — so RSP is correctly aligned for `call`
+ * with no extra adjustment needed.
  * ============================================================================== */
 
 .section .text
@@ -9,7 +17,6 @@
 .extern keyboard_irq_handler
 
 keyboard_isr_stub:
-    /* Save all general purpose registers */
     push %rax
     push %rbx
     push %rcx
@@ -26,23 +33,8 @@ keyboard_isr_stub:
     push %r14
     push %r15
 
-    /* 
-     * FIXED ALIGNMENT MECHANISM:
-     * Instead of relying on vulnerable static math assumptions, we save the 
-     * current stack frame pointer into RBP and forcefully realign RSP to a 
-     * strict 16-byte boundary. This prevents System V ABI compliance crashes 
-     * across all optimization levels (-O0 to -O3).
-     */
-    mov %rsp, %rbp
-    and $-16, %rsp 
-
-    /* Call the C handler safely */
     call keyboard_irq_handler
 
-    /* Restore the true unaligned stack layout */
-    mov %rbp, %rsp
-
-    /* Restore all registers */
     pop %r15
     pop %r14
     pop %r13

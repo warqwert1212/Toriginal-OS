@@ -1,4 +1,4 @@
- /* =========================================================================
+/* =========================================================================
  * kernel64.ld  —  freeNT / Toriginal OS linker script
  * Target : x86-64 bare-metal, loaded by GRUB multiboot2
  *
@@ -18,8 +18,9 @@
  *   6. /DISCARD/ is expanded to include DWARF debug sections in release
  *      builds, keeping the ISO image small.  To retain debug info, comment
  *      out the .debug_* lines.
- *   7. ASSERT() at the end verifies the image does not overflow the 64 MiB
- *      window that the identity-mapped huge pages cover.
+ *   7. ASSERT() at the end verifies the image does not overflow the 16 MiB
+ *      window that the identity-mapped huge pages cover before the heap
+ *      begins.
  * ========================================================================= */
 
 OUTPUT_FORMAT("elf64-x86-64")
@@ -164,8 +165,8 @@ SECTIONS
 /* ── Sanity checks ───────────────────────────────────────────────────────── *
  * The identity-mapped region boot64.s sets up covers 0x0 – 0x40000000
  * (1 GiB with 512 × 2 MiB huge pages).  The kernel image must fit inside
- * 64 MiB to leave room for the heap window at 16 MiB – 80 MiB.            */
+ * 16 MiB to leave room for the heap window at 16 MiB – 80 MiB.            */
 ASSERT(__kernel_end <= 0x1000000,
-    "ERROR: kernel image exceeds 14 MiB — it would overlap the heap window")
+    "ERROR: kernel image exceeds 16 MiB — it would overlap the heap window")
 ASSERT(__kernel_end > 0x200000,
     "ERROR: kernel image appears empty")

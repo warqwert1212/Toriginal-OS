@@ -17,50 +17,23 @@
 #include "shell.h"
 #include "installer.h"
 
-/* Forward declarations */
 void interrupts_init(void);
 void syscall_init(void);
 void keyboard_wire_idt(void);
 void mouse_wire_init(void);
 void scheduler_init(void);
 
-/* Low-level port helpers for early 8042 controller flushes */
-static inline uint8_t early_inb(uint16_t port) {
-    uint8_t v;
-    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-static inline void early_outb(uint16_t port, uint8_t v) {
-    __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(port));
-}
-static inline void early_io_wait(void) {
-    early_outb(0x80, 0);
-}
-
-/* ── early_print: serial ONLY - safe before VGA is fully stable ───────── */
 static void early_print(const char *s) {
     serial_write(s);
 }
 
-/* ── kprint: VGA + serial ─────────────────────────────────────────────── */
 static void kprint(const char *s) {
     serial_write(s);
     vga_write(s);
-    /* 
-     * HARDWARE MEMORY BARRIER:
-     * When serial is off, vga_write floods the MMIO bus at 0xB8000 instantly.
-     * This mfence prevents the CPU's store-buffers from choking the system bus,
-     * ensuring the 8042 PS/2 hardware registers aren't starved of execution time.
-     */
-    __asm__ volatile("mfence" ::: "memory");
 }
 
-/* Hex digits as a global - prevents GCC from using movdqa (SSE, requires
- * 16-byte stack alignment) to copy it onto the stack, which would fault
- * before the IDT is loaded if the stack happens to be misaligned. */
 static const char g_hex_digits[] = "0123456789ABCDEF";
 
-/* Serial-only hex printer - no VGA, no heap, no SSE, safe at any point. */
 static void early_print_hex(uint64_t v) {
     char buf[19];
     buf[0] = '0'; buf[1] = 'x';
@@ -70,10 +43,9 @@ static void early_print_hex(uint64_t v) {
     serial_write(buf);
 }
 
-/* ── Multiboot2 memory map - safe, guarded, no serial_write_hex ───────── */
 #define MB2_TAG_END   0u
 #define MB2_TAG_MMAP  6u
-#define MB2_MAX_ITER  64u   /* hard cap on tag walk iterations             */
+#define MB2_MAX_ITER  64u
 
 typedef struct { uint32_t type; uint32_t size; }
     __attribute__((packed)) mb2_tag_t;
@@ -136,7 +108,6 @@ static void parse_multiboot(uint32_t mb_info_phys) {
     }
 }
 
-/* ── kernel_init ──────────────────────────────────────────────────────── */
 static volatile int kernel_initialized = 0;
 
 static void kernel_init(uint32_t mb_info_phys) {
@@ -144,7 +115,7 @@ static void kernel_init(uint32_t mb_info_phys) {
 
     kprint("\n");
     kprint("  ================================================\n");
-    kprint("       Toriginal OS  -  freeNT v1.0\n");
+    kprint("       Toriginal OS  -  freeNT v1.1\n");
     kprint("       Made by warqwert\n");
     kprint("  ================================================\n\n");
 
@@ -167,23 +138,9 @@ static void kernel_init(uint32_t mb_info_phys) {
     keyboard_wire_idt();
     kprint("[4/6] Keyboard OK\n");
 
-    /* ── BARE-METAL HARDWARE STABILIZATION ───────────────────────────────── */
-    for (uint32_t i = 0; i < 200000u; i++) {
-        if (early_inb(0x64) & 0x01) {
-            (void)early_inb(0x60); 
-        }
-        early_io_wait();
-    }
-
     kprint("[5/6] Mouse init...\n");
     mouse_wire_init();
     kprint("[5/6] Mouse OK\n");
-
-    /* Final controller flush right before enabling interrupts */
-    while (early_inb(0x64) & 0x01) {
-        (void)early_inb(0x60);
-        early_io_wait();
-    }
 
     kprint("[6/6] Filesystem + process init...\n");
     fs_init();
@@ -202,7 +159,6 @@ static void kernel_init(uint32_t mb_info_phys) {
     kernel_initialized = 1;
 }
 
-/* ── kernel_main - called from boot64.s ──────────────────────────────── */
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     serial_init();
     vga_init();
@@ -219,12 +175,10 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     kernel_init(multiboot_info);
 
-    /* Flush out the pipeline completely before opening interrupts */
-    __asm__ volatile("mfence" ::: "memory");
     __asm__ volatile("sti");
-    
+
     serial_write("[boot] Interrupts enabled\n");
-    serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.0 READY ***\n");
+    serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.1 READY ***\n");
     serial_write("[boot] Shell starting - type commands below\n");
     serial_write("os~$ ");
 
@@ -233,7 +187,6 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     for (;;) __asm__ volatile("hlt");
 }
 
-/* ── kernel_panic ─────────────────────────────────────────────────────── */
 void kernel_panic(const char *reason) {
     __asm__ volatile("cli");
     vga_set_color(VGA_WHITE, VGA_RED);

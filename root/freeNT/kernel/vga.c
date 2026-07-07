@@ -1,12 +1,5 @@
 /* =============================================================================
  * vga.c — VGA text-mode (0xB8000) driver
- *
- * Owns: the 80x25 character buffer, the blinking hardware cursor (CRTC
- * registers on 0x3D4/0x3D5), colour state, and the optional single-row
- * status bar pinned to the top of the screen.
- *
- * Rewritten from scratch for clarity and to make the row/column/scroll
- * bookkeeping impossible to get out of sync with the hardware cursor.
  * ============================================================================= */
 
 #include "vga.h"
@@ -14,23 +7,16 @@
 #define VGA_WIDTH   80
 #define VGA_HEIGHT  25
 
-/* CRTC (cursor) I/O ports */
 #define VGA_CRTC_INDEX 0x3D4
 #define VGA_CRTC_DATA  0x3D5
 
 static volatile uint16_t* const VGA_MEMORY = (uint16_t*)0xB8000;
 
-/* Logical cursor position within the text buffer. Always kept in the
- * range [top_row(), VGA_HEIGHT) x [0, VGA_WIDTH) — every function that
- * touches these clamps them before returning, so nothing downstream
- * ever has to defend against an out-of-range value. */
 static uint16_t terminal_row    = 0;
 static uint16_t terminal_column = 0;
 
 static uint8_t terminal_color = (uint8_t)((VGA_BLACK << 4) | VGA_WHITE);
 
-/* When enabled, row 0 is reserved for the status bar and the scrollable
- * text region is rows [1, VGA_HEIGHT). */
 static int g_statusbar_enabled = 0;
 
 static inline uint16_t top_row(void)
@@ -43,8 +29,6 @@ static inline uint16_t vga_entry(char c)
     return ((uint16_t)terminal_color << 8) | (uint8_t)c;
 }
 
-/* ── low-level port I/O ─────────────────────────────────────────────────── */
-
 static inline void vga_outb(uint16_t port, uint8_t val)
 {
     __asm__ volatile("outb %0, %1" :: "a"(val), "Nd"(port));
@@ -56,8 +40,6 @@ static inline uint8_t vga_inb(uint16_t port)
     __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
     return v;
 }
-
-/* ── hardware cursor ────────────────────────────────────────────────────── */
 
 void vga_set_cursor(uint16_t row, uint16_t col)
 {
@@ -92,8 +74,6 @@ void vga_update_cursor(void)
     vga_set_cursor(terminal_row, terminal_column);
 }
 
-/* ── status bar ─────────────────────────────────────────────────────────── */
-
 void vga_set_statusbar_enabled(int enabled)
 {
     g_statusbar_enabled = enabled ? 1 : 0;
@@ -121,11 +101,8 @@ void vga_draw_statusbar(const char *text)
         VGA_MEMORY[i] = vga_entry(' ');
 
     terminal_color = (uint8_t)saved_color;
-    /* Status bar redraw never moves the real cursor. */
     vga_update_cursor();
 }
-
-/* ── scrolling ───────────────────────────────────────────────────────────── */
 
 static void vga_scroll(void)
 {
@@ -144,14 +121,12 @@ static void vga_scroll(void)
     terminal_row = VGA_HEIGHT - 1;
 }
 
-/* ── init / clear / color ───────────────────────────────────────────────── */
-
 void vga_init(void)
 {
     terminal_row = 0;
     terminal_column = 0;
     vga_clear();
-    vga_enable_cursor(14, 15); /* thin underline cursor */
+    vga_enable_cursor(14, 15);
     vga_update_cursor();
 }
 
@@ -173,12 +148,8 @@ void vga_set_color(vga_color_t fg, vga_color_t bg)
     terminal_color = (uint8_t)(((uint8_t)bg << 4) | (uint8_t)fg);
 }
 
-/* ── character output ───────────────────────────────────────────────────── */
-
 void vga_putc(char c)
 {
-    /* Never let the cursor drift above the scrollable region (can happen
-     * right after the status bar is toggled on). */
     if (terminal_row < top_row())
     {
         terminal_row = top_row();
@@ -211,7 +182,6 @@ void vga_putc(char c)
         }
         else
         {
-            /* Already at the top-left of the text region — nothing to do. */
             vga_update_cursor();
             return;
         }
@@ -234,12 +204,6 @@ void vga_putc(char c)
         vga_scroll();
     }
 
-    /*
-     * COMPILER ORDERING FENCE:
-     * Prevents the compiler from aggressively caching or reordering index parameters 
-     * when interacting with outb instructions. Crucial for high-speed naked loops.
-     */
-    __asm__ volatile("" ::: "memory");
     vga_update_cursor();
 }
 
@@ -249,8 +213,6 @@ void vga_write(const char* str)
     while (*str)
         vga_putc(*str++);
 }
-
-/* ── numeric printing helpers ───────────────────────────────────────────── */
 
 static const char vga_hex_digits[] = "0123456789ABCDEF";
 
