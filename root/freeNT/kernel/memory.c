@@ -14,7 +14,7 @@
 #define PAGE_WRITE    0x002u
 #define PAGE_USER     0x004u
 
-/* ── On-disk / in-memory page-table entry type ───────────────────────────── */
+/* ── On-disk / in-memory page-table entry type ─────────---─────────────────── */
 
 typedef struct { uint64_t entry; } pte_t;
 

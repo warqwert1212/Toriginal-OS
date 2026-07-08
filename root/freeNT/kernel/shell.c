@@ -1,17 +1,5 @@
-/* =============================================================================
- * kernel/shell.c — Raw input loop with real line editing.
- *
- * Supports: visual backspace/delete, left/right arrow cursor movement
- * within the current line, up/down arrow command history, home/end.
- * Commands are dispatched to sys/shell/shell.c via sys_shell_dispatch().
- *
- * IMPORTANT: this file never uses '\r' to reposition the cursor. Not every
- * output backend treats '\r' as "return to column 0" (VGA didn't, until it
- * was patched — but relying on that is fragile). Instead we track exactly
- * how many characters have been printed since the prompt (`screen_pos`)
- * and reposition purely with '\b' (backspace), which every backend already
- * has to support correctly for normal backspacing to work.
- * ============================================================================= */
+
+ /* kernel/shell.c*/
 
 #include "io.h"
 #include "string.h"
