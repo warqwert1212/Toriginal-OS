@@ -232,12 +232,28 @@ halt64:
  *   Code descriptor  : L=1, D=0, G=1, P=1, S=1, Type=0xA (exec/read)
  *                      → 0x00AF9A000000FFFF
  *   Data descriptor  : G=1, P=1, S=1, Type=0x2 (read/write)
- *                      → 0x00CF92000000FFFF  */
+ *                      → 0x00CF92000000FFFF
+ *
+ * FIX 6 – Added the ring-3 entries SYSCALL/SYSRET's STAR MSR arithmetic
+ * requires. syscall_init() (kernel/syscall.c) programs:
+ *   STAR[47:32] = 0x0008  →  SYSCALL entry:  CS=0x08, SS=0x10 (indices 1,2 — already existed)
+ *   STAR[63:48] = 0x001B  →  SYSRET  return:  CS=0x1B+16=0x2B, SS=0x1B+8=0x23
+ * 0x2B and 0x23 are indices 5 and 4 — this table only had 3 entries
+ * (indices 0-2), so the very first `sysretq` would fault trying to load
+ * a segment descriptor past the end of the GDT. Index 3 is an
+ * intentional unused placeholder — SYSRET's arithmetic anchors off it
+ * but never actually loads it; it exists purely so 4 and 5 land where
+ * the STAR value above expects. Index 4 = ring-3 data, index 5 = ring-3
+ * 64-bit code (same encoding as kernel code/data, DPL bits changed from
+ * 00 to 11: access byte 0x92→0xF2, 0x9A→0xFA). */
 .align 16
 gdt64:
-    .quad 0x0000000000000000    /* 0x00 – null          */
-    .quad 0x00AF9A000000FFFF    /* 0x08 – 64-bit code   */
-    .quad 0x00CF92000000FFFF    /* 0x10 – 64-bit data   */
+    .quad 0x0000000000000000    /* 0x00 – null              */
+    .quad 0x00AF9A000000FFFF    /* 0x08 – kernel 64-bit code */
+    .quad 0x00CF92000000FFFF    /* 0x10 – kernel 64-bit data */
+    .quad 0x0000000000000000    /* 0x18 – unused (SYSRET arithmetic placeholder, never loaded) */
+    .quad 0x00CFF2000000FFFF    /* 0x20 – ring-3 data (DPL=3) */
+    .quad 0x00AFFA000000FFFF    /* 0x28 – ring-3 64-bit code (DPL=3) */
 gdt64_end:
 
 gdt64_pointer:

@@ -18,17 +18,9 @@
 #define KERNEL_NAME "freeNT"
 #define BUILD_ARCH  "x86-64"
 
-/* TRP package header magic */
-#define TRP_MAGIC 0x4B505254u
-
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t manifest_offset;
-    uint32_t manifest_len;
-    uint32_t payload_offset;
-    uint32_t payload_len;
-} __attribute__((packed)) trp_hdr_t;
+/* TRP_MAGIC and the on-disk header struct (trp_file_header_t) now come
+ * from trploader.h — this used to be a second, independent copy here,
+ * which is exactly the kind of drift that breaks package loading. */
 
 /* Package index lives at /pkgs/index.txt - one entry per line: name */
 #define PKG_DIR   "/pkgs"
@@ -640,7 +632,7 @@ static void cmd_trpbuild(const char *arg) {
     }
 
     /* Write TRP header + manifest + payload */
-    trp_hdr_t hdr;
+    trp_file_header_t hdr;
     hdr.magic           = TRP_MAGIC;
     hdr.version         = 1;
     hdr.manifest_offset = (uint32_t)sizeof(hdr);
@@ -727,13 +719,13 @@ static void cmd_trpm_install(const char *arg) {
     if (fs_stat(path, &st) != 0) {
         io_put_string("trpm: not found: "); io_put_string(path); io_put_char('\n'); return;
     }
-    if (st.size < sizeof(trp_hdr_t)) {
+    if (st.size < sizeof(trp_file_header_t)) {
         io_put_string("trpm: file too small to be a TRP package\n"); return;
     }
 
     fd_t fd = fs_open(path, O_RDONLY, 0);
     if (fd < 0) { io_put_string("trpm: cannot open package\n"); return; }
-    trp_hdr_t hdr;
+    trp_file_header_t hdr;
     fs_read(fd, &hdr, sizeof(hdr));
     fs_close(fd);
 

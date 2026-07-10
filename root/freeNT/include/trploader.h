@@ -9,6 +9,21 @@
 #include "types.h"
 #include "fs.h"
 
+#define TRP_MAGIC 0x4B505254u   /* 'TRPK' */
+
+/* On-disk .trp header — the single source of truth. shell.c's trpbuild
+ * used to keep its own independent copy of this struct; that's the kind
+ * of drift that silently breaks package loading the moment one copy
+ * changes and the other doesn't, so it's included from here now instead. */
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t manifest_offset;
+    uint32_t manifest_len;
+    uint32_t payload_offset;
+    uint32_t payload_len;
+} __attribute__((packed)) trp_file_header_t;
+
 // Load and prepare a .trp file for a given process
 // Sets proc->context.rip on success for binary payloads
 // Returns 0 on success, -1 on failure

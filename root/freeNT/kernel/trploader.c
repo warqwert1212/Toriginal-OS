@@ -16,18 +16,10 @@
  *    the global typedef from trp_manifest.h.
  *  - trp_manifest_run_gate() call uses correct 5-arg signature.
  *  - Normalized to #include "serial.h" instead of ad-hoc externs.
+ *  - TRP_MAGIC / trp_file_header_t now come from trploader.h (single
+ *    shared definition — shell.c's trpbuild uses the same one, so the
+ *    packer and loader can never silently drift apart on layout again).
  */
-
-#define TRP_MAGIC 0x4B505254u   /* 'TRPK' */
-
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t manifest_offset;
-    uint32_t manifest_len;
-    uint32_t payload_offset;
-    uint32_t payload_len;
-} __attribute__((packed)) trp_file_header_t;
 
 typedef struct {
     int  is_executable;
@@ -85,15 +77,23 @@ static void pkg_parse(const char *text, uint32_t len, trp_pkg_manifest_t *m)
     }
 }
 
+/* Must match kernel64.ld's .trp_code_area (pinned address, not
+ * computed) and the trpc host-side compiler's -Ttext flag. All three
+ * have to agree — see the comment in kernel64.ld for why this is a
+ * literal constant rather than "wherever the linker put it". */
+#define TRP_CODE_LOAD_ADDR   ((uintptr_t)0x300000ULL)
+#define TRP_CODE_MAX_SIZE    ((uintptr_t)0x100000ULL) /* 1 MiB */
+
 static int trp_exec_bin(const uint8_t *payload, uint32_t plen, pid_t pid)
 {
     if (!plen) { trp_log("Empty binary payload."); return -1; }
-    uint8_t *mem = (uint8_t *)kmalloc(((plen+4095)/4096)*4096);
-    if (!mem)  { trp_log("OOM for payload.");      return -1; }
+    if (plen > TRP_CODE_MAX_SIZE) { trp_log("Binary payload too large for fixed load area."); return -1; }
+
+    uint8_t *mem = (uint8_t *)(uintptr_t)TRP_CODE_LOAD_ADDR;
     memcpy(mem, payload, plen);
     process_t *proc = process_get_by_pid(pid);
     if (proc) proc->context.rip = (uint64_t)(uintptr_t)mem;
-    trp_log("Binary payload loaded.");
+    trp_log("Binary payload loaded at fixed address.");
     return 0;
 }
 
