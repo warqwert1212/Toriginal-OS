@@ -87,9 +87,28 @@ static uint8_t recv_from_mouse(void) {
 /* ─ Initialization ─────────────────────────────────────────────────────── */
 
 void mouse_init(void) {
+    /* Preserve bounds if something (gterm_init(), via mouse_set_bounds())
+     * already configured them before this runs - kernel_init() brings up
+     * graphics/gterm at step [2/7], well before mouse_wire_init() calls
+     * this at step [6/7], so by the time we get here the real framebuffer
+     * dimensions are usually already known and correct. Blindly memset-ing
+     * the whole struct back to a hardcoded 320x200 "safe default" would
+     * silently overwrite that, trapping the cursor in the top-left corner
+     * of a 1024x768 screen. Only fall back to 320x200 if bounds genuinely
+     * haven't been set yet (both still 0, e.g. at true cold boot before
+     * any gterm_init() has run). */
+    int32_t prev_w = g_mouse.screen_w;
+    int32_t prev_h = g_mouse.screen_h;
+
     memset(&g_mouse, 0, sizeof(g_mouse));
-    g_mouse.screen_w = 320;     /* safe defaults */
-    g_mouse.screen_h = 200;     
+
+    if (prev_w > 0 && prev_h > 0) {
+        g_mouse.screen_w = prev_w;
+        g_mouse.screen_h = prev_h;
+    } else {
+        g_mouse.screen_w = 320;     /* safe defaults */
+        g_mouse.screen_h = 200;
+    }
     
     /* 1. Enable the auxiliary mouse port on the 8042 controller */
     wait_input_empty();

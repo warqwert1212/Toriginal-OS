@@ -385,9 +385,19 @@ void *krealloc(void *ptr, size_t new_size) {
     uint8_t *raw = (uint8_t *)ptr;
     if (raw >= emergency_pool && raw < emergency_pool + sizeof(emergency_pool)) {
         /* Emergency-pool pointer: no header, no in-place growth possible.
-         * Fall back to alloc + copy with a conservative copy length. */
+         * Fall back to alloc + copy. There is no real "old size" to
+         * consult (emergency_alloc() never records one), so the copy
+         * length must be clamped to what's actually still inside the
+         * pool from `raw` onward - copying new_size bytes unclamped
+         * would read past the end of emergency_pool[] whenever
+         * new_size is larger than the bytes actually remaining there,
+         * pulling in whatever memory happens to follow the array. */
         void *np = kmalloc(new_size);
-        if (np) memcpy(np, ptr, new_size);
+        if (np) {
+            size_t remaining = (size_t)((emergency_pool + sizeof(emergency_pool)) - raw);
+            size_t copy_len = new_size < remaining ? new_size : remaining;
+            memcpy(np, ptr, copy_len);
+        }
         return np;
     }
 

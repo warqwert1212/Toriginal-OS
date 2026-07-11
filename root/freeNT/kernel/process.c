@@ -62,6 +62,10 @@ process_t *process_create(const char *name, uint8_t priority) {
     proc->heap_end    = proc->heap_start + 0x10000000ULL;
 
     proc->fd_table  = kmalloc(sizeof(void *) * MAX_FD_PER_PROCESS);
+    if (!proc->fd_table) {
+        kfree(proc);
+        return NULL;
+    }
     proc->fd_count  = 0;
 
     process_table[proc->pid] = proc;

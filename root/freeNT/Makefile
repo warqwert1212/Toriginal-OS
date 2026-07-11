@@ -84,7 +84,7 @@ $(BIN)/kernel.elf: $(OBJS) kernel/boot/kernel64.ld | $(BIN)
 	@x86_64-linux-gnu-readelf -h $@ | grep -E "Class|Machine|Entry"
 
 $(ISO_DIR)/boot/grub/grub.cfg: | $(ISO_DIR)/boot/grub
-	@printf 'set timeout=3\nset default=0\n\nmenuentry "toriginal_OS" {\n\tmultiboot2 /boot/kernel.elf\n\tboot\n}\n' > $@
+	@printf 'set timeout=3\nset default=0\n\ninsmod vbe\ninsmod video_bochs\ninsmod video_cirrus\ninsmod efi_gop\ninsmod all_video\nset gfxpayload=keep\n\nmenuentry "toriginal_OS" {\n\tmultiboot2 /boot/kernel.elf\n\tboot\n}\n' > $@
 
 $(ISO_DIR)/boot/kernel.elf: $(BIN)/kernel.elf | $(ISO_DIR)/boot/grub
 	cp $< $@

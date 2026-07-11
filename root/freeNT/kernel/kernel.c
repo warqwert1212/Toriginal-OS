@@ -246,8 +246,20 @@ static void kernel_init(uint32_t mb_info_phys) {
             kprint("[2/7] Graphical terminal unavailable - staying on VGA text mode\n");
         }
     } else {
-        kprint("[2/7] No usable framebuffer - staying in VGA text mode\n");
+        /* freeNT is a graphics-mode OS now — the multiboot2 header's
+         * framebuffer tag (boot64.s) is non-optional, so a real GRUB
+         * should never reach this branch. Getting here means either a
+         * loader that ignored the mandatory tag or a framebuffer the
+         * sanity checks in graphics_init() refused to trust (e.g. an
+         * indexed/EGA-text mode, or a >4GiB physical address this
+         * memory model can't map yet). There is deliberately no VGA
+         * text-mode UI left to fall back to, so report the failure
+         * over serial (the one channel guaranteed to still work) and
+         * halt rather than silently continuing half-initialized. */
+        kprint("[2/7] FATAL: no usable linear framebuffer from bootloader\n");
         kprint("[2/7] 3D rasterizer unavailable (no framebuffer)\n");
+        serial_write("[GFX] FATAL: framebuffer required, none usable - halting\n");
+        for (;;) __asm__ volatile("hlt");
     }
 
     kprint("[3/7] IDT init...\n");
