@@ -71,7 +71,7 @@ int plat_init(int32_t width, int32_t height) {
     
     /* Allocate our framebuffer (the compositor writes here) */
     g_plat.pitch = width * 4;  /* ARGB8888 = 4 bytes per pixel */
-    g_plat.framebuffer = (uint32_t *)malloc(width * height * g_plat.pitch);
+    g_plat.framebuffer = (uint32_t *)malloc((size_t)height * g_plat.pitch);
     if (!g_plat.framebuffer) {
         fprintf(stderr, "malloc framebuffer failed\n");
         SDL_DestroyTexture(g_plat.texture);
@@ -159,16 +159,24 @@ int plat_poll_event(event_t *evt) {
                 return 1;
             
             case SDL_MOUSEBUTTONDOWN:
-            case SDL_MOUSEBUTTONUP:
-                if (sdl_evt.button.button == SDL_BUTTON_LEFT) {
+            case SDL_MOUSEBUTTONUP: {
+                int btn;
+                switch (sdl_evt.button.button) {
+                    case SDL_BUTTON_LEFT:   btn = 0; break;
+                    case SDL_BUTTON_RIGHT:  btn = 1; break;
+                    case SDL_BUTTON_MIDDLE: btn = 2; break;
+                    default: btn = -1; break;
+                }
+                if (btn >= 0) {
                     evt->type = (sdl_evt.type == SDL_MOUSEBUTTONDOWN) ?
                                 EVT_MOUSE_DOWN : EVT_MOUSE_UP;
                     evt->x = sdl_evt.button.x;
                     evt->y = sdl_evt.button.y;
-                    evt->button = 0;  /* left button */
+                    evt->button = btn;
                     return 1;
                 }
                 break;
+            }
             
             case SDL_MOUSEWHEEL:
                 evt->type = EVT_MOUSE_WHEEL;
