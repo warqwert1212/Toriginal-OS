@@ -20,6 +20,9 @@
 #include "graphics_3d.h"
 #include "gfx_terminal.h"
 #include "cursor.h"
+#include "net.h"
+#include "tcp.h"
+#include "rtl8139.h"
 
 void interrupts_init(void);
 void syscall_init(void);
@@ -196,9 +199,9 @@ static void kernel_init(uint32_t mb_info_phys) {
     parse_multiboot(mb_info_phys);
     kprint("\n");
 
-    kprint("[1/7] Memory init...\n");
+    kprint("[1/8] Memory init...\n");
     memory_init(mb_info_phys);
-    kprint("[1/7] Memory OK\n");
+    kprint("[1/8] Memory OK\n");
 
     /* graphics_init() moved here deliberately - it used to run before
      * memory_init(), which was harmless *today* only because
@@ -212,14 +215,14 @@ static void kernel_init(uint32_t mb_info_phys) {
      * both graphics inits below memory_init() removes it entirely
      * rather than relying on callers to remember the ordering
      * constraint. */
-    kprint("[2/7] Graphics init...\n");
+    kprint("[2/8] Graphics init...\n");
     if (graphics_init() == 0) {
         /* vga_write_dec prints straight to the VGA text-mode buffer,
          * which is fine here since graphics_init() succeeding doesn't
          * retire vga_write() as a serial/debug channel — only the
          * later terminal stage repoints user-visible output at the
          * framebuffer. */
-        kprint("[2/7] Framebuffer graphics online (");
+        kprint("[2/8] Framebuffer graphics online (");
         vga_write_dec(g_framebuffer.width);
         vga_write("x");
         vga_write_dec(g_framebuffer.height);
@@ -229,9 +232,9 @@ static void kernel_init(uint32_t mb_info_phys) {
         serial_write("[GFX] Framebuffer graphics online\n");
 
         if (gfx3d_init() == 0) {
-            kprint("[2/7] 3D rasterizer online (depth buffer allocated)\n");
+            kprint("[2/8] 3D rasterizer online (depth buffer allocated)\n");
         } else {
-            kprint("[2/7] 3D rasterizer unavailable (depth buffer alloc failed)\n");
+            kprint("[2/8] 3D rasterizer unavailable (depth buffer alloc failed)\n");
         }
 
         if (gterm_init() == 0) {
@@ -241,9 +244,9 @@ static void kernel_init(uint32_t mb_info_phys) {
              * terminal instead of real VGA text memory - see vga.c's
              * gterm_is_active() checks. Nothing below this line needs
              * to change to "start using" the graphical terminal. */
-            kprint("[2/7] Graphical terminal online (64x24 grid, 16x32 px/cell)\n");
+            kprint("[2/8] Graphical terminal online (64x24 grid, 16x32 px/cell)\n");
         } else {
-            kprint("[2/7] Graphical terminal unavailable - staying on VGA text mode\n");
+            kprint("[2/8] Graphical terminal unavailable - staying on VGA text mode\n");
         }
     } else {
         /* freeNT is a graphics-mode OS now — the multiboot2 header's
@@ -256,32 +259,32 @@ static void kernel_init(uint32_t mb_info_phys) {
          * text-mode UI left to fall back to, so report the failure
          * over serial (the one channel guaranteed to still work) and
          * halt rather than silently continuing half-initialized. */
-        kprint("[2/7] FATAL: no usable linear framebuffer from bootloader\n");
-        kprint("[2/7] 3D rasterizer unavailable (no framebuffer)\n");
+        kprint("[2/8] FATAL: no usable linear framebuffer from bootloader\n");
+        kprint("[2/8] 3D rasterizer unavailable (no framebuffer)\n");
         serial_write("[GFX] FATAL: framebuffer required, none usable - halting\n");
         for (;;) __asm__ volatile("hlt");
     }
 
-    kprint("[3/7] IDT init...\n");
+    kprint("[3/8] IDT init...\n");
     idt_init();
-    kprint("[3/7] IDT OK\n");
+    kprint("[3/8] IDT OK\n");
 
-    kprint("[4/7] PIT init (100 Hz)...\n");
+    kprint("[4/8] PIT init (100 Hz)...\n");
     pit_init(100);
-    kprint("[4/7] PIT OK\n");
+    kprint("[4/8] PIT OK\n");
 
-    kprint("[5/7] Keyboard init...\n");
+    kprint("[5/8] Keyboard init...\n");
     keyboard_wire_idt();
-    kprint("[5/7] Keyboard OK\n");
+    kprint("[5/8] Keyboard OK\n");
 
-    kprint("[6/7] Mouse init...\n");
+    kprint("[6/8] Mouse init...\n");
     mouse_wire_init();
-    kprint("[6/7] Mouse OK\n");
+    kprint("[6/8] Mouse OK\n");
 
-    kprint("[7/7] Filesystem + process init...\n");
+    kprint("[7/8] Filesystem + process init...\n");
     fs_init();
     if (installer_try_automount() == 0) {
-        kprint("[7/7] Persistent filesystem mounted (data restored from disk)\n");
+        kprint("[7/8] Persistent filesystem mounted (data restored from disk)\n");
         vga_set_statusbar_enabled(1);
 
         /* Cursor PNG assets live on the persistent disk (see
@@ -291,18 +294,26 @@ static void kernel_init(uint32_t mb_info_phys) {
          * falls back to a small procedural pointer shape rather than
          * being unable to render a cursor at all - see cursor.c. */
         if (cursor_assets_init() == 0) {
-            kprint("[7/7] Cursor assets loaded from /sys/gui/assets/\n");
+            kprint("[7/8] Cursor assets loaded from /sys/gui/assets/\n");
         } else {
-            kprint("[7/7] Cursor assets not found - using fallback cursor shape\n");
+            kprint("[7/8] Cursor assets not found - using fallback cursor shape\n");
         }
     } else {
-        kprint("[7/7] No persistent disk found - run 'install' to set one up\n");
-        kprint("[7/7] Cursor assets unavailable until a disk is installed - using fallback cursor shape\n");
+        kprint("[7/8] No persistent disk found - run 'install' to set one up\n");
+        kprint("[7/8] Cursor assets unavailable until a disk is installed - using fallback cursor shape\n");
     }
     process_init();
     scheduler_init();
     syscall_init();
-    kprint("[7/7] Subsystems OK\n");
+    kprint("[7/8] Subsystems OK\n");
+
+    kprint("[8/8] Network init...\n");
+    net_init();
+    tcp_init();
+    if (!rtl8139_probe_and_init())
+        kprint("[8/8] No supported NIC found — networking unavailable\n");
+    else
+        kprint("[8/8] Network OK (run 'ifconfig' to configure, then 'ping'/'trpm install')\n");
 
     kprint("\n[BOOT] freeNT ready. Type 'help' for commands.\n\n");
     kernel_initialized = 1;

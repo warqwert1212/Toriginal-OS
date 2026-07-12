@@ -134,17 +134,23 @@ SECTIONS
     /* ── .trp_code_area — fixed load address for .trp binary payloads ──
      * trploader.c's trp_exec_bin() always copies a package's compiled
      * binary payload here and jumps to this exact address, every time.
-     * Pinned to a literal, permanent address (0x300000 = 3 MiB) rather
-     * than "wherever .bss happens to end", because that would shift
-     * every time the kernel is rebuilt with different code — silently
-     * invalidating every .trp binary compiled against the old address.
-     * The ASSERT below turns "kernel grew into this reserved area" into
-     * a loud build failure instead of a silent, hard-to-debug corruption.
-     * 1 MiB reserved; this must match TRP_CODE_MAX_SIZE in trploader.c,
-     * and the trpc host-side compiler links .trp source binaries with
-     * -Ttext=0x300000 so compiled addresses and the runtime load address
-     * always agree. */
-    . = 0x300000;
+     * Pinned to a literal, permanent address rather than "wherever .bss
+     * happens to end", because that would shift every time the kernel
+     * is rebuilt with different code — silently invalidating every
+     * .trp binary compiled against the old address.
+     *
+     * Moved from 0x300000 to 0x500000 (5 MiB) after the GUI/graphics
+     * work pushed __bss_end past the old boundary — the ASSERT below
+     * caught it at build time exactly as intended, rather than
+     * silently corrupting memory at runtime. Generous headroom this
+     * time (kernel would need to grow past 5 MiB before hitting this
+     * again) since graphics/GUI code is exactly the kind of thing that
+     * keeps growing. The ASSERT stays in place as a tripwire regardless.
+     *
+     * This must match TRP_CODE_MAX_SIZE in trploader.c, and the trpc
+     * host-side compiler's -Ttext=0x500000 so compiled addresses and
+     * the runtime load address always agree. */
+    . = 0x500000;
     .trp_code_area ALIGN(4K) (NOLOAD) :
     {
         __trp_code_area_start = .;
@@ -188,8 +194,8 @@ SECTIONS
  * The identity-mapped region boot64.s sets up covers 0x0 – 0x40000000
  * (1 GiB with 512 × 2 MiB huge pages).  The kernel image must fit inside
  * 16 MiB to leave room for the heap window at 16 MiB – 80 MiB.            */
-ASSERT(__bss_end <= 0x300000,
-    "ERROR: kernel image has grown into the pinned .trp_code_area address (0x300000) — move it up in kernel64.ld and recompile every existing .trp binary payload against the new -Ttext address")
+ASSERT(__bss_end <= 0x500000,
+    "ERROR: kernel image has grown into the pinned .trp_code_area address (0x500000) — move it up in kernel64.ld, update TRP_CODE_LOAD_ADDR in trploader.c, update trpc's -Ttext, and recompile every existing .trp binary payload against the new address")
 ASSERT(__kernel_end <= 0x1000000,
     "ERROR: kernel image exceeds 16 MiB — it would overlap the heap window")
 ASSERT(__kernel_end > 0x200000,

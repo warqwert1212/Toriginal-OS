@@ -22,5 +22,6 @@ void interrupts_init(void);
 void interrupts_register_handler(uint32_t num, interrupt_handler_t handler);
 void interrupts_enable(void);
 void interrupts_disable(void);
+void interrupts_unmask_irq(uint8_t irq);
 
 #endif /* INTERRUPTS_H */

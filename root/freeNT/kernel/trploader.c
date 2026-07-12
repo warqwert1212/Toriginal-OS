@@ -80,8 +80,9 @@ static void pkg_parse(const char *text, uint32_t len, trp_pkg_manifest_t *m)
 /* Must match kernel64.ld's .trp_code_area (pinned address, not
  * computed) and the trpc host-side compiler's -Ttext flag. All three
  * have to agree — see the comment in kernel64.ld for why this is a
- * literal constant rather than "wherever the linker put it". */
-#define TRP_CODE_LOAD_ADDR   ((uintptr_t)0x300000ULL)
+ * literal constant rather than "wherever the linker put it", and why
+ * it moved from 0x300000 to 0x500000. */
+#define TRP_CODE_LOAD_ADDR   ((uintptr_t)0x500000ULL)
 #define TRP_CODE_MAX_SIZE    ((uintptr_t)0x100000ULL) /* 1 MiB */
 
 static int trp_exec_bin(const uint8_t *payload, uint32_t plen, pid_t pid)

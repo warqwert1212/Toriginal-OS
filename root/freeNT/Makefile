@@ -10,10 +10,7 @@ OBJ     := obj
 BIN     := bin
 ISO_DIR := isodir
 
-# FIX: was hardcoded "-I/usr/lib/gcc/x86_64-linux-gnu/13/include", which
-# breaks the moment the Codespaces image ships a different GCC major
-# version. Ask gcc itself where its freestanding headers (stdint.h,
-# stddef.h, stdarg.h, etc — NOT full libc) live.
+
 GCC_FREESTANDING_INCLUDE := $(shell $(CC) -print-file-name=include)
 
 CFLAGS  := -ffreestanding -nostdlib -nostdinc -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -O2 -Wall -Wextra -Iinclude -Ikernel -I$(GCC_FREESTANDING_INCLUDE)
@@ -43,27 +40,7 @@ $(OBJ)/%.o: $(SRC)/%.c | $(OBJ)/boot
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# graphics_3d.c is the one file in this kernel that uses float/vec3_t
-# math (matrix transforms, perspective projection for the software
-# rasterizer). Every other file is compiled with -mno-sse -mno-sse2
-# because the x86-64 SysV ABI returns float/struct-of-float values in
-# XMM registers - with SSE disabled, GCC has nowhere to put them and
-# errors out at compile time (verified: this is a hard compile error,
-# not a soft fallback to x87).
-#
-# This explicit rule (Make prefers an explicit rule over the generic
-# %.o pattern above for the same target) overrides CFLAGS for just
-# this one object file, re-enabling -msse2 -mfpmath=sse. This is only
-# safe because process.c's scheduler_yield() now does a real
-# fxsave/fxrstor of each process's SSE/FPU state on every context
-# switch (see process.c and boot64.s's CR4.OSFXSR enablement) - using
-# SSE registers in a kernel that doesn't save/restore FPU state across
-# preemption would silently corrupt whichever process next touched
-# the FPU. If you're reading this because a future file also needs
-# float math, add it as another explicit rule below rather than
-# loosening the global CFLAGS - keeping SSE opt-in per-file makes it
-# obvious, from the Makefile alone, exactly which code paths depend on
-# the FPU-safe context switch being correct.
+
 $(OBJ)/graphics_3d.o: $(SRC)/graphics_3d.c | $(OBJ)/boot
 	mkdir -p $(dir $@)
 	$(CC) $(filter-out -mno-sse -mno-sse2,$(CFLAGS)) -msse -msse2 -mfpmath=sse -c $< -o $@
@@ -97,8 +74,7 @@ iso: toriginal_OS.iso
 run: iso
 	qemu-system-x86_64 -cdrom toriginal_OS.iso -m 256M -serial stdio -no-reboot
 
-# run-headless: useful for CI or Codespaces where there is no display.
-# All shell I/O goes through the serial port (stdin/stdout).
+
 run-headless: iso
 	qemu-system-x86_64 -cdrom toriginal_OS.iso -m 256M -serial stdio -display none -no-reboot
 

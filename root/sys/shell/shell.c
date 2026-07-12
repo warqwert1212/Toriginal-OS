@@ -12,6 +12,11 @@
 #include "memory.h"
 #include "vga.h"
 #include "rtc.h"
+#include "net.h"
+#include "dns.h"
+#include "http.h"
+#include "icmp.h"
+#include "pit.h"
 
 #define OS_NAME    "Toriginal OS"
 #define OS_VERSION "1.0"
@@ -311,6 +316,9 @@ static void cmd_help(void) {
     io_put_string("trpm list - list installed packages              | cd <path> - change directory (use .. to go up)\n");         
     io_put_string("trpm install <pkg.trp> - install a TRP package   | pwd - print current directory\n");
     io_put_string("trpm remove <name> - remove an installed package | cls - clear the screen\n");
+    io_put_string("trpm repo <host[:port]> - set remote package repo (plain HTTP only)\n");
+    io_put_string("ifconfig [ip nm gw [dns]] - show/set network config\n");
+    io_put_string("ping <ip|hostname> - real ICMP echo request\n");
     io_put_string("free - show heap memory stats                    | uname - one-line system info\n");
     io_put_string("setup / oobe - run first-boot setup              | sysver - show OS and kernel version\n");
     io_put_string("install - alias for setup                        | help - show this command list\n");
@@ -653,6 +661,85 @@ static void cmd_trpbuild(const char *arg) {
     io_put_string(")\n");
 }
 
+/* ── networking commands ─────────────────────────────────────────────────
+ * ifconfig                          show current config
+ * ifconfig <ip> <netmask> <gateway> [dns]   set static config (no DHCP)
+ * ping <ip or hostname>             real ICMP echo, waits for the real reply
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static void cmd_ifconfig(const char *arg) {
+    net_device_t *dev = net_get_device();
+    if (!dev) { io_put_string("ifconfig: no network device present\n"); return; }
+
+    if (!arg || !arg[0]) {
+        char macstr[18], ipstr[16], nmstr[16], gwstr[16], dnsstr[16];
+        mac_to_string(dev->mac, macstr);
+        ip_to_string(dev->ip, ipstr);
+        ip_to_string(dev->netmask, nmstr);
+        ip_to_string(dev->gateway_ip, gwstr);
+        ip_to_string(dev->dns_ip, dnsstr);
+        io_put_string(dev->name); io_put_string("  mac "); io_put_string(macstr); io_put_char('\n');
+        io_put_string("  inet "); io_put_string(ipstr);
+        io_put_string("  netmask "); io_put_string(nmstr);
+        io_put_string("  gateway "); io_put_string(gwstr);
+        io_put_string("  dns "); io_put_string(dnsstr); io_put_char('\n');
+        return;
+    }
+
+    char buf[96]; strncpy(buf, arg, sizeof(buf) - 1); buf[sizeof(buf)-1] = '\0';
+    char *rest1 = split_first(buf);
+    char *rest2 = rest1 ? split_first(rest1) : NULL;
+    char *rest3 = rest2 ? split_first(rest2) : NULL; /* optional dns */
+
+    uint32_t ip, nm, gw, dns = 0;
+    if (!rest1 || !rest2 || !ip_parse(buf, &ip) || !ip_parse(rest1, &nm) || !ip_parse(rest2, &gw)) {
+        io_put_string("usage: ifconfig <ip> <netmask> <gateway> [dns]\n");
+        return;
+    }
+    if (rest3 && rest3[0]) { if (!ip_parse(rest3, &dns)) { io_put_string("ifconfig: bad dns address\n"); return; } }
+
+    dev->ip = ip; dev->netmask = nm; dev->gateway_ip = gw;
+    if (rest3 && rest3[0]) dev->dns_ip = dns;
+    io_put_string("ifconfig: updated\n");
+}
+
+static void cmd_ping(const char *arg) {
+    net_device_t *dev = net_get_device();
+    if (!dev) { io_put_string("ping: no network device present\n"); return; }
+    if (!arg || !arg[0]) { io_put_string("usage: ping <ip or hostname>\n"); return; }
+    if (!dev->ip) { io_put_string("ping: no IP configured — run ifconfig first\n"); return; }
+
+    uint32_t target;
+    if (!ip_parse(arg, &target)) {
+        io_put_string("ping: resolving "); io_put_string(arg); io_put_string("...\n");
+        if (!dns_resolve(arg, &target, 3000)) {
+            io_put_string("ping: could not resolve "); io_put_string(arg); io_put_char('\n');
+            return;
+        }
+        char ipstr[16]; ip_to_string(target, ipstr);
+        io_put_string("ping: "); io_put_string(arg); io_put_string(" resolved to "); io_put_string(ipstr); io_put_char('\n');
+    }
+
+    io_put_string("ping: sending echo request...\n");
+    uint16_t id = 1, seq = 1;
+    if (icmp_send_echo_request(target, id, seq) != 0) {
+        io_put_string("ping: send failed (ARP timeout or no route)\n");
+        return;
+    }
+
+    uint32_t waited = 0;
+    while (waited < 3000) {
+        pit_sleep(50); waited += 50;
+        if (icmp_last_reply_matches(target, id, seq)) {
+            io_put_string("ping: reply received (");
+            char numbuf[8]; int n=0; uint32_t v=waited; if(v==0) numbuf[n++]='0'; else { char tmp[8]; int tn=0; while(v){tmp[tn++]=(char)('0'+v%10);v/=10;} while(tn) numbuf[n++]=tmp[--tn]; } numbuf[n]='\0';
+            io_put_string(numbuf); io_put_string("ms)\n");
+            return;
+        }
+    }
+    io_put_string("ping: no reply (timed out)\n");
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
  * trpm - package manager
  *   trpm list
@@ -707,15 +794,148 @@ static void cmd_trpm_list(void) {
     if (!count) io_put_string("  (none)\n");
 }
 
+/* ── trpm remote repo config ─────────────────────────────────────────────
+ * Real limitation, stated up front: the actual GitHub package repo
+ * (github.com/warqwert1212/Toriginal-OS-pakage-repo) is only reachable
+ * over HTTPS. This OS's network stack speaks plain HTTP only — real TLS
+ * in a freestanding kernel is a separate, much larger undertaking than
+ * everything else here. To actually use the real GitHub repo, point
+ * this at something that speaks plain HTTP on the other end — e.g. a
+ * small host-side proxy that fetches the real HTTPS URL and re-serves
+ * it over plain HTTP to this OS's network. `trpm repo <host>` sets
+ * that host (hostname or dotted IP); packages are fetched as
+ * GET http://<host>/<name>.trp
+ */
+#define TRPM_REPO_CONFIG_PATH "/trpm_repo.txt"
+
+static int trpm_get_repo_host(char *out, int outlen) {
+    fd_t fd = fs_open(TRPM_REPO_CONFIG_PATH, O_RDONLY, 0);
+    if (fd < 0) return 0;
+    ssize_t n = fs_read(fd, out, (size_t)(outlen - 1));
+    fs_close(fd);
+    if (n <= 0) return 0;
+    out[n] = '\0';
+    /* strip trailing newline if present */
+    for (ssize_t i = n - 1; i >= 0 && (out[i] == '\n' || out[i] == '\r'); i--) out[i] = '\0';
+    return out[0] != '\0';
+}
+
+static void cmd_trpm_repo(const char *arg) {
+    if (!need_fs("trpm")) return;
+    if (!arg || !arg[0]) {
+        char host[256];
+        if (trpm_get_repo_host(host, sizeof(host))) {
+            io_put_string("current repo host: "); io_put_string(host); io_put_char('\n');
+        } else {
+            io_put_string("no repo host configured. Set one with: trpm repo <host>\n");
+            io_put_string("Note: the real GitHub repo is HTTPS-only; this OS speaks plain\n");
+            io_put_string("HTTP only. Point this at a plain-HTTP proxy in front of it.\n");
+        }
+        return;
+    }
+    fd_t fd = fs_open(TRPM_REPO_CONFIG_PATH, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) { io_put_string("trpm: could not write repo config\n"); return; }
+    fd_puts(fd, arg);
+    fs_close(fd);
+    io_put_string("trpm: repo host set to "); io_put_string(arg); io_put_char('\n');
+}
+
+/* Fetches http://<host>[:<port>]/<pkgname>.trp and writes the body to
+ * dest_path. Returns 1 on success. */
+static int trpm_fetch_remote(const char *host_and_port, const char *pkgname, const char *dest_path) {
+    net_device_t *dev = net_get_device();
+    if (!dev || !dev->ip) {
+        io_put_string("trpm: no network configured — run ifconfig first\n");
+        return 0;
+    }
+
+    /* Split off an optional :port — defaults to 80 (plain HTTP) if
+     * absent. Most proxies can't bind :80 without root, so this
+     * matters in practice, not just in theory. */
+    char host[224];
+    uint16_t port = 80;
+    strncpy(host, host_and_port, sizeof(host) - 1); host[sizeof(host)-1] = '\0';
+    char *colon = strchr(host, ':');
+    if (colon) {
+        *colon = '\0';
+        uint32_t p = 0;
+        for (const char *d = colon + 1; *d; d++) { if (*d < '0' || *d > '9') { p = 0; break; } p = p * 10 + (uint32_t)(*d - '0'); }
+        if (p > 0 && p <= 65535) port = (uint16_t)p;
+    }
+
+    uint32_t ip;
+    io_put_string("trpm: resolving "); io_put_string(host); io_put_string("...\n");
+    if (!dns_resolve(host, &ip, 3000)) {
+        io_put_string("trpm: could not resolve "); io_put_string(host); io_put_char('\n');
+        return 0;
+    }
+
+    char path[160] = "/";
+    strncpy(path + 1, pkgname, sizeof(path) - 6);
+    strncpy(path + strlen(path), ".trp", 4);
+
+    static uint8_t response_buf[512 * 1024];
+    uint8_t *body; uint32_t body_len; int status = 0;
+
+    io_put_string("trpm: fetching http://"); io_put_string(host); io_put_string(path); io_put_string("...\n");
+    if (!http_get(ip, port, host, path, response_buf, sizeof(response_buf), &body, &body_len, &status, 5000)) {
+        io_put_string("trpm: fetch failed (no response)\n");
+        return 0;
+    }
+    if (status != 200) {
+        io_put_string("trpm: server returned HTTP status ");
+        char numbuf[8]; int n = 0, s = status;
+        if (s == 0) numbuf[n++] = '0';
+        else { char tmp[8]; int tn = 0; while (s) { tmp[tn++] = (char)('0' + s % 10); s /= 10; } while (tn) numbuf[n++] = tmp[--tn]; }
+        numbuf[n] = '\0';
+        io_put_string(numbuf); io_put_char('\n');
+        return 0;
+    }
+
+    fd_t dst = fs_open(dest_path, O_WRONLY | O_CREAT, 0644);
+    if (dst < 0) { io_put_string("trpm: could not write downloaded file\n"); return 0; }
+    fs_write(dst, body, body_len);
+    fs_close(dst);
+
+    io_put_string("trpm: downloaded "); io_put_string(pkgname);
+    io_put_string(" ("); 
+    { char numbuf[12]; int n=0; uint32_t v=body_len; if(v==0) numbuf[n++]='0'; else { char tmp[12]; int tn=0; while(v){tmp[tn++]=(char)('0'+v%10);v/=10;} while(tn) numbuf[n++]=tmp[--tn]; } numbuf[n]='\0'; io_put_string(numbuf); }
+    io_put_string(" bytes)\n");
+    return 1;
+}
+
 static void cmd_trpm_install(const char *arg) {
-    if (!arg || !arg[0]) { io_put_string("usage: trpm install <pkg.trp>\n"); return; }
+    if (!arg || !arg[0]) { io_put_string("usage: trpm install <pkg.trp | package-name>\n"); return; }
     if (!need_fs("trpm")) return;
     pkg_ensure_dir();
 
     char path[256]; resolve_and_normalize(arg, path, sizeof(path));
+    char pkgname[128];
+    int is_remote = 0;
+
+    inode_t st;
+    if (fs_stat(path, &st) != 0) {
+        /* Not a local file — treat arg as a remote package name. */
+        char host[256];
+        if (!trpm_get_repo_host(host, sizeof(host))) {
+            io_put_string("trpm: not found locally: "); io_put_string(arg); io_put_char('\n');
+            io_put_string("trpm: no repo host configured for remote install — set one with: trpm repo <host>\n");
+            return;
+        }
+        /* Strip a trailing .trp from the name before requesting it, then
+         * re-add it — keeps `trpm install foo` and `trpm install foo.trp`
+         * both working the same way. This is also the name we'll install
+         * it under — NOT derived from the temp download path below. */
+        strncpy(pkgname, arg, sizeof(pkgname) - 1); pkgname[sizeof(pkgname)-1] = '\0';
+        size_t pl = strlen(pkgname);
+        if (pl > 4 && strcmp(pkgname + pl - 4, ".trp") == 0) pkgname[pl - 4] = '\0';
+
+        strncpy(path, "/_trpm_download.trp", sizeof(path) - 1);
+        if (!trpm_fetch_remote(host, pkgname, path)) return;
+        is_remote = 1;
+    }
 
     /* Verify it's a valid TRP */
-    inode_t st;
     if (fs_stat(path, &st) != 0) {
         io_put_string("trpm: not found: "); io_put_string(path); io_put_char('\n'); return;
     }
@@ -733,12 +953,17 @@ static void cmd_trpm_install(const char *arg) {
         io_put_string("trpm: invalid TRP magic - not a valid package\n"); return;
     }
 
-    /* Derive package name from filename (strip path and .trp) */
-    const char *base = path;
-    for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;
-    char pkgname[128]; strncpy(pkgname, base, sizeof(pkgname)-1); pkgname[sizeof(pkgname)-1]='\0';
-    size_t nl = strlen(pkgname);
-    if (nl > 4 && strcmp(pkgname + nl - 4, ".trp") == 0) pkgname[nl-4] = '\0';
+    /* Derive package name from filename (strip path and .trp) — unless
+     * this was a remote install, in which case pkgname is already the
+     * real requested name (see above; the temp download path is not
+     * a meaningful name to derive anything from). */
+    if (!is_remote) {
+        const char *base = path;
+        for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;
+        strncpy(pkgname, base, sizeof(pkgname)-1); pkgname[sizeof(pkgname)-1]='\0';
+        size_t nl = strlen(pkgname);
+        if (nl > 4 && strcmp(pkgname + nl - 4, ".trp") == 0) pkgname[nl-4] = '\0';
+    }
 
     /* Copy .trp into /pkgs/<name>.trp */
     char dest[256];
@@ -827,9 +1052,10 @@ static void cmd_trpm(const char *arg) {
     if (strcmp(abuf, "list")    == 0) { cmd_trpm_list();           return; }
     if (strcmp(abuf, "install") == 0) { cmd_trpm_install(rest);    return; }
     if (strcmp(abuf, "remove")  == 0) { cmd_trpm_remove(rest);     return; }
+    if (strcmp(abuf, "repo")    == 0) { cmd_trpm_repo(rest);       return; }
 
     io_put_string("trpm: unknown subcommand '"); io_put_string(abuf);
-    io_put_string("' - use list, install, remove\n");
+    io_put_string("' - use list, install, remove, repo\n");
 }
 
 /* ── dispatch ────────────────────────────────────────────────────────────── */
@@ -862,6 +1088,8 @@ void sys_shell_dispatch(const char *line) {
     if (strcmp(cmd,"settings") ==0) { cmd_settings(arg);           return; }
     if (strcmp(cmd,"trpbuild") ==0) { cmd_trpbuild(arg);           return; }
     if (strcmp(cmd,"trpm")     ==0) { cmd_trpm(arg);               return; }
+    if (strcmp(cmd,"ifconfig") ==0) { cmd_ifconfig(arg);           return; }
+    if (strcmp(cmd,"ping")     ==0) { cmd_ping(arg);               return; }
     if (strcmp(cmd,"free")     ==0) { cmd_free();                  return; }
     if (strcmp(cmd,"setup")    ==0 || strcmp(cmd,"oobe") ==0 || strcmp(cmd,"install") ==0) {
         installer_run();

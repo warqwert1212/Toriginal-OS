@@ -40,6 +40,25 @@ static void pic_remap_internal(void)
     outb(PIC1_DATA, m1);   outb(PIC2_DATA, m2);
 }
 
+/* Unmask a single IRQ line — needed for drivers (NIC, etc.) that attach
+ * after boot and don't have their line unmasked by whatever fixed set
+ * interrupts_init() unmasks. */
+void interrupts_unmask_irq(uint8_t irq)
+{
+    if (irq < 8) {
+        uint8_t mask = inb(PIC1_DATA);
+        mask &= (uint8_t)~(1 << irq);
+        outb(PIC1_DATA, mask);
+    } else {
+        uint8_t mask = inb(PIC2_DATA);
+        mask &= (uint8_t)~(1 << (irq - 8));
+        outb(PIC2_DATA, mask);
+        uint8_t m1 = inb(PIC1_DATA);
+        m1 &= (uint8_t)~(1 << 2); /* cascade line must stay unmasked on the master PIC */
+        outb(PIC1_DATA, m1);
+    }
+}
+
 void idt_set_gate(uint8_t num, uint64_t handler, uint16_t sel, uint8_t flags)
 {
     idt[num].offset_low  =  handler        & 0xFFFF;

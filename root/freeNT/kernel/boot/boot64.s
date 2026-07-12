@@ -1,19 +1,9 @@
-/* ── Multiboot2 magic numbers ─────────────────────────────────────────── */
 .set MB2_MAGIC,      0xe85250d6
 .set MB2_ARCH,       0          /* i386 protected-mode */
 .set MB2_LENGTH,     (multiboot_end - multiboot_header)
 .set MB2_CHECKSUM,   -(MB2_MAGIC + MB2_ARCH + MB2_LENGTH)
 
-/* ── Multiboot2 header ────────────────────────────────────────────────── */
-/* FIX: ".section .multiboot" alone has NO section flags, which means the
- * linker does not mark it ALLOC — without ALLOC, the section is excluded
- * from every PT_LOAD segment's virtual-address range entirely (even
- * with an explicit PHDRS assignment), so it gets shoved to an arbitrary
- * file offset far past the first 8 KiB GRUB scans for the multiboot2
- * header, and the image silently fails to boot ("no bootable medium").
- * "a" = allocatable (occupies memory at runtime), "x" = executable
- * (matches the surrounding .text segment so it shares the same PT_LOAD
- * region instead of forcing a second loadable segment). */
+
 .section .multiboot, "ax"
 .align 8
 
@@ -23,18 +13,6 @@ multiboot_header:
     .long  MB2_LENGTH
     .long  MB2_CHECKSUM
 
-    /* ── Framebuffer request tag (type=5) ─────────────────────────────
-     * Asks GRUB to switch to a linear VESA/VBE framebuffer BEFORE
-     * jumping to our entry point, and to hand us a framebuffer info
-     * tag (type=8) in the multiboot info struct so kernel.c can read
-     * the physical address/pitch/depth without touching real-mode
-     * VBE calls ourselves. Requested size is a *hint* — GRUB picks
-     * the closest mode it can actually provide and reports the real
-     * dimensions back in the type=8 tag, so graphics_init() must
-     * trust that tag's values, not these requested ones.
-     * flags=0 (not optional): if GRUB can't provide a framebuffer at
-     * all it should fall back to EGA text (handled defensively in
-     * graphics_init() by checking framebuffer_type). */
     .align 8
     .word  5              /* type = framebuffer request tag */
     .word  0               /* flags = 0 (not optional)        */
@@ -80,18 +58,6 @@ _start:
     call clear_page_tables
     call build_page_tables
 
-    /* Enable PAE (bit 5) + OSFXSR (bit 9) + OSXMMEXCPT (bit 10).
-     *
-     * OSFXSR/OSXMMEXCPT are required before any fxsave/fxrstor
-     * instruction can execute without raising #UD - added here
-     * because scheduler_yield() (process.c) now does a real context
-     * switch that fxsave/fxrstor's each process's FPU/SSE state on
-     * every timer tick. Without these bits set, the very first timer
-     * interrupt after the scheduler starts running processes would
-     * execute fxsave, take #UD (vector 6), and panic() the kernel -
-     * this is exactly the class of "worked in isolation, silently
-     * broke on first real preemption" bug worth preventing at the
-     * source rather than debugging after the fact. */
     movl %cr4, %eax
     orl  $0x620, %eax
     movl %eax, %cr4
@@ -106,17 +72,6 @@ _start:
     orl  $0x100, %eax
     wrmsr
 
-    /* Enable Paging + Protected Mode (existing), and additionally:
-     *   - clear CR0.EM (bit 2): EM=1 would make every FPU/SSE
-     *     instruction raise #UD ("emulate in software" mode) - must
-     *     be 0 for fxsave/fxrstor/SSE to execute on real hardware.
-     *   - set CR0.MP (bit 1): required alongside TS-based lazy FPU
-     *     context switching conventions; without it, WAIT/FWAIT
-     *     instructions won't respect CR0.TS the way the ISA expects.
-     * Net effect vs the original 0x80000001 mask: bit 1 (MP) is
-     * newly set, bit 2 (EM) is explicitly left clear (it already
-     * defaults to 0 out of reset in practice, but we clear it
-     * explicitly via AND rather than relying on that assumption). */
     movl %cr0, %eax
     orl  $0x80000003, %eax   /* PG | PE | MP */
     andl $0xFFFFFFFB, %eax   /* clear EM (bit 2) explicitly */
