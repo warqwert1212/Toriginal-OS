@@ -1,5 +1,4 @@
-
- /* kernel/shell.c*/
+/* kernel/shell.c mother fucker this fucking this is bullshit*/
 
 #include "io.h"
 #include "string.h"
@@ -9,9 +8,9 @@
 #include "installer.h"
 #include "vga.h"
 #include "pit.h"
+#include "gfx_terminal.h"
 
-/* Implemented in sys/shell/shell.c — returns the current working directory
- * so the prompt can reflect it (os~$ at root, os/folder~$ when cd'd in). */
+
 extern const char *sys_shell_get_cwd(void);
 
 #define INPUT_BUF   256
@@ -23,16 +22,11 @@ static int  history_next  = 0;
 static int  cursor_visible = 1;
 static uint64_t cursor_last_toggle = 0;
 
-/* Real-time status bar clock: previously the bar only refreshed when a
- * command was dispatched or the prompt redrew, so the displayed time
- * only advanced once per Enter press. This loop already busy-polls
- * pit_get_milliseconds() every iteration for the cursor blink, so we
- * piggyback a second, independent 1-second timer here to keep the
- * clock ticking live regardless of whether anything is typed. */
+
 #define STATUSBAR_REFRESH_MS 1000
 static uint64_t statusbar_last_update = 0;
 
-/* ── Serial fallback input (for headless QEMU testing) ──────────────────── */
+
 static char serial_getc_nb(void) {
     uint8_t lsr;
     __asm__ volatile("inb %%dx, %0" : "=a"(lsr) : "d"((uint16_t)0x3FD));
@@ -46,9 +40,7 @@ static char serial_getc_nb(void) {
 
 static char shell_getc(void) {
     while (1) {
-        /* Refresh the status bar clock on its own cadence, independent of
-         * whatever else this loop is doing — checked every spin, so it
-         * keeps ticking even while the person is actively typing. */
+
         uint64_t sb_now = pit_get_milliseconds();
         if (sb_now - statusbar_last_update >= STATUSBAR_REFRESH_MS) {
             sys_shell_update_statusbar();
@@ -72,13 +64,15 @@ static char shell_getc(void) {
             cursor_visible = !cursor_visible;
             cursor_last_toggle = now;
         }
+
+
+        gterm_poll_tick();
+
         __asm__ volatile("pause");
     }
 }
 
-/* Build the prompt string from the current working directory:
- *   "/"          -> "os~$ "
- *   "/folder"    -> "os/folder~$ "  */
+
 static void build_prompt(char *out, size_t outlen) {
     const char *cwd = sys_shell_get_cwd();
     if (!cwd || cwd[0] == '\0' || (cwd[0] == '/' && cwd[1] == '\0')) {
@@ -92,10 +86,7 @@ static void build_prompt(char *out, size_t outlen) {
     out[n++] = '~'; out[n++] = '$'; out[n++] = ' '; out[n] = '\0';
 }
 
-/* Redraw the input line in place using only backspace + reprint — no '\r'.
- * `screen_pos` = where the terminal cursor currently is, measured in
- * characters printed since the prompt (from the previous state).
- * Returns the new screen_pos, which is always == cursor after this call. */
+
 static void show_cursor(void) {
     io_put_char('_');
     io_put_char('\b');
@@ -104,7 +95,7 @@ static void show_cursor(void) {
 static int redraw_line(const char *buf, int len, int cursor, int screen_pos) {
     for (int i = 0; i < screen_pos; i++) io_put_char('\b');
     for (int i = 0; i < len; i++) io_put_char(buf[i]);
-    io_put_char(' '); /* wipe any leftover char from a longer previous line */
+    io_put_char(' '); /* this is soooooooooooooooooo anoying. */
     int back = (len + 1) - cursor;
     for (int i = 0; i < back; i++) io_put_char('\b');
     if (cursor_visible) {
@@ -118,7 +109,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
     char buf[INPUT_BUF];
     int  len        = 0;
     int  cursor     = 0;
-    int  screen_pos = 0;  /* cursor's current on-screen offset from prompt */
+    int  screen_pos = 0;  /* this little shit, fucked the wole thing */
     int  hist_browse = -1;
     char prompt[280];
 
@@ -133,7 +124,6 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
     while (1) {
         char c = shell_getc();
 
-        /* ── Enter ──────────────────────────────────────────────────── */
         if (c == '\n' || c == '\r') {
             buf[len] = '\0';
             io_put_char('\n');
@@ -165,7 +155,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Delete key ────────────────────────────────────────────── */
+
         if ((unsigned char)c == KEY_DEL) {
             if (cursor < len) {
                 for (int i = cursor; i < len - 1; i++) buf[i] = buf[i + 1];
@@ -175,7 +165,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Left / Right arrow ───────────────────────────────────── */
+
         if ((unsigned char)c == KEY_LEFT) {
             if (cursor > 0) { cursor--; io_put_char('\b'); screen_pos--; }
             continue;
@@ -185,7 +175,6 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Home / End ────────────────────────────────────────────── */
         if ((unsigned char)c == KEY_HOME) {
             while (cursor > 0) { cursor--; io_put_char('\b'); screen_pos--; }
             continue;
@@ -195,7 +184,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Up / Down — command history ──────────────────────────── */
+
         if ((unsigned char)c == KEY_UP) {
             if (history_count == 0) continue;
             if (hist_browse == -1) hist_browse = history_count - 1;
@@ -225,7 +214,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Ctrl+C ────────────────────────────────────────────────── */
+
         if (c == 0x03) {
             io_put_string("^C\n");
             len = 0; cursor = 0; screen_pos = 0; hist_browse = -1;
@@ -233,7 +222,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Ctrl+L — clear screen ─────────────────────────────────── */
+
         if (c == 0x0C) {
             io_clear_screen();
             io_put_string(prompt);
@@ -243,10 +232,10 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* Ignore other control characters */
+  
         if ((unsigned char)c < 0x20) continue;
 
-        /* ── Printable character — insert at cursor ───────────────── */
+
         if (len < INPUT_BUF - 1) {
             for (int i = len; i > cursor; i--) buf[i] = buf[i - 1];
             buf[cursor] = c;
@@ -254,7 +243,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             hist_browse = -1;
 
             if (cursor == len - 1) {
-                /* Appending at end — just print it, no full redraw needed */
+            
                 io_put_char(c);
                 cursor++;
                 screen_pos++;
@@ -280,11 +269,12 @@ void kernel_os_shell(void) {
         "/_/  \\___/_/      \\_, /_/_/ |_/ \\___/_/__/   \\____/ /____/           \n"
         "                  /____/                                                   \n"
         "\n"
-        "Toriginal OS v1.1 |  freeNT kernel 1.1  |  type 'help' for a list of commands\n"
+        "Toriginal OS v1.2 |  freeNT kernel 1.5  |  type 'help' for a list of commands\n"
         "\n",
         1
     );
-}
+} /*why the fuck is the ascii art so fucked up in the terminal? it looks fine in the source code but when i run it in the shell it looks like shit.
+ i guess the font is not monospaced or something. whatever, fuck it.*/
 
 void kernel_install_mode(void) {
     installer_run();

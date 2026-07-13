@@ -4,19 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* ==============================================================================
- * PLATFORM_SDL.C — SDL2 Backend for Platform Abstraction
- *
- * Implements platform.h using SDL2 for development/testing on Codespaces.
- * Maps to VBE/bare-metal later on the real freeNT kernel.
- * ============================================================================== */
+
 
 typedef struct {
     SDL_Window   *window;
     SDL_Renderer *renderer;
     SDL_Texture  *texture;
     
-    uint32_t     *framebuffer;  /* Our copy of the pixels */
+    uint32_t     *framebuffer;  /* son of a fucking retarded fucking cunt dick fucker no ones reading this any way.*/
     int32_t      width, height;
     int32_t      pitch;
     

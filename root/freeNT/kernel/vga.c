@@ -164,13 +164,6 @@ void vga_set_color(vga_color_t fg, vga_color_t bg)
 {
     terminal_color = (uint8_t)(((uint8_t)bg << 4) | (uint8_t)fg);
 
-    /* Delegate to the graphical terminal when it's active, so
-     * shell.c's existing vga_set_color() calls keep working
-     * unchanged regardless of which backend is actually rendering.
-     * vga_color_t's values already are the same 0-15 palette indices
-     * gterm_set_color() expects (see gfx_terminal.c's vga_palette
-     * table, which was deliberately built to match this enum), so
-     * this is a direct pass-through with no remapping needed. */
     if (gterm_is_active()) {
         gterm_set_color((uint8_t)fg, (uint8_t)bg);
     }
@@ -178,16 +171,7 @@ void vga_set_color(vga_color_t fg, vga_color_t bg)
 
 void vga_putc(char c)
 {
-    /* When the graphical terminal is active, it fully owns character
-     * output - early return here rather than also running the VGA
-     * text-mode path underneath. Running both would mean every
-     * keystroke and shell print did real work twice (harmless
-     * functionally since real VGA memory at 0xB8000 is simply never
-     * looked at once graphics_init() has switched the display to a
-     * linear framebuffer, but it's wasted cycles and, more
-     * importantly, would leave terminal_row/terminal_column silently
-     * drifting out of sync with what's actually on screen - state
-     * that's easy to forget about later and trust by accident). */
+
     if (gterm_is_active()) {
         gterm_putc(c);
         return;

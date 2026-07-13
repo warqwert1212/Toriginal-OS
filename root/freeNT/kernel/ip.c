@@ -79,3 +79,4 @@ void ip_handle_packet(const uint8_t *packet, uint16_t len, const uint8_t src_mac
         tcp_handle_packet(src_ip, payload, plen);
     }
 }
+/* fuck any fucking kernel this one gets on my nerves*/

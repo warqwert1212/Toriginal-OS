@@ -105,7 +105,18 @@ static void pit_irq_handler(interrupt_frame_t *f)
 {
     pit_handler();
     scheduler_yield(f);
-    gterm_tick();
+
+    /* Do NOT call gterm_tick() here. It does real framebuffer drawing
+     * (font glyphs, cursor blending, and a full-grid repaint while
+     * dragging), and every vector here is an interrupt gate - IF stays
+     * cleared for as long as this handler runs, so any drawing done
+     * here blocks IRQ1 (keyboard) for its whole duration, every tick.
+     * That starved the keyboard driver of interrupts once gterm_tick()
+     * started being driven from this ISR. Just flag it; the actual
+     * redraw happens in gterm_poll_tick(), called from normal kernel
+     * context (see shell.c's input-idle loop) where interrupts stay
+     * enabled and IRQ1 can preempt it. */
+    gterm_request_tick();
 }
 
 void isr_common_handler(interrupt_frame_t *frame)

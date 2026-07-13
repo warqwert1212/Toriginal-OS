@@ -40,7 +40,7 @@ static struct {
     uint8_t *recv_buf;
     uint32_t recv_len;
     int remote_fin;
-    int last_ack_seen; /* set by handle_packet when an ACK advances snd_una, polled by tcp_send */
+    int last_ack_seen; 
 } g_conn;
 
 static uint16_t g_next_local_port = 40000;
@@ -78,8 +78,7 @@ static int send_segment(uint8_t flags, uint32_t seq, uint32_t ack, const uint8_t
 
     uint16_t seg_len = (uint16_t)(sizeof(tcp_header_t) + data_len);
 
-    /* TCP checksum covers a pseudo-header + the segment. Compute over a
-     * scratch buffer since ip_checksum() just sums whatever bytes it's given. */
+    /* sudo apt this wa hard, like my dick. */
     uint8_t cbuf[sizeof(tcp_pseudo_header_t) + ETH_MTU];
     tcp_pseudo_header_t *ph = (tcp_pseudo_header_t *)cbuf;
     net_device_t *dev = net_get_device();
@@ -105,7 +104,7 @@ int tcp_connect(uint32_t dst_ip, uint16_t dst_port, uint32_t timeout_ms)
     g_conn.remote_ip = dst_ip;
     g_conn.remote_port = dst_port;
     g_conn.local_port = g_next_local_port++;
-    g_conn.snd_nxt = 0x10000; /* fixed-ish ISN — not cryptographically random, honest limitation */
+    g_conn.snd_nxt = 0x10000; 
     g_conn.snd_una = g_conn.snd_nxt;
     g_conn.rcv_nxt = 0;
     g_conn.recv_len = 0;
@@ -119,7 +118,7 @@ int tcp_connect(uint32_t dst_ip, uint16_t dst_port, uint32_t timeout_ms)
         pit_sleep(50);
         waited += 50;
         if (g_conn.state == TCP_ESTABLISHED) return 1;
-        if (g_conn.state == TCP_CLOSED) return 0; /* RST received */
+        if (g_conn.state == TCP_CLOSED) return 0;
     }
     serial_puts("[TCP] connect timed out\n");
     g_conn.state = TCP_CLOSED;
@@ -176,9 +175,7 @@ void tcp_close(void)
         send_segment(TCP_FIN | TCP_ACK, g_conn.snd_nxt, g_conn.rcv_nxt, NULL, 0);
         g_conn.snd_nxt += 1;
         g_conn.state = TCP_CLOSING;
-        /* Brief, bounded wait for the remote's ACK/FIN — not fully
-         * RFC-correct teardown (no TIME_WAIT), just enough to be a
-         * polite peer without hanging forever. */
+        /* ACK/FIN thingy */
         uint32_t waited = 0;
         while (waited < 1000 && g_conn.state == TCP_CLOSING) { pit_sleep(50); waited += 50; }
     }

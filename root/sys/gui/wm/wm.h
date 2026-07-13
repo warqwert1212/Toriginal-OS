@@ -3,20 +3,7 @@
 
 #include <stdint.h>
 
-/* ==============================================================================
- * WM.H — Window Manager
- *
- * Manages window list, z-order, focus, and drag/resize.
- * The compositor reads from wm_get_window_list() to know what to draw.
- * Input (mouse/keyboard) goes through wm_handle_* functions.
- *
- * Design:
- *   - Fixed array of N windows (default 64)
- *   - Windows stored back-to-front: [0]=bottommost, [count-1]=topmost
- *   - "Raise" a window = move it to the end (topmost)
- *   - Each window owns its own ARGB8888 pixel buffer (client area)
- *   - Window decorations (title bar, borders) drawn by compositor
- * ============================================================================== */
+
 
 /* ─ Window flags ────────────────────────────────────────────────────────── */
 #define WM_WIN_VISIBLE    0x01

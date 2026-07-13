@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #define SCREEN_W 1024
 #define SCREEN_H 768
@@ -18,6 +19,31 @@ static int g_mouse_x = 0, g_mouse_y = 0;
 static int g_left_down = 0;
 
 static desktop_menu_t g_menu;
+
+
+static int path_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+
+static int resolve_asset_path(const char *filename, char *out, size_t out_len) {
+    static const char *search_prefixes[] = {
+        "assets/",            
+        "root/gui/assets/",     
+        "root/sys/gui/assets/", 
+        "../root/gui/assets/",
+        "../root/sys/gui/assets/",
+    };
+
+    for (size_t i = 0; i < sizeof(search_prefixes) / sizeof(search_prefixes[0]); i++) {
+        snprintf(out, out_len, "%s%s", search_prefixes[i], filename);
+        if (path_exists(out)) return 1;
+    }
+
+    snprintf(out, out_len, "assets/%s", filename);
+    return 0;
+}
 static int g_running = 1;
 static int g_term_count = 0;
 
@@ -57,9 +83,7 @@ static void action_change_wallpaper(void *ctx) {
             printf("Wallpaper changed: %s\n", path);
         }
     }
-    /* picker_run drives its own draw/present loop, so the desktop's own
-     * framebuffer contents underneath are stale now -- force a redraw of
-     * whatever's still open (windows, menu) on the very next composite. */
+    /* this took for ever */
     comp_composite();
 }
 
@@ -107,9 +131,7 @@ int main(void) {
     wm_init(SCREEN_W, SCREEN_H);
     comp_init(SCREEN_W, SCREEN_H);
 
-    /* Wallpaper: file-driven only, chosen by the user out of assets/desktop/wallpapers/.
-     * First boot (no saved config) triggers the graphical picker; every boot
-     * after that just re-loads the saved choice. Never hardcoded art. */
+    
     char wallpaper_path[PICKER_PATH_MAX];
     int have_choice = picker_load_saved_choice(wallpaper_path, sizeof(wallpaper_path));
 
@@ -131,15 +153,21 @@ int main(void) {
         printf("No wallpaper selected, using default fill.\n");
     }
 
-    /* Cursor: also file-driven -- the XP-style PNGs already in assets/. */
-    if (image_load("assets/toriginal cursor.png", &g_cursor_normal)) {
+
+    char cursor_path[512];
+    char cursor_click_path[512];
+    int cursor_found = resolve_asset_path("toriginal cursor.png", cursor_path, sizeof(cursor_path));
+    resolve_asset_path("toriginal cursor click.png", cursor_click_path, sizeof(cursor_click_path));
+
+    if (cursor_found && image_load(cursor_path, &g_cursor_normal)) {
         g_cursor_loaded = 1;
-        if (!image_load("assets/toriginal cursor click.png", &g_cursor_click)) {
+        if (!image_load(cursor_click_path, &g_cursor_click)) {
             g_cursor_click.pixels = NULL;
         }
-        printf("Cursor loaded from file.\n");
+        printf("Cursor loaded from %s\n", cursor_path);
     } else {
-        printf("No cursor file found -- mouse will be invisible.\n");
+        printf("No cursor file found -- mouse will be invisible. (looked in gui/assets/, "
+               "gui/build/../assets/, and root/gui/assets/ relative to the current directory)\n");
     }
 
     menu_init(&g_menu);

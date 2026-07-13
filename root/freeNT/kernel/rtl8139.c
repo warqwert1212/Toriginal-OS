@@ -7,10 +7,7 @@
 #include "string.h"
 #include "serial.h"
 
-/* rtl8139.c — real chip-level programming against the Realtek RTL8139
- * register interface. Common first-NIC choice because the register
- * interface is small and well documented — real silicon shipped on
- * many real cards for years, not a VM-only shortcut. */
+/* rtl8139.c look a google serch suggested this name ok. */
 
 #define REG_MAC0     0x00
 #define REG_TSD0     0x10

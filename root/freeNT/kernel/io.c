@@ -10,7 +10,7 @@ void serial_write(const char *str);
 void io_put_string(const char *s) {
     if (!s) return;
     vga_write(s);
-    serial_write(s);   /* keep serial so headless QEMU shows command output */
+    serial_write(s);   /*this little shit prob wont work*/
 }
 
 void io_put_char(char c) {

@@ -324,6 +324,22 @@ static void pixel_to_cell(int32_t px, int32_t py, uint32_t *out_row, uint32_t *o
     *out_col = col;
 }
 
+/* Set by gterm_request_tick() (interrupt-safe), consumed by
+ * gterm_poll_tick() (normal context). volatile because it's written
+ * from the PIT ISR and read from ordinary kernel code. */
+static volatile int g_tick_pending = 0;
+
+void gterm_request_tick(void) {
+    g_tick_pending = 1;
+}
+
+int gterm_poll_tick(void) {
+    if (!g_tick_pending) return 0;
+    g_tick_pending = 0;
+    gterm_tick();
+    return 1;
+}
+
 void gterm_tick(void) {
     if (!g_active) return;
 

@@ -1,5 +1,5 @@
 /* =============================================================================
- * kernel.c - Toriginal OS freeNT v1.0 kernel entry point
+ * kernel.c - Toriginal OS freeNT v1.5 kernel entry point, god kill me this is so fucking stupid, i hate it, i need sleep. >:()
  * ============================================================================= */
 
 #include "kernel.h"

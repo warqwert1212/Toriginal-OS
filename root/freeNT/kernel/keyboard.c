@@ -1,5 +1,5 @@
 /* =============================================================================
- * keyboard.c - PS/2 keyboard driver (scancode set 1, IRQ1)
+ * keyboard.c - PS/2 keyboard driver or the root of all evil
  * ========================================================================= */
 
 #include <stdint.h>
@@ -90,7 +90,7 @@ static const char keycode_map[128] = {
     0,
     ' ',
 };
-
+// this wont work, if it doesn't im probably going to cry, but if it does work, im going to cry anyway.
 static const char keycode_map_shift[128] = {
     0,    27,
     '!','@','#','$','%','^','&','*','(',')','_','+',
@@ -106,7 +106,7 @@ static const char keycode_map_shift[128] = {
     0,
     ' ',
 };
-
+//life is good when you can type on you keyborad, but life is better when you can type on your keyboard without having to worry about it not working.
 #define KC_LSHIFT   0x2A
 #define KC_RSHIFT   0x36
 #define KC_LCTRL    0x1D
@@ -261,7 +261,7 @@ static void keyboard_process_byte(uint8_t scancode)
 
 void keyboard_irq_handler(void)
 {
-    serial_puts("[KBD] IRQ1 fired\n");   /* TEMP DIAGNOSTIC - remove after bug is found */
+    serial_puts("[KBD] IRQ1 fired\n");   /* i need a gf*/
     for (int guard = 0; guard < 16; guard++) {
         uint8_t status = inb(I8042_STATUS);
         if (!(status & I8042_STATUS_OUT_FULL)) break;

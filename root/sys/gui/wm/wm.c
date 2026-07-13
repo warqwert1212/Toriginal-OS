@@ -2,15 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* ==============================================================================
- * WM.C — Window Manager Implementation
- *
- * Z-order: windows[0..count-1] stored back-to-front. Hit testing searches
- * from the end (topmost) downward. Raising a window moves it to the end.
- *
- * Drag/resize: track which part of the window border the user clicked, then
- * respond to mouse move events by either moving the window or resizing it.
- * ============================================================================== */
+/* why the fuck did i do thid */
 
 #define WM_MAX_WINDOWS 64
 
@@ -30,9 +22,9 @@ typedef enum {
 typedef struct {
     drag_type_t type;
     uint32_t    window_id;
-    int32_t     start_x, start_y;     /* mouse position at start of drag */
-    int32_t     start_wx, start_wy;   /* window position at start */
-    int32_t     start_ww, start_wh;   /* window size at start */
+    int32_t     start_x, start_y;     
+    int32_t     start_wx, start_wy;   
+    int32_t     start_ww, start_wh;   
 } drag_state_t;
 
 typedef struct {
