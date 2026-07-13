@@ -261,11 +261,15 @@ static void keyboard_process_byte(uint8_t scancode)
 
 void keyboard_irq_handler(void)
 {
+    serial_puts("[KBD] IRQ1 fired\n");   /* TEMP DIAGNOSTIC - remove after bug is found */
     for (int guard = 0; guard < 16; guard++) {
         uint8_t status = inb(I8042_STATUS);
         if (!(status & I8042_STATUS_OUT_FULL)) break;
         if (status & I8042_STATUS_AUX) break;
         uint8_t scancode = inb(I8042_DATA);
+        serial_puts("[KBD] scancode=0x");     /* TEMP DIAGNOSTIC */
+        serial_write_hex(scancode);           /* TEMP DIAGNOSTIC */
+        serial_puts("\n");                    /* TEMP DIAGNOSTIC */
         keyboard_process_byte(scancode);
     }
     send_eoi();

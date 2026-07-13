@@ -114,14 +114,14 @@ check_long_mode:
     jz   hang
     ret
 
-/* ── FIX 2 – Zero ALL three page-table levels ───────────────────────── */
+/* ── FIX 2 – Zero ALL page-table levels ──────────────────────────────── */
 /*   The original only zeroed pml4_table; pdpt_table and pd_table        */
 /*   remained uninitialised, producing random present-bit patterns and   */
 /*   an immediate triple fault on first TLB miss.                        */
 clear_page_tables:
     movl  $pml4_table, %edi
     xorl  %eax, %eax
-    movl  $(3 * 4096 / 4), %ecx   /* zero pml4 + pdpt + pd = 3 pages */
+    movl  $(6 * 4096 / 4), %ecx   /* zero pml4 + pdpt + 4×pd = 6 pages */
     rep   stosl
     ret
 
@@ -129,27 +129,55 @@ clear_page_tables:
 /*   FIX 3 – Use leal+orl so the full 32-bit (here: < 4 GB) address     */
 /*   is stored correctly; the upper 32 bits of each 64-bit entry remain  */
 /*   zero (physical addresses are < 4 GB at boot).                      */
+/*                                                                       */
+/*   FIX 7 – Identity-map the first 4 GiB, not just 1 GiB.               */
+/*   The old code only built one PD table (512 × 2MiB = 1 GiB) and       */
+/*   only ever wired up PDPT[0]. The VESA/VBE linear framebuffer BAR     */
+/*   (reported by GRUB's multiboot2 framebuffer tag and consumed by      */
+/*   graphics_init() in kernel.c) commonly sits well above 1 GiB — on    */
+/*   this VirtualBox build it's at 0xE0000000 (3.5 GiB). The very first  */
+/*   write to that framebuffer therefore hit an unmapped page. Because   */
+/*   no IDT is loaded yet at this point in boot, the resulting #PF had   */
+/*   nowhere to go, cascaded to #DF, and then triple-faulted immediately */
+/*   (VirtualBox: "Guru Meditation ... VINF_EM_TRIPLE_FAULT", RIP        */
+/*   pointing at the framebuffer store, idtr base/limit = 0).            */
+/*   The guest CPU here doesn't expose 1 GiB pages (CPUID.80000001:EDX   */
+/*   bit26 Page1GB = 0 for the guest), so we map with 2 MiB pages across */
+/*   4 PD tables (4 PDPT entries) instead of using PDPTE.PS huge pages.  */
 build_page_tables:
     /* PML4[0] -> pdpt_table | PRESENT | WRITE */
     leal  pdpt_table, %eax
     orl   $3, %eax
     movl  %eax, pml4_table
 
-    /* PDPT[0] -> pd_table | PRESENT | WRITE */
-    leal  pd_table, %eax
+    /* PDPT[0..3] -> pd_table0..pd_table3 | PRESENT | WRITE
+     * (pd_table0..3 are laid out contiguously in .bss, 4096 bytes apart) */
+    leal  pd_table0, %eax
     orl   $3, %eax
     movl  %eax, pdpt_table
 
-    /* PD[0..511] -> 512 × 2 MiB huge pages covering first 1 GiB */
+    leal  pd_table1, %eax
+    orl   $3, %eax
+    movl  %eax, pdpt_table+8
+
+    leal  pd_table2, %eax
+    orl   $3, %eax
+    movl  %eax, pdpt_table+16
+
+    leal  pd_table3, %eax
+    orl   $3, %eax
+    movl  %eax, pdpt_table+24
+
+    /* pd_table0..3[0..511] -> 2048 × 2 MiB huge pages covering 0..4 GiB */
     xorl  %ecx, %ecx
 build_pd_loop:
     movl  %ecx, %eax
     shll  $21, %eax
     orl   $0x83, %eax       /* PRESENT | WRITE | HUGE */
-    movl  %eax, pd_table(,%ecx,8)
-    movl  $0,   pd_table+4(,%ecx,8)   /* upper 32 bits = 0 */
+    movl  %eax, pd_table0(,%ecx,8)
+    movl  $0,   pd_table0+4(,%ecx,8)   /* upper 32 bits = 0 */
     incl  %ecx
-    cmpl  $512, %ecx
+    cmpl  $2048, %ecx
     jne   build_pd_loop
     ret
 
@@ -226,8 +254,23 @@ pml4_table:
 pdpt_table:
     .skip 4096
 
+/* FIX 7 – four PD tables (2 MiB pages × 512 entries × 4 = 4 GiB total),
+ * laid out contiguously so build_pd_loop can index across all of them
+ * with a single pd_table0-relative offset. */
 .align 4096
-pd_table:
+pd_table0:
+    .skip 4096
+
+.align 4096
+pd_table1:
+    .skip 4096
+
+.align 4096
+pd_table2:
+    .skip 4096
+
+.align 4096
+pd_table3:
     .skip 4096
 
 .align 16
