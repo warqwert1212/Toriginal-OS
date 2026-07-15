@@ -5,6 +5,7 @@
 #include "serial.h"
 #include "vga.h"
 #include "gfx_terminal.h"
+#include "apic.h"
 
 static inline uint8_t inb(uint16_t port) {
     uint8_t v; __asm__ volatile("inb %1,%0":"=a"(v):"Nd"(port)); return v;
@@ -40,9 +41,6 @@ static void pic_remap_internal(void)
     outb(PIC1_DATA, m1);   outb(PIC2_DATA, m2);
 }
 
-/* Unmask a single IRQ line — needed for drivers (NIC, etc.) that attach
- * after boot and don't have their line unmasked by whatever fixed set
- * interrupts_init() unmasks. */
 void interrupts_unmask_irq(uint8_t irq)
 {
     if (irq < 8) {
@@ -54,7 +52,7 @@ void interrupts_unmask_irq(uint8_t irq)
         mask &= (uint8_t)~(1 << (irq - 8));
         outb(PIC2_DATA, mask);
         uint8_t m1 = inb(PIC1_DATA);
-        m1 &= (uint8_t)~(1 << 2); /* cascade line must stay unmasked on the master PIC */
+        m1 &= (uint8_t)~(1 << 2);
         outb(PIC1_DATA, m1);
     }
 }
@@ -97,8 +95,12 @@ static void handle_irq(interrupt_frame_t *f)
         handlers[f->interrupt_number](f);
     }
 
-    if (irq >= 8) outb(PIC2_CMD, PIC_EOI);
-    outb(PIC1_CMD, PIC_EOI);
+    if (apic_available()) {
+        apic_send_eoi();
+    } else {
+        if (irq >= 8) outb(PIC2_CMD, PIC_EOI);
+        outb(PIC1_CMD, PIC_EOI);
+    }
 }
 
 static void pit_irq_handler(interrupt_frame_t *f)
@@ -106,16 +108,6 @@ static void pit_irq_handler(interrupt_frame_t *f)
     pit_handler();
     scheduler_yield(f);
 
-    /* Do NOT call gterm_tick() here. It does real framebuffer drawing
-     * (font glyphs, cursor blending, and a full-grid repaint while
-     * dragging), and every vector here is an interrupt gate - IF stays
-     * cleared for as long as this handler runs, so any drawing done
-     * here blocks IRQ1 (keyboard) for its whole duration, every tick.
-     * That starved the keyboard driver of interrupts once gterm_tick()
-     * started being driven from this ISR. Just flag it; the actual
-     * redraw happens in gterm_poll_tick(), called from normal kernel
-     * context (see shell.c's input-idle loop) where interrupts stay
-     * enabled and IRQ1 can preempt it. */
     gterm_request_tick();
 }
 

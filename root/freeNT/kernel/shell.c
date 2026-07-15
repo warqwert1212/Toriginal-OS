@@ -1,5 +1,3 @@
-/* kernel/shell.c mother fucker this fucking this is bullshit*/
-
 #include "io.h"
 #include "string.h"
 #include "keyboard.h"
@@ -9,7 +7,7 @@
 #include "vga.h"
 #include "pit.h"
 #include "gfx_terminal.h"
-
+#include "usb_hid.h"
 
 extern const char *sys_shell_get_cwd(void);
 
@@ -22,10 +20,8 @@ static int  history_next  = 0;
 static int  cursor_visible = 1;
 static uint64_t cursor_last_toggle = 0;
 
-
 #define STATUSBAR_REFRESH_MS 1000
 static uint64_t statusbar_last_update = 0;
-
 
 static char serial_getc_nb(void) {
     uint8_t lsr;
@@ -33,7 +29,9 @@ static char serial_getc_nb(void) {
     if (lsr & 0x01) {
         uint8_t c;
         __asm__ volatile("inb %%dx, %0" : "=a"(c) : "d"((uint16_t)0x3F8));
-        return (char)c;
+        if (c == '\n' || c == '\r' || c == '\b' || c == 127 || c == 0x03 || c == 0x0C) return (char)c;
+        if (c >= 0x20 && c < 0x7F) return (char)c;
+        return 0;
     }
     return 0;
 }
@@ -59,19 +57,24 @@ static char shell_getc(void) {
             cursor_last_toggle = pit_get_milliseconds();
             return s;
         }
+        usb_hid_poll();
+        char u = usb_hid_getc_nb();
+        if (u) {
+            cursor_visible = 1;
+            cursor_last_toggle = pit_get_milliseconds();
+            return u;
+        }
         uint64_t now = pit_get_milliseconds();
         if (now - cursor_last_toggle >= 400) {
             cursor_visible = !cursor_visible;
             cursor_last_toggle = now;
         }
 
-
         gterm_poll_tick();
 
         __asm__ volatile("pause");
     }
 }
-
 
 static void build_prompt(char *out, size_t outlen) {
     const char *cwd = sys_shell_get_cwd();
@@ -86,7 +89,6 @@ static void build_prompt(char *out, size_t outlen) {
     out[n++] = '~'; out[n++] = '$'; out[n++] = ' '; out[n] = '\0';
 }
 
-
 static void show_cursor(void) {
     io_put_char('_');
     io_put_char('\b');
@@ -95,7 +97,7 @@ static void show_cursor(void) {
 static int redraw_line(const char *buf, int len, int cursor, int screen_pos) {
     for (int i = 0; i < screen_pos; i++) io_put_char('\b');
     for (int i = 0; i < len; i++) io_put_char(buf[i]);
-    io_put_char(' '); /* this is soooooooooooooooooo anoying. */
+    io_put_char(' ');
     int back = (len + 1) - cursor;
     for (int i = 0; i < back; i++) io_put_char('\b');
     if (cursor_visible) {
@@ -109,7 +111,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
     char buf[INPUT_BUF];
     int  len        = 0;
     int  cursor     = 0;
-    int  screen_pos = 0;  /* this little shit, fucked the wole thing */
+    int  screen_pos = 0;
     int  hist_browse = -1;
     char prompt[280];
 
@@ -145,7 +147,6 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-        /* ── Backspace ──────────────────────────────────────────────── */
         if (c == '\b' || c == 127) {
             if (cursor > 0) {
                 for (int i = cursor - 1; i < len - 1; i++) buf[i] = buf[i + 1];
@@ -155,7 +156,6 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-
         if ((unsigned char)c == KEY_DEL) {
             if (cursor < len) {
                 for (int i = cursor; i < len - 1; i++) buf[i] = buf[i + 1];
@@ -164,7 +164,6 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             }
             continue;
         }
-
 
         if ((unsigned char)c == KEY_LEFT) {
             if (cursor > 0) { cursor--; io_put_char('\b'); screen_pos--; }
@@ -183,7 +182,6 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             while (cursor < len) { io_put_char(buf[cursor]); cursor++; screen_pos++; }
             continue;
         }
-
 
         if ((unsigned char)c == KEY_UP) {
             if (history_count == 0) continue;
@@ -214,14 +212,12 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-
         if (c == 0x03) {
             io_put_string("^C\n");
             len = 0; cursor = 0; screen_pos = 0; hist_browse = -1;
             io_put_string(prompt);
             continue;
         }
-
 
         if (c == 0x0C) {
             io_clear_screen();
@@ -232,9 +228,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             continue;
         }
 
-  
         if ((unsigned char)c < 0x20) continue;
-
 
         if (len < INPUT_BUF - 1) {
             for (int i = len; i > cursor; i--) buf[i] = buf[i - 1];
@@ -243,7 +237,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
             hist_browse = -1;
 
             if (cursor == len - 1) {
-            
+
                 io_put_char(c);
                 cursor++;
                 screen_pos++;
@@ -262,7 +256,7 @@ void kernel_shell(void) {
 void kernel_os_shell(void) {
     shell_loop(
        "\n\n"
-        "  ______              _       _                                           \n"  
+        "  ______              _       _                                           \n"
         " /_  __/___  _____   (_)___ _(_) __ ____  __       ____   _____             \n"
         "  / / / __ \\/ ___/ / / __ `/ / / // __ \\/ /      / __ \\/ ___/            \n"
         " / / / /_/ / /     / /_/ / / /|/ // /_/ / /__    / /_/ / \\__ \\            \n"
@@ -273,9 +267,9 @@ void kernel_os_shell(void) {
         "\n",
         1
     );
-} /*why the fuck is the ascii art so fucked up in the terminal? it looks fine in the source code but when i run it in the shell it looks like shit.
- i guess the font is not monospaced or something. whatever, fuck it.*/
-
+}
+//why the fuck the ascii art look fine here,but in the os it looks so fucked up! i need to fix it, maybe the font is not monospaced or 
+// the terminal width is not enough.
 void kernel_install_mode(void) {
     installer_run();
 }

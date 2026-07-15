@@ -1,74 +1,32 @@
-/* =============================================================================
- * keyboard.c - PS/2 keyboard driver or the root of all evil
- * ========================================================================= */
 
 #include <stdint.h>
 #include "keyboard.h"
 #include "serial.h"
-
-static inline uint8_t inb(uint16_t port) {
-    uint8_t v;
-    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
-    return v;
-}
+#include "apic.h"
+#include "ps2.h"
 
 static inline void outb(uint16_t port, uint8_t v) {
     __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(port));
 }
 
-#define I8042_DATA          0x60
-#define I8042_STATUS        0x64
-#define I8042_CMD           0x64
-#define I8042_STATUS_OUT_FULL 0x01
-#define I8042_STATUS_IN_FULL  0x02
-#define I8042_STATUS_AUX      0x20
-#define I8042_CMD_READ_CFG    0x20
-#define I8042_CMD_WRITE_CFG   0x60
-#define I8042_CFG_IRQ1_EN     0x01
-#define PIC1_DATA 0x21
-
-static int wait_input_empty(void) {
-    for (uint32_t i = 0; i < 100000u; i++) {
-        if (!(inb(I8042_STATUS) & I8042_STATUS_IN_FULL)) return 0;
-    }
-    return -1;
-}
-
-static int wait_output_full(void) {
-    for (uint32_t i = 0; i < 100000u; i++) {
-        if (inb(I8042_STATUS) & I8042_STATUS_OUT_FULL) return 0;
-    }
-    return -1;
-}
-
-static void kbc_write_cmd(uint8_t byte) {
-    wait_input_empty();
-    outb(I8042_CMD, byte);
-}
-
-static void kbc_write_data(uint8_t byte) {
-    wait_input_empty();
-    outb(I8042_DATA, byte);
-}
-
-static uint8_t kbc_read_data(void) {
-    wait_output_full();
-    return inb(I8042_DATA);
-}
+#define KBD_CMD_DISABLE_SCAN   0xF5
+#define KBD_CMD_SET_SCANCODE   0xF0
+#define KBD_CMD_ENABLE_SCAN    0xF4
+#define KBD_CMD_IDENTIFY       0xF2
+#define KBD_RESP_ACK           0xFA
 
 static uint8_t keyboard_command(uint8_t cmd) {
-    kbc_write_data(cmd);
-    return kbc_read_data();
-}
-
-static void pic1_unmask_irq1(void) {
-    uint8_t mask = inb(PIC1_DATA);
-    mask &= (uint8_t)~(1u << 1);
-    outb(PIC1_DATA, mask);
+    ps2_send_to_device(PS2_PORT_KEYBOARD, cmd);
+    return ps2_read_data();
 }
 
 static inline void send_eoi(void) {
-    outb(0x20, 0x20);
+
+    if (apic_available()) {
+        apic_send_eoi();
+    } else {
+        outb(0x20, 0x20);
+    }
 }
 
 static inline uint8_t scancode_to_keycode(uint8_t scancode) {
@@ -90,7 +48,7 @@ static const char keycode_map[128] = {
     0,
     ' ',
 };
-// this wont work, if it doesn't im probably going to cry, but if it does work, im going to cry anyway.
+
 static const char keycode_map_shift[128] = {
     0,    27,
     '!','@','#','$','%','^','&','*','(',')','_','+',
@@ -106,7 +64,7 @@ static const char keycode_map_shift[128] = {
     0,
     ' ',
 };
-//life is good when you can type on you keyborad, but life is better when you can type on your keyboard without having to worry about it not working.
+
 #define KC_LSHIFT   0x2A
 #define KC_RSHIFT   0x36
 #define KC_LCTRL    0x1D
@@ -261,15 +219,10 @@ static void keyboard_process_byte(uint8_t scancode)
 
 void keyboard_irq_handler(void)
 {
-    serial_puts("[KBD] IRQ1 fired\n");   /* i need a gf*/
     for (int guard = 0; guard < 16; guard++) {
-        uint8_t status = inb(I8042_STATUS);
-        if (!(status & I8042_STATUS_OUT_FULL)) break;
-        if (status & I8042_STATUS_AUX) break;
-        uint8_t scancode = inb(I8042_DATA);
-        serial_puts("[KBD] scancode=0x");     /* TEMP DIAGNOSTIC */
-        serial_write_hex(scancode);           /* TEMP DIAGNOSTIC */
-        serial_puts("\n");                    /* TEMP DIAGNOSTIC */
+        uint8_t scancode;
+        if (!ps2_read_data_nb(&scancode)) break;
+        if (ps2_status_output_is_mouse()) break;
         keyboard_process_byte(scancode);
     }
     send_eoi();
@@ -279,29 +232,14 @@ void keyboard_init(void)
 {
     for (int i = 0; i < 16; i++) key_down[i] = 0;
 
-    kbc_write_cmd(0xAD);
-    kbc_write_cmd(0xA7);
-
-    while (inb(I8042_STATUS) & I8042_STATUS_OUT_FULL) {
-        (void)inb(I8042_DATA);
-    }
-
-    kbc_write_cmd(I8042_CMD_READ_CFG);
-    uint8_t cfg = kbc_read_data();
-    cfg |= I8042_CFG_IRQ1_EN;
-    kbc_write_cmd(I8042_CMD_WRITE_CFG);
-    kbc_write_data(cfg);
-
-    kbc_write_cmd(0xAE);
-
-    keyboard_command(0xF5);
+    keyboard_command(KBD_CMD_DISABLE_SCAN);
 
     int set1_confirmed = 0;
     for (int attempt = 0; attempt < 5 && !set1_confirmed; attempt++) {
-        uint8_t r1 = keyboard_command(0xF0);
-        if (r1 != 0xFA) continue;
+        uint8_t r1 = keyboard_command(KBD_CMD_SET_SCANCODE);
+        if (r1 != KBD_RESP_ACK) continue;
         uint8_t r2 = keyboard_command(0x01);
-        if (r2 == 0xFA) set1_confirmed = 1;
+        if (r2 == KBD_RESP_ACK) set1_confirmed = 1;
     }
 
     if (set1_confirmed) {
@@ -310,11 +248,7 @@ void keyboard_init(void)
         serial_puts("[KBD] WARNING: scancode set 1 not confirmed after retries!\n");
     }
 
-    keyboard_command(0xF4);
+    keyboard_command(KBD_CMD_ENABLE_SCAN);
 
-    while (inb(I8042_STATUS) & I8042_STATUS_OUT_FULL) {
-        (void)inb(I8042_DATA);
-    }
-
-    pic1_unmask_irq1();
+    ps2_flush_output();
 }

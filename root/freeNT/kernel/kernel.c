@@ -1,6 +1,3 @@
-/* =============================================================================
- * kernel.c - Toriginal OS freeNT v1.5 kernel entry point, god kill me this is so fucking stupid, i hate it, i need sleep. >:()
- * ============================================================================= */
 
 #include "kernel.h"
 #include "types.h"
@@ -23,6 +20,10 @@
 #include "net.h"
 #include "tcp.h"
 #include "rtl8139.h"
+#include "acpi.h"
+#include "apic.h"
+#include "ps2.h"
+#include "uhci.h"
 
 void interrupts_init(void);
 void syscall_init(void);
@@ -50,10 +51,15 @@ static void early_print_hex(uint64_t v) {
     serial_write(buf);
 }
 
-#define MB2_TAG_END   0u
-#define MB2_TAG_MMAP  6u
-#define MB2_TAG_FB    8u
+#define MB2_TAG_END       0u
+#define MB2_TAG_MMAP      6u
+#define MB2_TAG_FB        8u
+#define MB2_TAG_ACPI_OLD 14u
+#define MB2_TAG_ACPI_NEW 15u
 #define MB2_MAX_ITER  64u
+
+static uint32_t g_mb_rsdp_old_phys = 0;
+static uint32_t g_mb_rsdp_new_phys = 0;
 
 typedef struct { uint32_t type; uint32_t size; }
     __attribute__((packed)) mb2_tag_t;
@@ -66,10 +72,6 @@ typedef struct { uint64_t base_addr; uint64_t length;
                  uint32_t type; uint32_t reserved; }
     __attribute__((packed)) mb2_mmap_entry_t;
 
-/* Multiboot2 framebuffer info tag (type=8). Layout is fixed by the
- * multiboot2 spec: 64-bit physical address first (so the struct needs
- * 8-byte alignment, hence packed + explicit field order matching the
- * spec exactly — do not reorder these fields). */
 typedef struct {
     uint32_t type;
     uint32_t size;
@@ -78,19 +80,11 @@ typedef struct {
     uint32_t framebuffer_width;
     uint32_t framebuffer_height;
     uint8_t  framebuffer_bpp;
-    uint8_t  framebuffer_type;   /* 0=indexed, 1=RGB, 2=EGA text */
+    uint8_t  framebuffer_type;
     uint8_t  reserved;
-    /* color info fields follow but we don't need them for RGB mode */
+
 } __attribute__((packed)) mb2_tag_fb_t;
 
-/* Filled in by parse_multiboot(), consumed by graphics_init() via the
- * mb_fb_*() accessors declared in kernel.h. fb_found stays 0 if GRUB
- * didn't hand us a usable RGB framebuffer (e.g. old GRUB, or it
- * silently fell back to EGA text) so callers can detect "no graphics
- * available" instead of drawing into garbage memory. Kept static +
- * accessor-wrapped (rather than plain externs) so graphics.c can't
- * accidentally write to these and drift out of sync with what was
- * actually parsed from the multiboot struct. */
 static int      g_mb_fb_found  = 0;
 static uint64_t g_mb_fb_addr   = 0;
 static uint32_t g_mb_fb_pitch  = 0;
@@ -151,10 +145,7 @@ static void parse_multiboot(uint32_t mb_info_phys) {
         } else if (tag->type == MB2_TAG_FB) {
             if (tag->size >= sizeof(mb2_tag_fb_t)) {
                 mb2_tag_fb_t *fb = (mb2_tag_fb_t *)ptr;
-                /* type==1 is packed-RGB pixels — the only mode our
-                 * graphics.c pixel-plotting code understands. Reject
-                 * indexed (0) and EGA-text (2) rather than pretending
-                 * we have a framebuffer we can't actually draw into. */
+
                 if (fb->framebuffer_type == 1 && fb->framebuffer_bpp >= 24) {
                     g_mb_fb_found  = 1;
                     g_mb_fb_addr   = fb->framebuffer_addr;
@@ -177,6 +168,13 @@ static void parse_multiboot(uint32_t mb_info_phys) {
                     early_print("[FB] Framebuffer tag present but not usable RGB mode - skipping\n");
                 }
             }
+        } else if (tag->type == MB2_TAG_ACPI_OLD) {
+
+            g_mb_rsdp_old_phys = (uint32_t)(uintptr_t)(ptr + 8);
+            early_print("[ACPI] RSDP v1 tag found\n");
+        } else if (tag->type == MB2_TAG_ACPI_NEW) {
+            g_mb_rsdp_new_phys = (uint32_t)(uintptr_t)(ptr + 8);
+            early_print("[ACPI] RSDP v2 tag found\n");
         }
 
         uint32_t next = (tag->size + 7u) & ~7u;
@@ -203,25 +201,9 @@ static void kernel_init(uint32_t mb_info_phys) {
     memory_init(mb_info_phys);
     kprint("[1/8] Memory OK\n");
 
-    /* graphics_init() moved here deliberately - it used to run before
-     * memory_init(), which was harmless *today* only because
-     * graphics_init() itself never calls kmalloc(). But gfx3d_init()
-     * (added alongside the 3D rasterizer) DOES call kmalloc() for its
-     * depth buffer, and gfx2d_surface_create() calls kmalloc() for
-     * off-screen surfaces - both would run before heap.c's
-     * mm_init_heap() has ever executed if this stayed above
-     * memory_init(). That's a real "works by accident until someone
-     * allocates a surface" hazard, not a hypothetical one - moving
-     * both graphics inits below memory_init() removes it entirely
-     * rather than relying on callers to remember the ordering
-     * constraint. */
     kprint("[2/8] Graphics init...\n");
     if (graphics_init() == 0) {
-        /* vga_write_dec prints straight to the VGA text-mode buffer,
-         * which is fine here since graphics_init() succeeding doesn't
-         * retire vga_write() as a serial/debug channel — only the
-         * later terminal stage repoints user-visible output at the
-         * framebuffer. */
+
         kprint("[2/8] Framebuffer graphics online (");
         vga_write_dec(g_framebuffer.width);
         vga_write("x");
@@ -238,27 +220,13 @@ static void kernel_init(uint32_t mb_info_phys) {
         }
 
         if (gterm_init() == 0) {
-            /* From this point on, every vga_putc()/vga_write() call
-             * anywhere in the kernel (including the rest of this very
-             * boot log) transparently routes through the graphical
-             * terminal instead of real VGA text memory - see vga.c's
-             * gterm_is_active() checks. Nothing below this line needs
-             * to change to "start using" the graphical terminal. */
+
             kprint("[2/8] Graphical terminal online (64x24 grid, 16x32 px/cell)\n");
         } else {
             kprint("[2/8] Graphical terminal unavailable - staying on VGA text mode\n");
         }
     } else {
-        /* freeNT is a graphics-mode OS now — the multiboot2 header's
-         * framebuffer tag (boot64.s) is non-optional, so a real GRUB
-         * should never reach this branch. Getting here means either a
-         * loader that ignored the mandatory tag or a framebuffer the
-         * sanity checks in graphics_init() refused to trust (e.g. an
-         * indexed/EGA-text mode, or a >4GiB physical address this
-         * memory model can't map yet). There is deliberately no VGA
-         * text-mode UI left to fall back to, so report the failure
-         * over serial (the one channel guaranteed to still work) and
-         * halt rather than silently continuing half-initialized. */
+
         kprint("[2/8] FATAL: no usable linear framebuffer from bootloader\n");
         kprint("[2/8] 3D rasterizer unavailable (no framebuffer)\n");
         serial_write("[GFX] FATAL: framebuffer required, none usable - halting\n");
@@ -269,9 +237,21 @@ static void kernel_init(uint32_t mb_info_phys) {
     idt_init();
     kprint("[3/8] IDT OK\n");
 
+    acpi_init(g_mb_rsdp_old_phys, g_mb_rsdp_new_phys);
+    apic_init();
+    if (apic_available()) {
+        kprint("[3/8] I/O APIC available - using APIC IRQ routing\n");
+    } else {
+        kprint("[3/8] I/O APIC unavailable - using legacy PIC (unchanged behavior)\n");
+    }
+
     kprint("[4/8] PIT init (100 Hz)...\n");
     pit_init(100);
     kprint("[4/8] PIT OK\n");
+
+    kprint("[5/8] PS/2 controller init...\n");
+    ps2_controller_init();
+    kprint("[5/8] PS/2 controller OK\n");
 
     kprint("[5/8] Keyboard init...\n");
     keyboard_wire_idt();
@@ -287,12 +267,6 @@ static void kernel_init(uint32_t mb_info_phys) {
         kprint("[7/8] Persistent filesystem mounted (data restored from disk)\n");
         vga_set_statusbar_enabled(1);
 
-        /* Cursor PNG assets live on the persistent disk (see
-         * cursor.h) - only attempt to load them once a filesystem is
-         * actually mounted. If no persistent disk exists yet (the
-         * "run 'install' to set one up" branch below), cursor_draw()
-         * falls back to a small procedural pointer shape rather than
-         * being unable to render a cursor at all - see cursor.c. */
         if (cursor_assets_init() == 0) {
             kprint("[7/8] Cursor assets loaded from /sys/gui/assets/\n");
         } else {
@@ -338,6 +312,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     __asm__ volatile("sti");
 
     serial_write("[boot] Interrupts enabled\n");
+
+    uhci_init();
+
     serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.1 READY ***\n");
     serial_write("[boot] Shell starting - type commands below\n");
     serial_write("os~$ ");
