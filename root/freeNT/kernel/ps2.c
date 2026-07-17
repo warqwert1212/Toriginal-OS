@@ -1,4 +1,3 @@
-
 #include "ps2.h"
 #include "serial.h"
 
@@ -100,8 +99,8 @@ void ps2_controller_init(void) {
     }
 
     uint8_t cfg = read_cfg_byte();
-    cfg |= CFG_PORT1_IRQ_EN | CFG_PORT2_IRQ_EN | CFG_TRANSLATION;
-    cfg &= (uint8_t)~(CFG_PORT1_CLOCK_DIS | CFG_PORT2_CLOCK_DIS);
+    cfg |= CFG_PORT1_IRQ_EN | CFG_PORT2_IRQ_EN;
+    cfg &= (uint8_t)~(CFG_PORT1_CLOCK_DIS | CFG_PORT2_CLOCK_DIS | CFG_TRANSLATION);
     write_cfg_byte(cfg);
 
     write_cmd(CMD_ENABLE_PORT1);
@@ -143,14 +142,6 @@ int ps2_read_data_nb(uint8_t *out_byte, int *out_is_mouse) {
     uint8_t status = inb(I8042_STATUS);
     if (!(status & STATUS_OUT_FULL)) return 0;
 
-    /* The AUX bit must be read from *this* status snapshot - the one
-     * that told us a byte is waiting - and captured before the
-     * I8042_DATA read below pops that byte off the controller's
-     * output buffer. Reading status again after popping the byte
-     * describes whatever byte (if any) is next in the FIFO, not the
-     * one just read, which silently misattributes keyboard/mouse
-     * bytes whenever the two streams interleave (i.e. constantly,
-     * since the mouse is always sending motion packets). */
     if (out_is_mouse) *out_is_mouse = (status & STATUS_AUX) ? 1 : 0;
     if (out_byte) *out_byte = inb(I8042_DATA);
     return 1;
