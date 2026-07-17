@@ -22,6 +22,7 @@
 #include "rtl8139.h"
 #include "acpi.h"
 #include "apic.h"
+#include "desktop.h"
 #include "ps2.h"
 #include "uhci.h"
 
@@ -52,6 +53,7 @@ static void early_print_hex(uint64_t v) {
 }
 
 #define MB2_TAG_END       0u
+#define MB2_TAG_CMDLINE   1u
 #define MB2_TAG_MMAP      6u
 #define MB2_TAG_FB        8u
 #define MB2_TAG_ACPI_OLD 14u
@@ -100,6 +102,14 @@ uint32_t mb_fb_width(void)  { return g_mb_fb_width; }
 uint32_t mb_fb_height(void) { return g_mb_fb_height; }
 uint8_t  mb_fb_bpp(void)    { return g_mb_fb_bpp; }
 
+/* Set from the multiboot2 command line tag (GRUB's "toriginal_OS
+ * (GUI)" menu entry passes "gui" as a kernel argument) - lets
+ * kernel_main() launch straight into the graphical desktop instead of
+ * the text shell, without needing a separate kernel binary or any
+ * persisted "first boot" state on disk. */
+static int g_boot_gui_requested = 0;
+int kernel_boot_gui_requested(void) { return g_boot_gui_requested; }
+
 static void parse_multiboot(uint32_t mb_info_phys) {
     if (!mb_info_phys) { early_print("[MEM] No multiboot info pointer\n"); return; }
 
@@ -120,7 +130,24 @@ static void parse_multiboot(uint32_t mb_info_phys) {
         if (tag->type == MB2_TAG_END) break;
         if (tag->size < 8) break;
 
-        if (tag->type == MB2_TAG_MMAP) {
+        if (tag->type == MB2_TAG_CMDLINE) {
+            const char *s = (const char *)(ptr + 8);
+            const uint8_t *limit = ptr + tag->size;
+            /* Small bounded substring search for "gui" - the whole
+             * tag is already validated to be within struct_end, and
+             * we never read past `limit`, so a malformed/missing NUL
+             * terminator can't run us off the end of the multiboot
+             * info structure. */
+            for (const char *p = s; (const uint8_t *)p + 3 <= limit; p++) {
+                if (p[0]=='g' && p[1]=='u' && p[2]=='i') {
+                    g_boot_gui_requested = 1;
+                    break;
+                }
+            }
+            early_print("[BOOT] Command line: ");
+            early_print(s);
+            early_print("\n");
+        } else if (tag->type == MB2_TAG_MMAP) {
             mb2_tag_mmap_t *mt = (mb2_tag_mmap_t *)ptr;
             uint32_t es = mt->entry_size;
 
@@ -247,6 +274,10 @@ static void kernel_init(uint32_t mb_info_phys) {
 
     kprint("[4/8] PIT init (100 Hz)...\n");
     pit_init(100);
+    if (apic_available()) {
+        apic_route_irq(0, 0x20);
+        kprint("[4/8] PIT IRQ0 routed via I/O APIC\n");
+    }
     kprint("[4/8] PIT OK\n");
 
     kprint("[5/8] PS/2 controller init...\n");
@@ -316,6 +347,13 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     uhci_init();
 
     serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.1 READY ***\n");
+
+    if (kernel_boot_gui_requested()) {
+        serial_write("[boot] GUI boot requested via GRUB - launching desktop\n");
+        kprint("[BOOT] Starting graphical desktop (Esc returns to the shell)...\n");
+        desktop_run();
+    }
+
     serial_write("[boot] Shell starting - type commands below\n");
     serial_write("os~$ ");
 

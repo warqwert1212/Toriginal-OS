@@ -19,6 +19,7 @@
 #include "pit.h"
 #include "sha256.h"
 #include "config.h"
+#include "desktop.h"
 
 #define OS_NAME    "Toriginal OS"
 #define OS_VERSION "1.0"
@@ -313,7 +314,7 @@ static void cmd_help(void) {
     io_put_string("cat <path> - print a file to screen\n");
     io_put_string("run <path.trp> - execute a TRP package\n");
     io_put_string("rm <path> - delete a file\n");
-    io_put_string("desktop - placeholder; no GUI is implemented yet\n");
+    io_put_string("desktop - launch the graphical desktop (Esc to return)\n");
     io_put_string("touch <path> - create an empty file\n");
     io_put_string("settings [480p|720p] - change the UI resolution\n");
     io_put_string("mkdir <path> - create a directory\n");
@@ -498,7 +499,7 @@ static void cmd_free(void) {
 }
 
 static void cmd_desktop(void) {
-    io_put_string("desktop: no GUI is implemented in this build; use the shell instead.\n");
+    desktop_run();
 }
 
 static void cmd_settings(const char *arg) {
