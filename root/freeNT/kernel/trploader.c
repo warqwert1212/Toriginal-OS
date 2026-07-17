@@ -130,9 +130,21 @@ int trp_load(const char *filename, pid_t pid)
     }
 
     trp_file_header_t *hdr = (trp_file_header_t *)buf;
-    if (hdr->magic != TRP_MAGIC)                                          { trp_log("Invalid magic."); kfree(buf); return -1; }
-    if (hdr->manifest_offset + hdr->manifest_len > file_size)            { trp_log("Manifest OOB."); kfree(buf); return -1; }
-    if (hdr->payload_len && hdr->payload_offset+hdr->payload_len>file_size){ trp_log("Payload OOB."); kfree(buf); return -1; }
+    if (hdr->magic != TRP_MAGIC) { trp_log("Invalid magic."); kfree(buf); return -1; }
+
+    /* FIX: manifest_offset/len and payload_offset/len are uint32_t fields
+     * read straight from the (attacker-controlled) file. `offset + len`
+     * can wrap around 2^32 and pass a "> file_size" check while the
+     * actual region is nowhere near valid - do the arithmetic widened to
+     * 64 bits, and reject an offset that's already out of range before
+     * even adding the length. */
+    uint64_t mo = hdr->manifest_offset, ml = hdr->manifest_len;
+    if (mo > file_size || mo + ml > file_size) { trp_log("Manifest OOB."); kfree(buf); return -1; }
+
+    if (hdr->payload_len) {
+        uint64_t po = hdr->payload_offset, pl = hdr->payload_len;
+        if (po > file_size || po + pl > file_size) { trp_log("Payload OOB."); kfree(buf); return -1; }
+    }
 
     char entry_file[256];
     int gate = trp_manifest_run_gate(

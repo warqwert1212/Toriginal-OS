@@ -35,7 +35,6 @@ static inline void io_wait(void) {
 
 #define CFG_PORT1_IRQ_EN   0x01
 #define CFG_PORT2_IRQ_EN   0x02
-#define CFG_TRANSLATION     0x40
 #define CFG_PORT1_CLOCK_DIS 0x10
 #define CFG_PORT2_CLOCK_DIS 0x20
 
@@ -100,7 +99,7 @@ void ps2_controller_init(void) {
     }
 
     uint8_t cfg = read_cfg_byte();
-    cfg |= CFG_PORT1_IRQ_EN | CFG_PORT2_IRQ_EN | CFG_TRANSLATION;
+    cfg |= CFG_PORT1_IRQ_EN | CFG_PORT2_IRQ_EN;
     cfg &= (uint8_t)~(CFG_PORT1_CLOCK_DIS | CFG_PORT2_CLOCK_DIS);
     write_cfg_byte(cfg);
 
@@ -159,3 +158,4 @@ int ps2_read_data_nb(uint8_t *out_byte, int *out_is_mouse) {
 int ps2_status_output_is_mouse(void) {
     return (inb(I8042_STATUS) & STATUS_AUX) ? 1 : 0;
 }
+

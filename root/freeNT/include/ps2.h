@@ -17,11 +17,10 @@ void ps2_send_to_device(int port, uint8_t cmd);
 
 uint8_t ps2_read_data(void);
 
-int ps2_read_data_nb(uint8_t *out_byte);
+int ps2_read_data_nb(uint8_t *out_byte, int *out_is_mouse);
 
 int ps2_status_output_is_mouse(void);
 
 void ps2_flush_output(void);
 
 #endif
-

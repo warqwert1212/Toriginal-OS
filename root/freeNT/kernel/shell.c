@@ -256,20 +256,21 @@ void kernel_shell(void) {
 void kernel_os_shell(void) {
     shell_loop(
        "\n\n"
-        "  ______              _       _                                           \n"
-        " /_  __/___  _____   (_)___ _(_) __ ____  __       ____   _____             \n"
-        "  / / / __ \\/ ___/ / / __ `/ / / // __ \\/ /      / __ \\/ ___/            \n"
-        " / / / /_/ / /     / /_/ / / /|/ // /_/ / /__    / /_/ / \\__ \\            \n"
-        "/_/  \\___/_/      \\_, /_/_/ |_/ \\___/_/__/   \\____/ /____/           \n"
-        "                  /____/                                                   \n"
+        " _____        _      _           _    ___  ___ \n"
+        "|_   _|__ _ _(_)__ _(_)_ _  __ _| |  / _ \\/ __|\n"
+        "  | |/ _ \\ '_| / _` | | ' \\/ _` | | | (_) \\__ \\\n"
+        "  |_|\\___/_| |_\\__, |_|_||_\\__,_|_|  \\___/|___/\n"
+        "               |___/                           \n"
         "\n"
-        "Toriginal OS v1.2 |  freeNT kernel 1.5  |  type 'help' for a list of commands\n"
+        "Toriginal OS v1.2  |  freeNT kernel 1.5\n"
+        "type 'help' for a list of commands\n"
         "\n",
         1
     );
 }
-//why the fuck the ascii art look fine here,but in the os it looks so fucked up! i need to fix it, maybe the font is not monospaced or 
-// the terminal width is not enough.
+/* Banner lines above are kept <=49 chars: gterm is a fixed 64-column grid
+ * (1024px / 16px cell), and any line longer than that wraps mid-character,
+ * which is what was destroying the old wide ASCII art's alignment. */
 void kernel_install_mode(void) {
     installer_run();
 }

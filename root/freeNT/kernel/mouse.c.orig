@@ -105,3 +105,4 @@ void mouse_get_state(mouse_state_t *out) {
     g_mouse.dx = 0;
     g_mouse.dy = 0;
 }
+

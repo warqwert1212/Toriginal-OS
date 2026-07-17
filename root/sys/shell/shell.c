@@ -17,6 +17,8 @@
 #include "http.h"
 #include "icmp.h"
 #include "pit.h"
+#include "sha256.h"
+#include "config.h"
 
 #define OS_NAME    "Toriginal OS"
 #define OS_VERSION "1.0"
@@ -529,16 +531,6 @@ static void cmd_reboot(void) {
     while (1) __asm__ volatile("hlt");
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * trpbuild <folder>
- *
- * Folder structure on TRPFS:
- *   /myapp/
- *     manifest.txt      - TRP manifest text
- *     code/             - payload files (first file used as binary payload)
- *
- * Produces: /myapp.trp
- * ══════════════════════════════════════════════════════════════════════════ */
 
 /* Callback that captures the first regular file name found in a directory */
 typedef struct { char name[128]; int found; } first_file_ctx_t;
@@ -661,12 +653,6 @@ static void cmd_trpbuild(const char *arg) {
     io_put_string(")\n");
 }
 
-/* ── networking commands ─────────────────────────────────────────────────
- * ifconfig                          show current config
- * ifconfig <ip> <netmask> <gateway> [dns]   set static config (no DHCP)
- * ping <ip or hostname>             real ICMP echo, waits for the real reply
- * ══════════════════════════════════════════════════════════════════════ */
-
 static void cmd_ifconfig(const char *arg) {
     net_device_t *dev = net_get_device();
     if (!dev) { io_put_string("ifconfig: no network device present\n"); return; }
@@ -740,14 +726,7 @@ static void cmd_ping(const char *arg) {
     io_put_string("ping: no reply (timed out)\n");
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
- * trpm - package manager
- *   trpm list
- *   trpm install <pkg.trp>
- *   trpm remove  <name>
- * ══════════════════════════════════════════════════════════════════════════ */
 
-/* Ensure /pkgs directory and /pkgs/index.txt exist */
 static void pkg_ensure_dir(void) {
     inode_t st;
     if (fs_stat(PKG_DIR, &st) != 0) fs_mkdir(PKG_DIR, 0755);
@@ -794,18 +773,6 @@ static void cmd_trpm_list(void) {
     if (!count) io_put_string("  (none)\n");
 }
 
-/* ── trpm remote repo config ─────────────────────────────────────────────
- * Real limitation, stated up front: the actual GitHub package repo
- * (github.com/warqwert1212/Toriginal-OS-pakage-repo) is only reachable
- * over HTTPS. This OS's network stack speaks plain HTTP only — real TLS
- * in a freestanding kernel is a separate, much larger undertaking than
- * everything else here. To actually use the real GitHub repo, point
- * this at something that speaks plain HTTP on the other end — e.g. a
- * small host-side proxy that fetches the real HTTPS URL and re-serves
- * it over plain HTTP to this OS's network. `trpm repo <host>` sets
- * that host (hostname or dotted IP); packages are fetched as
- * GET http://<host>/<name>.trp
- */
 #define TRPM_REPO_CONFIG_PATH "/trpm_repo.txt"
 
 static int trpm_get_repo_host(char *out, int outlen) {
@@ -840,8 +807,43 @@ static void cmd_trpm_repo(const char *arg) {
     io_put_string("trpm: repo host set to "); io_put_string(arg); io_put_char('\n');
 }
 
-/* Fetches http://<host>[:<port>]/<pkgname>.trp and writes the body to
- * dest_path. Returns 1 on success. */
+static int find_hmac_header(const uint8_t *headers, uint32_t header_len, uint8_t out[32]) {
+    static const char *name = "X-Trp-Hmac:";
+    size_t name_len = strlen(name);
+    for (uint32_t i = 0; i + name_len <= header_len; i++) {
+        int match = 1;
+        for (size_t j = 0; j < name_len; j++) {
+            char a = (char)headers[i + j];
+            char b = name[j];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+            if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+            if (a != b) { match = 0; break; }
+        }
+        if (!match) continue;
+
+        uint32_t p = i + (uint32_t)name_len;
+        while (p < header_len && headers[p] == ' ') p++;
+        if (p + 64 > header_len) return 0;
+
+        for (int k = 0; k < 32; k++) {
+            uint8_t hi = headers[p + (uint32_t)(k*2)];
+            uint8_t lo = headers[p + (uint32_t)(k*2 + 1)];
+            int hv, lv;
+            if (hi >= '0' && hi <= '9') hv = hi - '0';
+            else if (hi >= 'a' && hi <= 'f') hv = hi - 'a' + 10;
+            else if (hi >= 'A' && hi <= 'F') hv = hi - 'A' + 10;
+            else return 0;
+            if (lo >= '0' && lo <= '9') lv = lo - '0';
+            else if (lo >= 'a' && lo <= 'f') lv = lo - 'a' + 10;
+            else if (lo >= 'A' && lo <= 'F') lv = lo - 'A' + 10;
+            else return 0;
+            out[k] = (uint8_t)((hv << 4) | lv);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static int trpm_fetch_remote(const char *host_and_port, const char *pkgname, const char *dest_path) {
     net_device_t *dev = net_get_device();
     if (!dev || !dev->ip) {
@@ -849,9 +851,6 @@ static int trpm_fetch_remote(const char *host_and_port, const char *pkgname, con
         return 0;
     }
 
-    /* Split off an optional :port — defaults to 80 (plain HTTP) if
-     * absent. Most proxies can't bind :80 without root, so this
-     * matters in practice, not just in theory. */
     char host[224];
     uint16_t port = 80;
     strncpy(host, host_and_port, sizeof(host) - 1); host[sizeof(host)-1] = '\0';
@@ -892,6 +891,19 @@ static int trpm_fetch_remote(const char *host_and_port, const char *pkgname, con
         return 0;
     }
 
+
+    uint32_t header_len = (uint32_t)(body - response_buf) - 4;
+    uint8_t claimed_tag[32], computed_tag[32];
+    if (!find_hmac_header(response_buf, header_len, claimed_tag)) {
+        io_put_string("trpm: refusing download - server did not send an X-Trp-Hmac header\n");
+        return 0;
+    }
+    hmac_sha256((const uint8_t *)TRP_HMAC_SECRET, strlen(TRP_HMAC_SECRET), body, body_len, computed_tag);
+    if (!sha256_digest_equal(claimed_tag, computed_tag)) {
+        io_put_string("trpm: refusing download - HMAC mismatch (package may have been tampered with in transit, or the proxy's secret doesn't match TRP_HMAC_SECRET)\n");
+        return 0;
+    }
+
     fd_t dst = fs_open(dest_path, O_WRONLY | O_CREAT, 0644);
     if (dst < 0) { io_put_string("trpm: could not write downloaded file\n"); return 0; }
     fs_write(dst, body, body_len);
@@ -915,17 +927,13 @@ static void cmd_trpm_install(const char *arg) {
 
     inode_t st;
     if (fs_stat(path, &st) != 0) {
-        /* Not a local file — treat arg as a remote package name. */
         char host[256];
         if (!trpm_get_repo_host(host, sizeof(host))) {
             io_put_string("trpm: not found locally: "); io_put_string(arg); io_put_char('\n');
             io_put_string("trpm: no repo host configured for remote install — set one with: trpm repo <host>\n");
             return;
         }
-        /* Strip a trailing .trp from the name before requesting it, then
-         * re-add it — keeps `trpm install foo` and `trpm install foo.trp`
-         * both working the same way. This is also the name we'll install
-         * it under — NOT derived from the temp download path below. */
+
         strncpy(pkgname, arg, sizeof(pkgname) - 1); pkgname[sizeof(pkgname)-1] = '\0';
         size_t pl = strlen(pkgname);
         if (pl > 4 && strcmp(pkgname + pl - 4, ".trp") == 0) pkgname[pl - 4] = '\0';
@@ -935,7 +943,7 @@ static void cmd_trpm_install(const char *arg) {
         is_remote = 1;
     }
 
-    /* Verify it's a valid TRP */
+  
     if (fs_stat(path, &st) != 0) {
         io_put_string("trpm: not found: "); io_put_string(path); io_put_char('\n'); return;
     }
@@ -953,10 +961,6 @@ static void cmd_trpm_install(const char *arg) {
         io_put_string("trpm: invalid TRP magic - not a valid package\n"); return;
     }
 
-    /* Derive package name from filename (strip path and .trp) — unless
-     * this was a remote install, in which case pkgname is already the
-     * real requested name (see above; the temp download path is not
-     * a meaningful name to derive anything from). */
     if (!is_remote) {
         const char *base = path;
         for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;

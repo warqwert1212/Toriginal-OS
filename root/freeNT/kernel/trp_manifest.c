@@ -5,6 +5,7 @@
 #include "keyboard.h"
 #include "pmm.h"
 #include "serial.h"
+#include "pit.h"
 
 /* trp_manifest.c — TRP Application Manifest parser v1.1
  *
@@ -187,15 +188,32 @@ void trp_manifest_print_errors(const trp_manifest_t *m, int gui_mode)
 
 /* ── trp_manifest_resource_prompt ────────────────────────────────────────── */
 
+#define TRP_PROMPT_TIMEOUT_MS 30000
+
 int trp_manifest_resource_prompt(int gui_mode)
 {
     (void)gui_mode;
     io_put_string("\nThis program is requesting higher system resources.\nAllow? (Y/N): ");
     serial_puts("[TRP] Resource request prompt.\n");
+
+    /* FIX: was keyboard_getc() in an unbounded loop - fine while this is
+     * only ever reached from an interactive shell command with a live
+     * keyboard (the only current caller, `run`, is exactly that), but a
+     * silent permanent hang the moment anything invokes trp_load() from
+     * an unattended path. Poll non-blockingly with a timeout and default
+     * to Denied on timeout - a human answering normally never notices. */
+    uint32_t waited = 0;
     for (;;) {
-        char c = keyboard_getc();
+        char c = keyboard_getc_nb();
         if (c=='Y'||c=='y'){io_put_string("Y\nApproved.\n");serial_puts("[TRP] Approved.\n");return 1;}
         if (c=='N'||c=='n'){io_put_string("N\nDenied.\n");  serial_puts("[TRP] Denied.\n");  return 0;}
+        if (waited >= TRP_PROMPT_TIMEOUT_MS) {
+            io_put_string("\n(no response - denying by default)\n");
+            serial_puts("[TRP] Resource prompt timed out - denied.\n");
+            return 0;
+        }
+        pit_sleep(50);
+        waited += 50;
     }
 }
 

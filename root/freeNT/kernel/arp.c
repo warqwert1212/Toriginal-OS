@@ -84,10 +84,21 @@ void arp_handle_packet(const uint8_t *packet, uint16_t len)
 
     uint16_t oper = ntohs(pkt->oper);
     uint32_t sender_ip = ntohl(pkt->spa);
-    cache_put(sender_ip, pkt->sha);
 
     net_device_t *dev = net_get_device();
     if (!dev) return;
+
+    /* FIX: only learn this sender's IP/MAC mapping if the packet is
+     * actually addressed to us (a reply or request targeting our IP).
+     * The old code cached *every* ARP packet's sender unconditionally,
+     * including unsolicited/gratuitous ARPs and requests meant for other
+     * hosts entirely - trivial to abuse for cache poisoning by anyone on
+     * the same segment. This is still not full anti-spoofing (nothing
+     * here ties a reply to a specific outstanding request), but it stops
+     * the "just say anything and everyone caches it" case. */
+    if (ntohl(pkt->tpa) == dev->ip) {
+        cache_put(sender_ip, pkt->sha);
+    }
 
     if (oper == ARP_OP_REQUEST && ntohl(pkt->tpa) == dev->ip) {
         arp_packet_t reply;

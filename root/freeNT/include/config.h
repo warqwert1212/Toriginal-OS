@@ -30,4 +30,31 @@
 #define DEBUG_PROCESS 0
 #define DEBUG_FS 0
 
+/* trpm package integrity secret.
+ *
+ * trpm fetches .trp packages over plain HTTP (see shell.c's trpm_fetch_remote
+ * comment for why: the real repo is HTTPS-only and this network stack
+ * doesn't speak TLS). Plain HTTP means anyone on-path between the proxy
+ * and this OS can substitute a malicious .trp in transit, which - since
+ * trp_exec_bin() memcpy's the payload straight into executable memory and
+ * jumps to it with no other verification - is a direct route to arbitrary
+ * code execution.
+ *
+ * This secret is used to verify an HMAC-SHA256 tag (sent as the
+ * "X-Trp-Hmac" response header by trpm-proxy.py) over every downloaded
+ * package body before it's trusted. It is NOT a substitute for real
+ * transport security or package signing - it's a shared secret between
+ * you and your own proxy, so:
+ *   - CHANGE THIS before you rely on it for anything. The proxy computes
+ *     the same value from its --secret flag / TRPM_HMAC_SECRET env var -
+ *     the two must match.
+ *   - Anyone who has this string can forge a valid tag. It stops an
+ *     on-path network attacker who *doesn't* have it; it does not stop
+ *     someone who has compromised your proxy or extracted this binary.
+ *   - A real fix eventually is asymmetric signing (proxy signs with a
+ *     private key, kernel verifies with a public key baked in at build
+ *     time) so the secret itself never has to be network- or
+ *     binary-adjacent. That's a bigger lift than this file wants to be. */
+#define TRP_HMAC_SECRET "CHANGE-ME-toriginal-trpm-shared-secret"
+
 #endif /* _KERNEL_CONFIG_H */

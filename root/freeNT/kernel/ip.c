@@ -64,8 +64,19 @@ void ip_handle_packet(const uint8_t *packet, uint16_t len, const uint8_t src_mac
     uint16_t header_len = (uint16_t)(ihl_words * 4);
     if (header_len < sizeof(ip_header_t) || header_len > len) return;
 
+    /* Verify the header checksum before trusting anything in it - an
+     * attacker/corruption-controlled header shouldn't be acted on. */
+    if (ip_checksum(ip, header_len) != 0) return;
+
     uint16_t total_len = ntohs(ip->total_length);
     if (total_len > len) total_len = len;
+    /* FIX: total_len is attacker-controlled and was never checked against
+     * header_len before subtracting. A packet claiming total_length <
+     * header_len (e.g. 0) underflowed plen to ~65535, which got handed to
+     * icmp/udp/tcp handlers as a payload length far larger than any real
+     * data behind `payload` - an out-of-bounds read triggerable by any
+     * single crafted IP packet. */
+    if (total_len < header_len) return;
 
     const uint8_t *payload = packet + header_len;
     uint16_t plen = (uint16_t)(total_len - header_len);

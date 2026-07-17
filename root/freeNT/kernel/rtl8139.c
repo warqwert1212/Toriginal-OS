@@ -63,6 +63,8 @@ static int rtl_send(net_device_t *dev, const uint8_t *frame, uint16_t len)
     return -1;
 }
 
+static void rtl_reset_rx(rtl8139_dev_t *r);
+
 static void rtl_receive_all(rtl8139_dev_t *r)
 {
     while (!(inb((uint16_t)(r->io_base + REG_CMD)) & 0x01)) {
@@ -70,10 +72,17 @@ static void rtl_receive_all(rtl8139_dev_t *r)
         uint16_t status = (uint16_t)(hdr[0] | (hdr[1] << 8));
         uint16_t plen    = (uint16_t)(hdr[2] | (hdr[3] << 8));
 
-        if (!(status & 0x01) || plen < 4 || plen > (RX_BUF_SIZE - 4)) {
-            serial_puts("[RTL8139] bad rx status — resetting rx pointer\n");
-            r->rx_offset = 0;
-            outw((uint16_t)(r->io_base + REG_CAPR), (uint16_t)(r->rx_offset - 16));
+        /* FIX: plen must be a plausible Ethernet frame length (frame +
+         * 4-byte CRC), not merely "fits somewhere in the ring allocation".
+         * The old bound (RX_BUF_SIZE - 4, ~9700 bytes) let a corrupted or
+         * malicious header claim a length far beyond any real frame,
+         * causing net_receive() below to read well past the actual
+         * rx_buffer allocation (rx_buffer is only RX_BUF_SIZE bytes; the
+         * extra 1500+16 padding only covers ring wrap-around, not an
+         * oversized single packet). */
+        if (!(status & 0x01) || plen < 4 || plen > (ETH_FRAME_MAX + 4)) {
+            serial_puts("[RTL8139] bad rx status — resetting receiver\n");
+            rtl_reset_rx(r);
             return;
         }
 
@@ -86,6 +95,22 @@ static void rtl_receive_all(rtl8139_dev_t *r)
     }
 }
 
+/* FIX: recover from an RX buffer overflow instead of just logging it.
+ * The overflow condition leaves the NIC's internal read pointer out of
+ * sync with our rx_offset; toggling RE resets the NIC side, and zeroing
+ * rx_offset + CAPR resyncs our side to match. Without this the driver
+ * would keep interpreting stale/misaligned ring data after the first
+ * overflow, likely wedging receive permanently. */
+static void rtl_reset_rx(rtl8139_dev_t *r)
+{
+    uint8_t cmd = inb((uint16_t)(r->io_base + REG_CMD));
+    outb((uint16_t)(r->io_base + REG_CMD), (uint8_t)(cmd & ~CMD_RE));
+    outb((uint16_t)(r->io_base + REG_CMD), (uint8_t)(cmd | CMD_RE));
+    outl((uint16_t)(r->io_base + REG_RCR), 0x0F | (1 << 7));
+    r->rx_offset = 0;
+    outw((uint16_t)(r->io_base + REG_CAPR), (uint16_t)(0u - 16));
+}
+
 static void rtl_irq_handler(interrupt_frame_t *frame)
 {
     (void)frame;
@@ -93,7 +118,10 @@ static void rtl_irq_handler(interrupt_frame_t *frame)
     outw((uint16_t)(g_rtl.io_base + REG_ISR), status);
 
     if (status & ISR_ROK)   rtl_receive_all(&g_rtl);
-    if (status & ISR_RXOVW) serial_puts("[RTL8139] rx buffer overflow\n");
+    if (status & ISR_RXOVW) {
+        serial_puts("[RTL8139] rx buffer overflow - resetting receiver\n");
+        rtl_reset_rx(&g_rtl);
+    }
     if (status & ISR_TER)   serial_puts("[RTL8139] tx error\n");
 }
 
