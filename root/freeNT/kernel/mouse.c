@@ -1,4 +1,5 @@
 #include "mouse.h"
+#include "keyboard.h"
 #include "string.h"
 #include "ps2.h"
 #include <stdint.h>
@@ -45,12 +46,7 @@ void mouse_set_bounds(int32_t screen_w, int32_t screen_h) {
     g_mouse.screen_h = screen_h;
 }
 
-void mouse_irq_handler(void) {
-    uint8_t byte;
-    int is_mouse;
-    if (!ps2_read_data_nb(&byte, &is_mouse)) return;
-    if (!is_mouse) return;
-
+void mouse_handle_byte(uint8_t byte) {
     g_mouse.packet[g_mouse.packet_idx] = byte;
     g_mouse.packet_idx++;
 
@@ -89,6 +85,19 @@ void mouse_irq_handler(void) {
 
     g_mouse.dx += dx;
     g_mouse.dy += dy;
+}
+
+void mouse_irq_handler(void) {
+    for (int guard = 0; guard < 16; guard++) {
+        uint8_t byte;
+        int is_mouse;
+        if (!ps2_read_data_nb(&byte, &is_mouse)) break;
+        if (is_mouse) {
+            mouse_handle_byte(byte);
+        } else {
+            keyboard_handle_byte(byte);
+        }
+    }
 }
 
 void mouse_get_state(mouse_state_t *out) {

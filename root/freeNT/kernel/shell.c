@@ -249,18 +249,15 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
     }
 }
 
-void kernel_shell(void) {
-    shell_loop("\nToriginal OS Shell. Type 'help' for commands.\n", 0);
-}
-
 void kernel_os_shell(void) {
     shell_loop(
        "\n\n"
-        " _____        _      _           _    ___  ___ \n"
-        "|_   _|__ _ _(_)__ _(_)_ _  __ _| |  / _ \\/ __|\n"
-        "  | |/ _ \\ '_| / _` | | ' \\/ _` | | | (_) \\__ \\\n"
-        "  |_|\\___/_| |_\\__, |_|_||_\\__,_|_|  \\___/|___/\n"
-        "               |___/                           \n"
+        "    ______           _         _             __   ____  _____\n"
+        "   /_  __/___  _____(_)___ _  (_)___  ____ _/ /  / __ \\/ ___/\n"
+        "    / / / __ \\/ ___/ / __ `/ / / __ \\/ __ `/ /  / / / /\\__ \\ \n"
+        "   / / / /_/ / /  / / /_/ / / / / / / /_/ / /  / /_/ /___/ / \n"
+        "  /_/  \\____/_/  /_/\\__, / /_/_/ /_/\\__,_/_/   \\____//____/  \n"
+        "                   /____/                                    \n"
         "\n"
         "Toriginal OS v1.2  |  freeNT kernel 1.5\n"
         "type 'help' for a list of commands\n"
@@ -268,9 +265,7 @@ void kernel_os_shell(void) {
         1
     );
 }
-/* Banner lines above are kept <=49 chars: gterm is a fixed 64-column grid
- * (1024px / 16px cell), and any line longer than that wraps mid-character,
- * which is what was destroying the old wide ASCII art's alignment. */
+
 void kernel_install_mode(void) {
     installer_run();
 }

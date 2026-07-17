@@ -1,9 +1,9 @@
-
 #include <stdint.h>
 #include "keyboard.h"
 #include "serial.h"
 #include "apic.h"
 #include "ps2.h"
+#include "mouse.h"
 
 static inline void outb(uint16_t port, uint8_t v) {
     __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(port));
@@ -21,7 +21,6 @@ static uint8_t keyboard_command(uint8_t cmd) {
 }
 
 static inline void send_eoi(void) {
-
     if (apic_available()) {
         apic_send_eoi();
     } else {
@@ -191,7 +190,7 @@ static void keyboard_process_transition(uint8_t keycode, int down)
     }
 }
 
-static void keyboard_process_byte(uint8_t scancode)
+void keyboard_handle_byte(uint8_t scancode)
 {
     if (scancode == 0xE0) {
         pending_e0 = 1;
@@ -220,11 +219,14 @@ static void keyboard_process_byte(uint8_t scancode)
 void keyboard_irq_handler(void)
 {
     for (int guard = 0; guard < 16; guard++) {
-        uint8_t scancode;
+        uint8_t byte;
         int is_mouse;
-        if (!ps2_read_data_nb(&scancode, &is_mouse)) break;
-        if (is_mouse) break;
-        keyboard_process_byte(scancode);
+        if (!ps2_read_data_nb(&byte, &is_mouse)) break;
+        if (is_mouse) {
+            mouse_handle_byte(byte);
+        } else {
+            keyboard_handle_byte(byte);
+        }
     }
     send_eoi();
 }
