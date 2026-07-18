@@ -27,6 +27,31 @@ static uint8_t  g_cur_fg = VGA_LIGHT_GREY;
 static uint8_t  g_cur_bg = VGA_BLACK;
 static int      g_active = 0;
 
+/* -- Reserved status-bar row --------------------------------------------
+ * Mirrors vga.c's top_row()/g_statusbar_enabled pattern, so text-mode
+ * and gterm behave the same way: row 0 is reserved for the status bar
+ * once enabled, and every cursor-touching path (putc, clear, scroll,
+ * init) clamps against gterm_top_row() instead of assuming row 0 is
+ * fair game for regular text.
+ *
+ * This is the fix for shell text landing several rows too high: gterm
+ * previously had no concept of a reserved row at all (unlike vga.c),
+ * and vga_draw_statusbar() writes into 0xB8000, which is never
+ * scanned out to the screen once gterm owns the display - so the bar
+ * was invisible AND nothing reserved its row, letting the banner and
+ * prompt scroll straight through the space meant for it. */
+static int  g_statusbar_enabled = 0;
+static char g_statusbar_text[256] = {0};
+
+static inline uint32_t gterm_top_row(void) {
+    return g_statusbar_enabled ? 1 : 0;
+}
+
+/* Draws the status bar's own row directly, bypassing the normal
+ * cell-grid cursor - the bar is not part of the scrolling text
+ * region and must never be pushed around by it. */
+static void gterm_draw_statusbar_row(void);
+
 /* ── Mouse cursor state (for erase-old/draw-new redraw) ──────────── */
 
 static int32_t g_last_mouse_x = -1;
@@ -151,14 +176,19 @@ static void redraw_all(void) {
 /* ── Scrolling ────────────────────────────────────────────────────── */
 
 static void scroll_up_one_line(void) {
-    /* Move every row up by one, blank the last row. This is a plain
+    /* Move every row in the scrollable region up by one, blank the
+     * last row. Starts from gterm_top_row()+1 rather than row 1, so
+     * a reserved status-bar row (row 0, when enabled) is never
+     * shifted or overwritten by ordinary text scrolling - it's owned
+     * exclusively by gterm_draw_statusbar_row(). This is a plain
      * memmove-style shift of the cell array - the actual pixel
      * repaint happens via redraw_all() after, since partial-row
      * framebuffer scrolling (blitting pixel rows) would need
      * graphics_core support this stage doesn't have yet (no
      * "shift screen region" primitive) and full-grid redraw at
      * 64x24 cells is cheap enough not to need it. */
-    for (uint32_t r = 1; r < g_rows; r++) {
+    uint32_t top = gterm_top_row();
+    for (uint32_t r = top + 1; r < g_rows; r++) {
         for (uint32_t c = 0; c < g_cols; c++) {
             g_grid[(r - 1) * g_cols + c] = g_grid[r * g_cols + c];
         }
@@ -170,6 +200,7 @@ static void scroll_up_one_line(void) {
         cell->bg = g_cur_bg;
     }
     redraw_all();
+    if (g_statusbar_enabled) gterm_draw_statusbar_row();
 }
 
 /* ── Public API ───────────────────────────────────────────────────── */
@@ -198,7 +229,7 @@ int gterm_init(void) {
     g_grid = (gterm_cell_t *)mem;
     g_cols = cols;
     g_rows = rows;
-    g_cursor_row = 0;
+    g_cursor_row = gterm_top_row();
     g_cursor_col = 0;
     g_cur_fg = VGA_LIGHT_GREY;
     g_cur_bg = VGA_BLACK;
@@ -213,11 +244,20 @@ int gterm_init(void) {
 
     g_active = 1;
     redraw_all();
+    if (g_statusbar_enabled) gterm_draw_statusbar_row();
     return 0;
 }
 
 int gterm_is_active(void) {
     return g_active;
+}
+
+/* Exposes the cell grid dimensions - added for IOCTL_TTY_GET_WINSIZE
+ * (syscall.c), which needs to report real terminal geometry to apps
+ * instead of a hardcoded guess. */
+void gterm_get_grid_size(uint32_t *out_cols, uint32_t *out_rows) {
+    if (out_cols) *out_cols = g_cols;
+    if (out_rows) *out_rows = g_rows;
 }
 
 void gterm_set_color(uint8_t fg_index, uint8_t bg_index) {
@@ -226,13 +266,15 @@ void gterm_set_color(uint8_t fg_index, uint8_t bg_index) {
 }
 
 void gterm_set_cursor(uint16_t row, uint16_t col) {
+    if (row < gterm_top_row()) row = (uint16_t)gterm_top_row();
     if (row < g_rows) g_cursor_row = row;
     if (col < g_cols) g_cursor_col = col;
 }
 
 void gterm_clear(void) {
     if (!g_active) return;
-    for (uint32_t r = 0; r < g_rows; r++) {
+    uint32_t top = gterm_top_row();
+    for (uint32_t r = top; r < g_rows; r++) {
         for (uint32_t c = 0; c < g_cols; c++) {
             gterm_cell_t *cell = &g_grid[r * g_cols + c];
             cell->ch = ' ';
@@ -240,9 +282,10 @@ void gterm_clear(void) {
             cell->bg = g_cur_bg;
         }
     }
-    g_cursor_row = 0;
+    g_cursor_row = top;
     g_cursor_col = 0;
     redraw_all();
+    if (g_statusbar_enabled) gterm_draw_statusbar_row();
 }
 
 void gterm_putc(char c) {
@@ -261,11 +304,11 @@ void gterm_putc(char c) {
     case '\b':
         if (g_cursor_col > 0) {
             g_cursor_col--;
-        } else if (g_cursor_row > 0) {
+        } else if (g_cursor_row > gterm_top_row()) {
             g_cursor_row--;
             g_cursor_col = g_cols - 1;
         } else {
-            break; /* nothing to backspace over at (0,0) */
+            break; /* nothing to backspace over at the top of the text region */
         }
         {
             gterm_cell_t *cell = &g_grid[g_cursor_row * g_cols + g_cursor_col];
@@ -301,6 +344,69 @@ void gterm_putc(char c) {
 void gterm_write(const char *str) {
     if (!str) return;
     while (*str) gterm_putc(*str++);
+}
+
+/* ── Status bar (row 0, reserved when enabled) ─────────────────────── *
+ * gterm's counterpart to vga_draw_statusbar()/vga_set_statusbar_enabled().
+ * vga.c's versions write straight into 0xB8000, which is invisible
+ * once gterm owns the display (the VESA framebuffer is what actually
+ * gets scanned out) - so vga.c delegates to these instead whenever
+ * gterm_is_active() is true, the same way it already delegates
+ * vga_putc()/vga_clear()/vga_set_cursor() to gterm. */
+
+static void gterm_draw_statusbar_row(void) {
+    if (!g_active || g_cols == 0) return;
+
+    uint8_t bar_fg = VGA_WHITE;
+    uint8_t bar_bg = VGA_BLUE;
+
+    for (uint32_t c = 0; c < g_cols; c++) {
+        gterm_cell_t *cell = &g_grid[0 * g_cols + c];
+        cell->ch = (c < sizeof(g_statusbar_text) && g_statusbar_text[c])
+                       ? g_statusbar_text[c] : ' ';
+        cell->fg = bar_fg;
+        cell->bg = bar_bg;
+    }
+    for (uint32_t c = 0; c < g_cols; c++) {
+        redraw_cell(0, c);
+    }
+}
+
+void gterm_set_statusbar_enabled(int enabled) {
+    int was = g_statusbar_enabled;
+    g_statusbar_enabled = enabled ? 1 : 0;
+
+    if (g_cursor_row < gterm_top_row()) {
+        g_cursor_row = gterm_top_row();
+        g_cursor_col = 0;
+    }
+
+    if (g_statusbar_enabled && !was) {
+        /* Turning the bar on for the first time after the grid
+         * already has content: reserve the row visually right away
+         * rather than waiting for the next gterm_draw_statusbar()
+         * call, which may be up to a second away (shell.c refreshes
+         * it on a 1s timer). */
+        gterm_draw_statusbar_row();
+    }
+}
+
+int gterm_statusbar_enabled(void) {
+    return g_statusbar_enabled;
+}
+
+void gterm_draw_statusbar(const char *text) {
+    if (!g_active) return;
+    if (!text) text = "";
+
+    size_t i = 0;
+    for (; text[i] && i < sizeof(g_statusbar_text) - 1; i++) {
+        g_statusbar_text[i] = text[i];
+    }
+    g_statusbar_text[i] = '\0';
+
+    if (!g_statusbar_enabled) return; /* nothing to draw yet, but text is cached */
+    gterm_draw_statusbar_row();
 }
 
 /* ── Mouse cursor + selection ─────────────────────────────────────── */

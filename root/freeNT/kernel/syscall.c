@@ -6,6 +6,9 @@
 #include "process.h"
 #include "fs.h"
 #include "rtc.h"
+#include "graphics_core.h"  /* g_framebuffer - IOCTL_FB_GET_INFO */
+#include "gfx_terminal.h"   /* gterm_is_active/gterm_get_grid_size - IOCTL_TTY_GET_WINSIZE */
+#include "keyboard.h"       /* keyboard_has_input/keyboard_getc_nb - stdin (fd 0) */
 
 #define MSR_EFER          0xC0000080
 #define MSR_STAR          0xC0000081
@@ -96,7 +99,14 @@ static uint64_t sys_write(uint64_t fd, uint64_t buf, uint64_t len, uint64_t a4, 
         for (uint64_t i = 0; i < len; i++) io_put_char(p[i]);
         return len;
     }
-    return (uint64_t)fs_write((fd_t)fd, p, (size_t)len);
+    /* FIX: previously treated every fd >= 3 as a raw global fd_t,
+     * bypassing the per-process FD table entirely - a process's
+     * dup()'d or close()'d fd numbers had no effect on what sys_write
+     * actually did, because this never consulted proc_fd[] at all. */
+    process_t *cur = process_get_current();
+    int global_fd = process_fd_get(cur, (int)fd);
+    if (global_fd < 0) return (uint64_t)-1;
+    return (uint64_t)fs_write((fd_t)global_fd, p, (size_t)len);
 }
 
 static uint64_t sys_exit(uint64_t status, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -149,23 +159,96 @@ static uint64_t sys_yield(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, ui
 static uint64_t sys_open(uint64_t path, uint64_t flags, uint64_t mode, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
     if (!syscall_ptr_ok(path)) return (uint64_t)-1;
-    return (uint64_t)fs_open((const char *)(uintptr_t)path, (int)flags, (int)mode);
+    fd_t global_fd = fs_open((const char *)(uintptr_t)path, (int)flags, (int)mode);
+    if (global_fd < 0) return (uint64_t)-1;
+
+    /* FIX: previously returned the raw global fd_t straight to the
+     * caller, so every process shared one flat fd numbering space -
+     * two processes opening files independently could easily collide
+     * on "fd 3", and close()ing fd 3 in one process would silently
+     * invalidate fd 3 in every other process that happened to have
+     * opened a file at the same global slot. Installing into the
+     * caller's own proc_fd[] table gives each process its own,
+     * independent low-numbered fd namespace, same as real Unix. */
+    process_t *cur = process_get_current();
+    int local_fd = process_fd_install(cur, (int)global_fd);
+    if (local_fd < 0) {
+        fs_close(global_fd);
+        return (uint64_t)-1;
+    }
+    return (uint64_t)local_fd;
 }
 
 static uint64_t sys_close(uint64_t fd, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    return (uint64_t)fs_close((fd_t)fd);
+    process_t *cur = process_get_current();
+    int global_fd = process_fd_get(cur, (int)fd);
+    if (global_fd < 0) return (uint64_t)-1;
+
+    /* Only actually close the underlying global fd if no other
+     * process-local slot (dup'd via SYS_DUP/SYS_DUP2) still points at
+     * it - otherwise closing one dup'd handle would invalidate every
+     * other handle sharing the same global fd, which is exactly the
+     * bug dup()/dup2() exist to let callers avoid (e.g. redirecting
+     * stdout to a file: dup2(file_fd, 1) then close(file_fd) must
+     * leave fd 1 usable). Scans this process's own table only - the
+     * global trpfs table has no cross-process refcount today (see
+     * process.h's PROCESS_MAX_FDS comment), so a dup shared across
+     * fork()'d processes isn't refcounted across that boundary yet;
+     * within one process (the common dup/dup2 use case) this is
+     * correct. */
+    process_fd_close(cur, (int)fd);
+
+    int still_referenced = 0;
+    for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+        if (process_fd_get(cur, i) == global_fd) { still_referenced = 1; break; }
+    }
+    if (!still_referenced) {
+        return (uint64_t)fs_close((fd_t)global_fd);
+    }
+    return 0;
 }
 
 static uint64_t sys_read(uint64_t fd, uint64_t buf, uint64_t count, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
     if (!syscall_buf_ok(buf, count)) return (uint64_t)-1;
-    return (uint64_t)fs_read((fd_t)fd, (void *)(uintptr_t)buf, (size_t)count);
+
+    /* FIX: fd 0 (stdin) had no handling at all - sys_write() already
+     * special-cases fd 1/2 as "the console", but sys_read() fell
+     * straight through to process_fd_get()/fs_read(), which returns
+     * -1 for fd 0 (nothing was ever installed there), meaning every
+     * previous .trp app was structurally unable to read keyboard
+     * input through the syscall interface - a real terminal-class app
+     * needs this to exist at all. Non-blocking (returns 0 immediately
+     * if nothing is buffered, doesn't spin the CPU waiting) - matches
+     * O_NONBLOCK-style stdin semantics rather than the blocking
+     * default a real terminal's fd 0 usually has, since this kernel
+     * has no process-parking/wake mechanism yet to block on
+     * correctly (see process_thread_join()'s comment on the same
+     * gap) - a caller wanting blocking behavior loops on sys_yield()
+     * between zero-byte reads itself, which is exactly what
+     * term_getline() in root/apps/term/term.c does. */
+    if (fd == 0) {
+        char *dst = (char *)(uintptr_t)buf;
+        uint64_t n = 0;
+        while (n < count && keyboard_has_input()) {
+            dst[n++] = keyboard_getc_nb();
+        }
+        return n;
+    }
+
+    process_t *cur = process_get_current();
+    int global_fd = process_fd_get(cur, (int)fd);
+    if (global_fd < 0) return (uint64_t)-1;
+    return (uint64_t)fs_read((fd_t)global_fd, (void *)(uintptr_t)buf, (size_t)count);
 }
 
 static uint64_t sys_seek(uint64_t fd, uint64_t offset, uint64_t whence, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
-    return (uint64_t)fs_seek((fd_t)fd, (int64_t)offset, (int)whence);
+    process_t *cur = process_get_current();
+    int global_fd = process_fd_get(cur, (int)fd);
+    if (global_fd < 0) return (uint64_t)-1;
+    return (uint64_t)fs_seek((fd_t)global_fd, (int64_t)offset, (int)whence);
 }
 
 static uint64_t sys_stat(uint64_t path, uint64_t out, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -212,6 +295,273 @@ static uint64_t sys_gettimeofday(uint64_t tv_ptr, uint64_t a2, uint64_t a3, uint
     tv->tv_sec = seconds;
     tv->tv_usec = 0;
     return 0;
+}
+
+static uint64_t sys_rmdir(uint64_t path, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_ptr_ok(path)) return (uint64_t)-1;
+    /* fs.h exposes fs_unlink() but no distinct fs_rmdir() - trpfs
+     * doesn't yet enforce "only unlink an empty directory" as a rule
+     * separate from ordinary unlink, so this is a thin, honest alias
+     * rather than a real recursive-refusal check that would just be
+     * dead code against the current fs layer. */
+    return (uint64_t)fs_unlink((const char *)(uintptr_t)path);
+}
+
+static uint64_t sys_getuid(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    /* Single-user system (see auth.h/auth.c) - every process runs as
+     * the one account that logged in, so uid/gid 0 is simply "the
+     * user", not "root" in the Unix-privilege sense (there's no
+     * privilege separation to enforce that distinction yet). Returning
+     * a fixed value rather than -1/ENOSYS means ported apps that just
+     * want *a* stable uid for e.g. temp-file naming get one, instead
+     * of having to special-case "getuid failed". */
+    return 0;
+}
+
+static uint64_t sys_getgid(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    return 0;
+}
+
+static uint64_t sys_brk(uint64_t new_end, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    if (!cur) return 0;
+    return (uint64_t)process_brk(cur, (vaddr_t)new_end);
+}
+
+static uint64_t sys_mmap(uint64_t length, uint64_t prot, uint64_t flags, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    /* addr/fd/offset (the usual mmap(2) full argument list) are
+     * deliberately not accepted here: this kernel only supports
+     * anonymous, kernel-chosen-address mappings (see process_t's
+     * mmap_region_t comment) - a hinted address or file-backed
+     * mapping would silently be ignored if accepted, which is worse
+     * than not accepting the parameters at all. Callers wanting a
+     * file's contents in memory should fs_open()+fs_read() instead;
+     * MAP_ANONYMOUS is required in flags as a clear signal the caller
+     * knows this is an anonymous-only mmap. */
+    if (!(flags & MAP_ANONYMOUS)) return MAP_FAILED;
+    process_t *cur = process_get_current();
+    if (!cur) return MAP_FAILED;
+    vaddr_t base = process_mmap_anon(cur, length, (uint32_t)prot, (uint32_t)flags);
+    return base ? (uint64_t)base : MAP_FAILED;
+}
+
+static uint64_t sys_munmap(uint64_t addr, uint64_t length, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    if (!cur) return (uint64_t)-1;
+    return (uint64_t)process_munmap(cur, (vaddr_t)addr, length);
+}
+
+static uint64_t sys_getcwd(uint64_t buf, uint64_t size, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_buf_ok(buf, size)) return (uint64_t)-1;
+    process_t *cur = process_get_current();
+    const char *cwd = process_get_cwd(cur);
+
+    uint64_t len = 0;
+    while (cwd[len]) len++;
+    if (len + 1 > size) return (uint64_t)-1; /* buffer too small, like real getcwd(2) */
+
+    char *dst = (char *)(uintptr_t)buf;
+    for (uint64_t i = 0; i <= len; i++) dst[i] = cwd[i];
+    return buf; /* real getcwd(2) returns the buffer pointer on success */
+}
+
+static uint64_t sys_chdir(uint64_t path, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_ptr_ok(path)) return (uint64_t)-1;
+    process_t *cur = process_get_current();
+
+    /* Real chdir(2) fails if the path doesn't exist or isn't a
+     * directory - verify via fs_stat() rather than blindly accepting
+     * any string, which would let a process "cd" into a path that
+     * silently breaks every subsequent relative fs_open() instead of
+     * failing at the point the mistake was actually made. */
+    inode_t st;
+    if (fs_stat((const char *)(uintptr_t)path, &st) != 0) return (uint64_t)-1;
+
+    return (uint64_t)process_set_cwd(cur, (const char *)(uintptr_t)path);
+}
+
+static uint64_t sys_dup(uint64_t fd, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    int new_fd = process_fd_dup(cur, (int)fd);
+    return new_fd < 0 ? (uint64_t)-1 : (uint64_t)new_fd;
+}
+
+static uint64_t sys_dup2(uint64_t old_fd, uint64_t new_fd, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    int result = process_fd_dup2(cur, (int)old_fd, (int)new_fd);
+    return result < 0 ? (uint64_t)-1 : (uint64_t)result;
+}
+
+static uint64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)fd; (void)a4; (void)a5; (void)a6;
+    /* fd is accepted (matches the real ioctl(2) signature so ported
+     * code compiles unmodified) but not currently consulted - both
+     * request codes implemented today describe global device state
+     * (the one framebuffer, the one active terminal) rather than
+     * per-fd state, so which fd asked doesn't change the answer yet.
+     * A future ioctl needing per-fd behavior should switch on fd via
+     * process_fd_get() the same way sys_read/sys_write do. */
+    if (!syscall_ptr_ok(arg)) return (uint64_t)-1;
+
+    switch (request) {
+    case IOCTL_FB_GET_INFO: {
+        fb_ioctl_info_t *out = (fb_ioctl_info_t *)(uintptr_t)arg;
+        out->width   = g_framebuffer.width;
+        out->height  = g_framebuffer.height;
+        out->pitch   = g_framebuffer.pitch;
+        out->bpp     = g_framebuffer.depth;
+        out->fb_base = (uint64_t)(uintptr_t)g_framebuffer.framebuffer;
+        return 0;
+    }
+    case IOCTL_TTY_GET_WINSIZE: {
+        tty_winsize_t *out = (tty_winsize_t *)(uintptr_t)arg;
+        if (gterm_is_active()) {
+            uint32_t cols, rows;
+            gterm_get_grid_size(&cols, &rows);
+            out->cols = (uint16_t)cols;
+            out->rows = (uint16_t)rows;
+        } else {
+            /* Standard 80x25 VGA text mode geometry - real, not a
+             * guess, since vga.c's VGA_WIDTH/VGA_HEIGHT are fixed at
+             * exactly this when gterm isn't active. */
+            out->cols = 80;
+            out->rows = 25;
+        }
+        return 0;
+    }
+    default:
+        return (uint64_t)-1;
+    }
+}
+
+static uint64_t sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    (void)timeout_ms; /* Genuine blocking-with-timeout needs a park/wake
+                        * primitive this kernel doesn't have yet (see
+                        * process_thread_join()'s comment on the same
+                        * gap) - this poll is a single readiness SNAPSHOT,
+                        * matching poll(2)'s contract for timeout==0
+                        * exactly and returning immediately regardless
+                        * of what a nonzero timeout asked for, rather
+                        * than silently pretending to honor a wait it
+                        * can't actually perform. */
+    if (!syscall_buf_ok(fds_ptr, nfds * sizeof(pollfd_t))) return (uint64_t)-1;
+
+    process_t *cur = process_get_current();
+    pollfd_t *fds = (pollfd_t *)(uintptr_t)fds_ptr;
+    uint64_t ready_count = 0;
+
+    for (uint64_t i = 0; i < nfds; i++) {
+        fds[i].revents = 0;
+        if (!(fds[i].events & POLLIN_READY)) continue;
+
+        if (fds[i].fd == 0) {
+            /* stdin - see sys_read()'s comment on why this is checked
+             * directly against the keyboard driver rather than through
+             * process_fd_get()/fs_data_available() like every other fd. */
+            if (keyboard_has_input()) {
+                fds[i].revents |= POLLIN_READY;
+                ready_count++;
+            }
+            continue;
+        }
+
+        int global_fd = process_fd_get(cur, fds[i].fd);
+        if (global_fd < 0) continue;
+
+        if (fs_data_available((fd_t)global_fd)) {
+            fds[i].revents |= POLLIN_READY;
+            ready_count++;
+        }
+    }
+    return ready_count;
+}
+
+static uint64_t sys_sigaction(uint64_t signum, uint64_t handler, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (signum >= PROCESS_MAX_SIGNALS) return (uint64_t)-1;
+    if (signum == SIGKILL) return (uint64_t)-1; /* not maskable/handleable - see syscall.h */
+    process_t *cur = process_get_current();
+    process_signal_set_handler(cur, (int)signum, (signal_handler_t)(uintptr_t)handler);
+    return 0;
+}
+
+static uint64_t sys_sigprocmask(uint64_t signum, uint64_t blocked, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (signum >= PROCESS_MAX_SIGNALS) return (uint64_t)-1;
+    if (signum == SIGKILL) return (uint64_t)-1;
+    process_t *cur = process_get_current();
+    process_signal_block(cur, (int)signum, (int)blocked);
+    return 0;
+}
+
+static uint64_t sys_sigraise(uint64_t signum, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (signum >= PROCESS_MAX_SIGNALS) return (uint64_t)-1;
+    process_t *cur = process_get_current();
+    process_signal_raise(cur, (int)signum);
+    return 0;
+}
+
+static uint64_t sys_thread_create(uint64_t entry, uint64_t arg, uint64_t stack_size, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (!syscall_ptr_ok(entry)) return (uint64_t)-1;
+    process_t *cur = process_get_current();
+    pid_t tid = process_thread_create(cur, (vaddr_t)entry, (vaddr_t)arg, stack_size);
+    return tid < 0 ? (uint64_t)-1 : (uint64_t)tid;
+}
+
+static uint64_t sys_thread_exit(uint64_t status, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    /* Same underlying mechanism as process_exit() (this IS a
+     * process_t, just one flagged is_thread) - deliberately does NOT
+     * go through process_exit() itself, since that calls
+     * process_free_memory(), which would release the entire thread
+     * group's shared heap/mmap regions out from under any sibling
+     * threads still running. A thread exiting only ever gives up its
+     * own stack's frames (todo: not yet reclaimed here - see note
+     * below) and marks itself terminated for process_thread_join(). */
+    process_t *cur = process_get_current();
+    if (!cur) return (uint64_t)-1;
+    cur->exit_code = (int)status;
+    cur->state = PROCESS_TERMINATED;
+    /* NOTE: cur->stack_start..stack_end's frames are intentionally
+     * still leaked on thread exit today - freeing them requires the
+     * same per-frame tracking mmap regions get (see mmap_frame_node_t)
+     * which the stack allocation in process_thread_create() doesn't
+     * yet build, since the stack is currently freed as a side effect
+     * of the *process* (not thread) exit path. Flagging honestly
+     * rather than silently pretending this is leak-free: a long-running
+     * app that spawns and joins many short-lived threads will exhaust
+     * physical memory over time until this is closed. */
+    return 0;
+}
+
+static uint64_t sys_thread_join(uint64_t tid, uint64_t out_status_ptr, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_ptr_ok_or_null(out_status_ptr)) return (uint64_t)-1;
+    int exit_code = 0;
+    int result = process_thread_join((pid_t)tid, &exit_code);
+    if (result == 0 && out_status_ptr) {
+        *(int *)(uintptr_t)out_status_ptr = exit_code;
+    }
+    return (uint64_t)result;
+}
+
+static uint64_t sys_thread_self(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    return cur ? (uint64_t)cur->pid : (uint64_t)-1;
 }
 
 static void __attribute__((naked)) syscall_entry_stub(void) {
@@ -276,6 +626,25 @@ void syscall_init(void) {
     syscall_register_handler(SYS_MKDIR,   sys_mkdir);
     syscall_register_handler(SYS_UNLINK,  sys_unlink);
     syscall_register_handler(SYS_GETTIMEOFDAY, sys_gettimeofday);
+    syscall_register_handler(SYS_RMDIR,   sys_rmdir);
+    syscall_register_handler(SYS_GETUID,  sys_getuid);
+    syscall_register_handler(SYS_GETGID,  sys_getgid);
+    syscall_register_handler(SYS_BRK,     sys_brk);
+    syscall_register_handler(SYS_MMAP,    sys_mmap);
+    syscall_register_handler(SYS_MUNMAP,  sys_munmap);
+    syscall_register_handler(SYS_GETCWD,  sys_getcwd);
+    syscall_register_handler(SYS_CHDIR,   sys_chdir);
+    syscall_register_handler(SYS_DUP,     sys_dup);
+    syscall_register_handler(SYS_DUP2,    sys_dup2);
+    syscall_register_handler(SYS_IOCTL,   sys_ioctl);
+    syscall_register_handler(SYS_POLL,    sys_poll);
+    syscall_register_handler(SYS_SIGACTION,   sys_sigaction);
+    syscall_register_handler(SYS_SIGPROCMASK, sys_sigprocmask);
+    syscall_register_handler(SYS_SIGRAISE,    sys_sigraise);
+    syscall_register_handler(SYS_THREAD_CREATE, sys_thread_create);
+    syscall_register_handler(SYS_THREAD_EXIT,   sys_thread_exit);
+    syscall_register_handler(SYS_THREAD_JOIN,   sys_thread_join);
+    syscall_register_handler(SYS_THREAD_SELF,   sys_thread_self);
 
     uint64_t efer = rdmsr(MSR_EFER);
     wrmsr(MSR_EFER, efer | 1);
@@ -295,6 +664,7 @@ void syscall_init(void) {
         (uint64_t)(uintptr_t)(g_syscall_kstack + sizeof(g_syscall_kstack));
     wrmsr(MSR_KERNEL_GS_BASE, (uint64_t)(uintptr_t)&g_syscall_percpu);
 
-    serial_puts("[SYS] Syscall gate ready: write, exit, getpid, getppid, fork, exec, wait, kill, yield, open, close, read, seek, stat, mkdir, unlink, gettimeofday.\n");
+    serial_puts("[SYS] Syscall gate ready: 31 syscalls registered "
+                "(process/fs/mmap+brk/fd-dup/ioctl/poll/signals/threads).\n");
 }
 

@@ -90,6 +90,19 @@ void vga_set_statusbar_enabled(int enabled)
 {
     g_statusbar_enabled = enabled ? 1 : 0;
 
+    /* FIX: previously this only ever touched 0xB8000 bookkeeping
+     * (terminal_row/top_row()), which is invisible the moment gterm
+     * owns the display - the VESA framebuffer is what's actually
+     * scanned out, not VGA text memory. Delegating to gterm's own
+     * reserved-row mechanism when it's active means the status bar
+     * enable/disable call actually has an on-screen effect regardless
+     * of which backend is live, instead of silently doing nothing
+     * under gterm while still reporting success. */
+    if (gterm_is_active()) {
+        gterm_set_statusbar_enabled(g_statusbar_enabled);
+        return;
+    }
+
     if (terminal_row < top_row())
     {
         terminal_row = top_row();
@@ -101,6 +114,14 @@ void vga_set_statusbar_enabled(int enabled)
 void vga_draw_statusbar(const char *text)
 {
     if (!text) text = "";
+
+    /* Same reasoning as vga_set_statusbar_enabled(): writes to
+     * 0xB8000 never reach the screen once gterm is active, so this
+     * must delegate rather than draw into memory nobody scans out. */
+    if (gterm_is_active()) {
+        gterm_draw_statusbar(text);
+        return;
+    }
 
     uint8_t bar_color = (uint8_t)((VGA_BLUE << 4) | VGA_WHITE);
     uint16_t saved_color = terminal_color;

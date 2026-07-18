@@ -68,4 +68,8 @@ int     fs_readdir(const char *path,
                              uint8_t type, void *ctx),
                    void *ctx);
 
+/* Added for SYS_POLL (syscall.c) - see the implementation comment in
+ * trpfs.c for exactly what "available" means for a plain file fd. */
+int fs_data_available(fd_t fd);
+
 #endif /* FS_H */

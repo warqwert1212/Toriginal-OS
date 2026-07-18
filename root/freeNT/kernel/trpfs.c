@@ -669,6 +669,27 @@ int fs_close(fd_t fd) {
     return 0;
 }
 
+/* Added for SYS_POLL (syscall.c): trpfs files have no concept of
+ * "blocking until data arrives" (unlike a pipe or socket fd) - they're
+ * either fully present on disk or they aren't, so "readable" reduces
+ * to "there are unread bytes left before EOF", i.e. offset < size.
+ * This intentionally does NOT distinguish trpfs fds from any other
+ * kind of fd the process-local fd table might someday hold (a pipe,
+ * a socket) - it's scoped to what this function can actually answer
+ * for: an fd this table knows about. Non-trpfs fds (there are none
+ * routed through fd_t today - net.c/tcp.c's sockets are a separate,
+ * not-yet-fd-table-integrated API) would need their own readiness
+ * check wired in here when that integration happens. */
+int fs_data_available(fd_t fd) {
+    if (fd < 0 || fd >= TRPFS_MAX_OPEN_FILES || !g_files[fd].in_use) return 0;
+    trpfs_ofile_t *f = &g_files[fd];
+
+    trpfs_inode_raw_t node;
+    if (read_inode(f->ino, &node) != 0) return 0;
+
+    return f->offset < node.size;
+}
+
 int fs_seek(fd_t fd, int64_t offset, int whence) {
     if (fd < 0 || fd >= TRPFS_MAX_OPEN_FILES || !g_files[fd].in_use) return -1;
     trpfs_ofile_t *f = &g_files[fd];
