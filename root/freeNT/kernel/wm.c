@@ -55,6 +55,12 @@ typedef struct {
     int32_t     screen_w, screen_h;
     uint32_t    focus_window;          /* currently focused window ID (0 if none) */
 
+    /* Usable area for a maximized window - defaults to the full
+     * screen in wm_init(), narrowed by wm_set_maximize_area() once
+     * the caller knows about screen furniture (desktop.c's taskbar)
+     * that a maximized window shouldn't cover. */
+    int32_t     maximize_x, maximize_y, maximize_w, maximize_h;
+
     drag_state_t drag;                 /* current drag/resize operation */
 } wm_state_t;
 
@@ -68,6 +74,21 @@ void wm_init(int32_t screen_w, int32_t screen_h) {
     g_wm.screen_h = screen_h;
     g_wm.next_id = 1;
     g_wm.drag.type = DRAG_NONE;
+
+    /* Sane default until wm_set_maximize_area() narrows it - a caller
+     * that never calls it still gets correct (if taskbar-covering)
+     * maximize behavior instead of an uninitialized zero-size area. */
+    g_wm.maximize_x = 0;
+    g_wm.maximize_y = 0;
+    g_wm.maximize_w = screen_w;
+    g_wm.maximize_h = screen_h;
+}
+
+void wm_set_maximize_area(int32_t x, int32_t y, int32_t w, int32_t h) {
+    g_wm.maximize_x = x;
+    g_wm.maximize_y = y;
+    g_wm.maximize_w = w;
+    g_wm.maximize_h = h;
 }
 
 void wm_shutdown(void) {
@@ -102,6 +123,40 @@ wm_window_t *wm_get_window(uint32_t window_id) {
     return (idx >= 0) ? &g_wm.windows[idx] : NULL;
 }
 
+/* FIX: neither the ported prototype's drag-resize path nor a naive
+ * maximize implementation ever reallocated win->pixels when
+ * client_w/client_h changed - only wm_create_window() allocated it,
+ * once, at the window's initial size. Growing a window (by dragging
+ * a border, or by maximizing, which is really just "resize to a big
+ * new size") would then blit/paint into a buffer smaller than
+ * client_w*client_h claims, reading and writing past the allocation.
+ * This is the single choke point every size-changing code path below
+ * now goes through: it reallocates (kmalloc + kfree the old buffer)
+ * whenever the new client area is larger than what's currently
+ * allocated, and clears the buffer either way so shrink-then-grow
+ * doesn't show stale pixels from an unrelated previous size. Returns
+ * 0 and leaves the window at its old size/buffer if the reallocation
+ * fails, rather than leaving win->client_w/h claiming a size the
+ * buffer doesn't actually have. */
+static int wm_window_resize_buffer(wm_window_t *win, int32_t new_client_w, int32_t new_client_h) {
+    int32_t new_pitch = new_client_w * 4;
+    uint64_t new_size = (uint64_t)new_pitch * (uint64_t)new_client_h;
+    uint64_t old_size = (uint64_t)win->pitch * (uint64_t)win->client_h;
+
+    if (new_size > old_size || !win->pixels) {
+        uint32_t *new_pixels = (uint32_t *)kmalloc((size_t)new_size);
+        if (!new_pixels) return 0; /* allocation failed - caller must not apply the resize */
+        if (win->pixels) kfree(win->pixels);
+        win->pixels = new_pixels;
+    }
+
+    memset(win->pixels, 0, (size_t)new_size);
+    win->pitch = new_pitch;
+    win->client_w = new_client_w;
+    win->client_h = new_client_h;
+    return 1;
+}
+
 /* - Window creation - */
 
 uint32_t wm_create_window(int32_t x, int32_t y, int32_t w, int32_t h,
@@ -125,20 +180,20 @@ uint32_t wm_create_window(int32_t x, int32_t y, int32_t w, int32_t h,
     win->y = y;
     win->w = w;
     win->h = h;
+    win->pixels = NULL;
+    win->pitch = 0;
+    win->client_w = 0;
+    win->client_h = 0;
 
     /* Compute client area */
-    wm_decorate_bounds(x, y, w, h, &win->client_x, &win->client_y,
-                       &win->client_w, &win->client_h);
+    int32_t cx, cy, cw, ch;
+    wm_decorate_bounds(x, y, w, h, &cx, &cy, &cw, &ch);
+    win->client_x = cx;
+    win->client_y = cy;
 
-    /* Allocate pixel buffer for client area */
-    win->pitch = win->client_w * 4;  /* ARGB8888 = 4 bytes per pixel */
-    win->pixels = (uint32_t *)kmalloc((size_t)(win->pitch * win->client_h));
-    if (!win->pixels) {
+    if (!wm_window_resize_buffer(win, cw, ch)) {
         return 0;  /* kmalloc failed */
     }
-
-    /* Clear to transparent black */
-    memset(win->pixels, 0, (size_t)(win->pitch * win->client_h));
 
     if (title) {
         strncpy(win->title, title, sizeof(win->title) - 1);
@@ -219,6 +274,108 @@ void wm_set_focus(uint32_t window_id) {
 
 uint32_t wm_get_focus(void) {
     return g_wm.focus_window;
+}
+
+/* - Minimize / maximize / restore - */
+
+void wm_minimize_window(uint32_t window_id) {
+    wm_window_t *win = wm_get_window(window_id);
+    if (!win) return;
+
+    win->flags |= WM_WIN_MINIMIZED;
+
+    /* A minimized window can't stay focused - real desktops move
+     * focus to whatever's now topmost among the still-visible
+     * windows, they don't leave a hidden window "focused" with
+     * nothing on screen showing it. */
+    if (g_wm.focus_window == window_id) {
+        uint32_t new_focus = 0;
+        for (int i = g_wm.count - 1; i >= 0; i--) {
+            if (!(g_wm.windows[i].flags & WM_WIN_MINIMIZED) &&
+                g_wm.windows[i].id != window_id) {
+                new_focus = g_wm.windows[i].id;
+                break;
+            }
+        }
+        wm_set_focus(new_focus);
+    }
+}
+
+void wm_maximize_window(uint32_t window_id) {
+    wm_window_t *win = wm_get_window(window_id);
+    if (!win) return;
+    if (win->flags & WM_WIN_MAXIMIZED) return; /* already maximized - no-op, use wm_restore_window() to undo */
+
+    /* Save exact current bounds so restore puts it back precisely,
+     * not at some guessed default size. */
+    win->restore_x = win->x;
+    win->restore_y = win->y;
+    win->restore_w = win->w;
+    win->restore_h = win->h;
+
+    int32_t new_x = g_wm.maximize_x;
+    int32_t new_y = g_wm.maximize_y;
+    int32_t new_w = g_wm.maximize_w;
+    int32_t new_h = g_wm.maximize_h;
+
+    int32_t cx, cy, cw, ch;
+    wm_decorate_bounds(new_x, new_y, new_w, new_h, &cx, &cy, &cw, &ch);
+
+    /* Reallocate BEFORE committing the new outer bounds - if the
+     * kmalloc inside wm_window_resize_buffer() fails, the window
+     * must stay exactly as it was (old size, old buffer), not end up
+     * maximized-looking with an undersized buffer underneath. */
+    if (!wm_window_resize_buffer(win, cw, ch)) return;
+
+    win->x = new_x;
+    win->y = new_y;
+    win->w = new_w;
+    win->h = new_h;
+    win->client_x = cx;
+    win->client_y = cy;
+
+    win->flags |= WM_WIN_MAXIMIZED;
+    win->flags &= ~WM_WIN_MINIMIZED; /* maximizing implies un-minimizing */
+
+    wm_raise_window(window_id);
+    wm_set_focus(window_id);
+}
+
+void wm_restore_window(uint32_t window_id) {
+    wm_window_t *win = wm_get_window(window_id);
+    if (!win) return;
+
+    if (win->flags & WM_WIN_MAXIMIZED) {
+        int32_t new_x = win->restore_x;
+        int32_t new_y = win->restore_y;
+        int32_t new_w = win->restore_w;
+        int32_t new_h = win->restore_h;
+
+        int32_t cx, cy, cw, ch;
+        wm_decorate_bounds(new_x, new_y, new_w, new_h, &cx, &cy, &cw, &ch);
+
+        /* Restoring only ever shrinks back to the pre-maximize size,
+         * so wm_window_resize_buffer() here never actually needs to
+         * grow the allocation (it'll just reuse the existing, larger
+         * buffer) - called anyway for the same "size and buffer
+         * change together, atomically" guarantee every other path
+         * gets, rather than special-casing "shrinking never fails". */
+        if (!wm_window_resize_buffer(win, cw, ch)) return;
+
+        win->x = new_x;
+        win->y = new_y;
+        win->w = new_w;
+        win->h = new_h;
+        win->client_x = cx;
+        win->client_y = cy;
+
+        win->flags &= ~WM_WIN_MAXIMIZED;
+    }
+
+    win->flags &= ~WM_WIN_MINIMIZED;
+
+    wm_raise_window(window_id);
+    wm_set_focus(window_id);
 }
 
 /* - Hit testing - */
@@ -335,15 +492,27 @@ uint32_t wm_handle_mouse_move(int32_t x, int32_t y) {
             if (new_w < 100) new_w = 100;
             if (new_h < 100) new_h = 100;
 
-            win->x = new_x;
-            win->y = new_y;
-            win->w = new_w;
-            win->h = new_h;
+            int32_t cx, cy, cw, ch;
+            wm_decorate_bounds(new_x, new_y, new_w, new_h, &cx, &cy, &cw, &ch);
 
-            /* Update client area */
-            wm_decorate_bounds(win->x, win->y, win->w, win->h,
-                             &win->client_x, &win->client_y,
-                             &win->client_w, &win->client_h);
+            /* FIX: previously this only updated client_w/client_h -
+             * win->pixels stayed allocated at whatever size the
+             * window was FIRST created at. Dragging a border to make
+             * a window bigger than its initial size meant every
+             * later paint/blit read and wrote past the real
+             * allocation (see wm_window_resize_buffer()'s comment).
+             * Reallocate-then-commit, same as maximize/restore: if
+             * the reallocation fails, the whole drag step is
+             * abandoned (window stays at its last good size) rather
+             * than applying new bounds the buffer doesn't support. */
+            if (wm_window_resize_buffer(win, cw, ch)) {
+                win->x = new_x;
+                win->y = new_y;
+                win->w = new_w;
+                win->h = new_h;
+                win->client_x = cx;
+                win->client_y = cy;
+            }
         }
 
         return g_wm.drag.window_id;

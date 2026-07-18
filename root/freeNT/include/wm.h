@@ -26,6 +26,8 @@
 #define WM_WIN_VISIBLE    0x01
 #define WM_WIN_FOCUSED    0x02
 #define WM_WIN_DECORATED  0x04  /* has title bar and borders */
+#define WM_WIN_MINIMIZED  0x08  /* hidden from compositing, still exists/tracked */
+#define WM_WIN_MAXIMIZED  0x10  /* filling the maximize area wm_init() was told about */
 
 /* - Window struct - */
 
@@ -36,6 +38,12 @@ typedef struct {
     /* Position and size in screen space */
     int32_t   x, y;             /* top-left corner of the decorated window */
     int32_t   w, h;             /* width/height including decorations */
+
+    /* Saved bounds from before WM_WIN_MAXIMIZED was set, so a second
+     * click on the maximize button restores exactly where/what size
+     * the window was - not just "unmaximized to some default". Only
+     * meaningful while WM_WIN_MAXIMIZED is set. */
+    int32_t   restore_x, restore_y, restore_w, restore_h;
 
     /* Client area (title bar + borders subtracted) */
     int32_t   client_x, client_y;
@@ -88,6 +96,20 @@ void wm_set_focus(uint32_t window_id);
 
 /* Get the currently focused window ID (0 if none). */
 uint32_t wm_get_focus(void);
+
+/* - Minimize / maximize / restore -
+ *
+ * Real state transitions, not just chrome decoration: a minimized
+ * window is skipped by the compositor (see desktop.c's draw loop,
+ * which checks WM_WIN_MINIMIZED before calling draw_window()) but
+ * stays in the window list and keeps its pixel buffer - restoring it
+ * doesn't recreate anything. A maximized window has its pre-maximize
+ * bounds saved in restore_x/y/w/h so wm_restore_window() puts it back
+ * exactly where it was, not at some default size. */
+void wm_set_maximize_area(int32_t x, int32_t y, int32_t w, int32_t h);
+void wm_minimize_window(uint32_t window_id);
+void wm_maximize_window(uint32_t window_id);
+void wm_restore_window(uint32_t window_id);  /* un-minimizes OR un-maximizes, whichever is set */
 
 /* - Input handling - */
 
