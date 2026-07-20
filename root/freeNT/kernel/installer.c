@@ -24,6 +24,14 @@
 #define INSTALLER_MAX_ERRORS   16
 #define INSTALLER_ERROR_LEN    160
 
+/* Defined in kernel.c - writes every multiboot module's bytes (see
+ * parse_multiboot()'s MB2_TAG_MODULE handling and grub.cfg's module2
+ * lines) to the TRPFS path its cmdline names. Called here so a fresh
+ * install gets wallpapers/start menu images/cursor immediately, and
+ * again from kernel_init()'s automount path on every later boot so a
+ * rebuilt ISO's assets stay in sync with what's on disk. */
+void seed_boot_modules_to_fs(void);
+
 /* The "primary disk" backing TRPFS. Module-static so the pointer trpfs.c
  * holds onto stays valid for the lifetime of the OS.
  *
@@ -429,6 +437,11 @@ static void installer_run_internal(int unattended) {
         err_print_all(&errs);
         return;
     }
+
+    /* Wallpapers/start menu images/cursor land on disk right now, as
+     * part of this install, instead of requiring a reboot before
+     * they'd show up via kernel_init()'s automount path. */
+    seed_boot_modules_to_fs();
 
     installer_account_t acct;
     memset(&acct, 0, sizeof(acct));

@@ -458,6 +458,25 @@ uint32_t wm_handle_mouse_move(int32_t x, int32_t y) {
             if (win->y + win->h > g_wm.screen_h) {
                 win->y = g_wm.screen_h - win->h;
             }
+
+            /* FIX: a plain move (no resize) never changes w/h, so the
+             * client buffer itself doesn't need reallocating - but
+             * client_x/client_y are absolute screen coordinates
+             * derived from x/y, and were previously only recomputed
+             * by the resize paths below. Without this, dragging a
+             * window by its titlebar moved the border every frame
+             * while draw_window()'s content blit kept reading the
+             * client_x/client_y from before the drag started - the
+             * window's content would visibly detach from its frame
+             * and only snap back into place on the next resize (the
+             * only other code path that touches client_x/client_y).
+             * Cheap to recompute unconditionally here since w/h are
+             * unchanged - no need to special-case "did it actually
+             * move". */
+            int32_t cx, cy, cw, ch;
+            wm_decorate_bounds(win->x, win->y, win->w, win->h, &cx, &cy, &cw, &ch);
+            win->client_x = cx;
+            win->client_y = cy;
         } else {
             /* Resize the window (resize logic for 8 drag types) */
             int32_t new_w = g_wm.drag.start_ww;

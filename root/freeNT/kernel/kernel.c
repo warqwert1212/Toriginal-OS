@@ -10,6 +10,7 @@
 #include "keyboard.h"
 #include "panic.h"
 #include "fs.h"
+#include "string.h"
 #include "process.h"
 #include "shell.h"
 #include "installer.h"
@@ -54,6 +55,7 @@ static void early_print_hex(uint64_t v) {
 
 #define MB2_TAG_END       0u
 #define MB2_TAG_CMDLINE   1u
+#define MB2_TAG_MODULE     3u
 #define MB2_TAG_MMAP      6u
 #define MB2_TAG_FB        8u
 #define MB2_TAG_ACPI_OLD 14u
@@ -65,6 +67,27 @@ static uint32_t g_mb_rsdp_new_phys = 0;
 
 typedef struct { uint32_t type; uint32_t size; }
     __attribute__((packed)) mb2_tag_t;
+
+typedef struct { uint32_t type; uint32_t size;
+                 uint32_t mod_start; uint32_t mod_end;
+                 char     cmdline[]; }
+    __attribute__((packed)) mb2_tag_module_t;
+
+/* GRUB's `module2 /path/to/file.png /system/gui/wallpapers/file.png`
+ * passes the destination TRPFS path as the module's cmdline string -
+ * see grub.cfg. boot_assets_seed() (kernel.c, called once per boot
+ * from kernel_init) writes each module's raw bytes straight to that
+ * path, so wallpaper.c/cursor.c never need to know modules exist at
+ * all - they just find real files already sitting on TRPFS. */
+#define MB2_MAX_MODULES 16
+typedef struct {
+    uint32_t phys_start;
+    uint32_t phys_end;
+    char     dest_path[128];
+} mb2_module_entry_t;
+
+static mb2_module_entry_t g_mb_modules[MB2_MAX_MODULES];
+static int                g_mb_module_count = 0;
 
 typedef struct { uint32_t type; uint32_t size;
                  uint32_t entry_size; uint32_t entry_version; }
@@ -195,6 +218,31 @@ static void parse_multiboot(uint32_t mb_info_phys) {
                     early_print("[FB] Framebuffer tag present but not usable RGB mode - skipping\n");
                 }
             }
+        } else if (tag->type == MB2_TAG_MODULE) {
+            if (tag->size >= sizeof(mb2_tag_module_t) && g_mb_module_count < MB2_MAX_MODULES) {
+                mb2_tag_module_t *mod = (mb2_tag_module_t *)ptr;
+                const char *cmd = mod->cmdline;
+                const uint8_t *limit = ptr + tag->size;
+
+                mb2_module_entry_t *e = &g_mb_modules[g_mb_module_count];
+                e->phys_start = mod->mod_start;
+                e->phys_end   = mod->mod_end;
+
+                size_t n = 0;
+                while (n < sizeof(e->dest_path) - 1 &&
+                       (const uint8_t *)(cmd + n) < limit && cmd[n] != '\0') {
+                    e->dest_path[n] = cmd[n];
+                    n++;
+                }
+                e->dest_path[n] = '\0';
+
+                if (e->dest_path[0] == '/') {
+                    g_mb_module_count++;
+                    early_print("[MOD] Boot module -> ");
+                    early_print(e->dest_path);
+                    early_print("\n");
+                }
+            }
         } else if (tag->type == MB2_TAG_ACPI_OLD) {
 
             g_mb_rsdp_old_phys = (uint32_t)(uintptr_t)(ptr + 8);
@@ -211,6 +259,71 @@ static void parse_multiboot(uint32_t mb_info_phys) {
 }
 
 static volatile int kernel_initialized = 0;
+
+/* Writes every parsed multiboot module's raw bytes to the TRPFS path
+ * given by its cmdline (see parse_multiboot()'s MB2_TAG_MODULE case
+ * and grub.cfg's `module2 <iso-file> <dest-path>` lines). This is the
+ * ONLY place actual asset bytes (wallpapers, cursor images, whatever
+ * else ships this way later) get onto the filesystem - nothing is
+ * baked into the kernel binary as a C array. Re-runs every boot
+ * (idempotent O_TRUNC overwrite) so the disk always matches whatever
+ * the booted ISO actually shipped. Must run after fs_init() +
+ * installer_try_automount() have given us a mounted, writable TRPFS. */
+/* Non-static: also called directly by installer.c's installer_run_internal()
+ * right after a fresh install builds the filesystem, so boot-module
+ * assets (wallpapers, start menu images, cursor, ...) land as part of
+ * the install payload immediately - not only on the NEXT boot's
+ * automount path below. See installer.c's call site for why: without
+ * this, a fresh `install` would leave the desktop asset-less until a
+ * reboot, which is a real, avoidable rough edge. */
+void seed_boot_modules_to_fs(void) {
+    for (int i = 0; i < g_mb_module_count; i++) {
+        mb2_module_entry_t *m = &g_mb_modules[i];
+        if (m->phys_end <= m->phys_start) continue;
+
+        /* mkdir -p the destination's parent - modules can target any
+         * path, not just /system/gui/wallpapers/, so this can't
+         * assume a fixed directory the way wallpaper.c's own
+         * ensure_dir() does for its config file. */
+        char tmp[128];
+        size_t len = strlen(m->dest_path);
+        if (len == 0 || len >= sizeof(tmp)) continue;
+        memcpy(tmp, m->dest_path, len + 1);
+        for (size_t j = 1; j < len; j++) {
+            if (tmp[j] != '/') continue;
+            tmp[j] = '\0';
+            inode_t st;
+            if (fs_stat(tmp, &st) != 0) {
+                fs_mkdir(tmp, FILE_PERM_OWNER_R | FILE_PERM_OWNER_W | FILE_PERM_OWNER_X);
+            }
+            tmp[j] = '/';
+        }
+
+        fd_t fd = fs_open(m->dest_path, O_WRONLY | O_CREAT | O_TRUNC,
+                          FILE_PERM_OWNER_R | FILE_PERM_OWNER_W);
+        if (fd < 0) {
+            early_print("[MOD] Failed to open destination for boot module: ");
+            early_print(m->dest_path);
+            early_print("\n");
+            continue;
+        }
+
+        const uint8_t *src = (const uint8_t *)(uintptr_t)m->phys_start;
+        size_t total = (size_t)(m->phys_end - m->phys_start);
+        ssize_t written = fs_write(fd, src, total);
+        fs_close(fd);
+
+        if (written != (ssize_t)total) {
+            early_print("[MOD] Short write seeding boot module: ");
+            early_print(m->dest_path);
+            early_print("\n");
+        } else {
+            early_print("[MOD] Seeded ");
+            early_print(m->dest_path);
+            early_print("\n");
+        }
+    }
+}
 
 static void kernel_init(uint32_t mb_info_phys) {
     if (kernel_initialized) return;
@@ -297,6 +410,8 @@ static void kernel_init(uint32_t mb_info_phys) {
     if (installer_try_automount() == 0) {
         kprint("[7/8] Persistent filesystem mounted (data restored from disk)\n");
         vga_set_statusbar_enabled(1);
+
+        seed_boot_modules_to_fs();
 
         if (cursor_assets_init() == 0) {
             kprint("[7/8] Cursor assets loaded from /sys/gui/assets/\n");

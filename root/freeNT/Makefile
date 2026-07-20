@@ -61,12 +61,58 @@ $(BIN)/kernel.elf: $(OBJS) kernel/boot/kernel64.ld | $(BIN)
 	@x86_64-linux-gnu-readelf -h $@ | grep -E "Class|Machine|Entry"
 
 $(ISO_DIR)/boot/grub/grub.cfg: | $(ISO_DIR)/boot/grub
-	@printf 'set timeout=5\nset default=0\n\ninsmod vbe\ninsmod video_bochs\ninsmod video_cirrus\ninsmod efi_gop\ninsmod all_video\nset gfxpayload=keep\n\nmenuentry "toriginal_OS" {\n\tmultiboot2 /boot/kernel.elf\n\tboot\n}\n\nmenuentry "toriginal_OS (start in GUI)" {\n\tmultiboot2 /boot/kernel.elf gui\n\tboot\n}\n' > $@
+	@printf 'set timeout=5\nset default=0\n\ninsmod vbe\ninsmod video_bochs\ninsmod video_cirrus\ninsmod efi_gop\ninsmod all_video\nset gfxpayload=keep\n\nmenuentry "toriginal_OS" {\n\tmultiboot2 /boot/kernel.elf\n\tmodule2 /boot/assets/wallpapers/sky_blue.png /system/gui/wallpapers/sky_blue.png\n\tmodule2 /boot/assets/wallpapers/pinetree.png /system/gui/wallpapers/pinetree.png\n\tmodule2 /boot/assets/startmenu/orb.png /system/gui/startmenu/orb.png\n\tmodule2 /boot/assets/startmenu/orb_hover.png /system/gui/startmenu/orb_hover.png\n\tmodule2 /boot/assets/startmenu/taskbar.png /system/gui/startmenu/taskbar.png\n\tmodule2 /boot/assets/startmenu/panel.png /system/gui/startmenu/panel.png\n\tmodule2 /boot/assets/startmenu/programs.png /system/gui/startmenu/programs.png\n\tmodule2 /boot/assets/startmenu/power.png /system/gui/startmenu/power.png\n\tmodule2 /boot/assets/cursor/cursor_arrow.png /sys/gui/assets/cursor_arrow.png\n\tmodule2 /boot/assets/cursor/cursor_hand.png /sys/gui/assets/cursor_hand.png\n\tboot\n}\n\nmenuentry "toriginal_OS (start in GUI)" {\n\tmultiboot2 /boot/kernel.elf gui\n\tmodule2 /boot/assets/wallpapers/sky_blue.png /system/gui/wallpapers/sky_blue.png\n\tmodule2 /boot/assets/wallpapers/pinetree.png /system/gui/wallpapers/pinetree.png\n\tmodule2 /boot/assets/startmenu/orb.png /system/gui/startmenu/orb.png\n\tmodule2 /boot/assets/startmenu/orb_hover.png /system/gui/startmenu/orb_hover.png\n\tmodule2 /boot/assets/startmenu/taskbar.png /system/gui/startmenu/taskbar.png\n\tmodule2 /boot/assets/startmenu/panel.png /system/gui/startmenu/panel.png\n\tmodule2 /boot/assets/startmenu/programs.png /system/gui/startmenu/programs.png\n\tmodule2 /boot/assets/startmenu/power.png /system/gui/startmenu/power.png\n\tmodule2 /boot/assets/cursor/cursor_arrow.png /sys/gui/assets/cursor_arrow.png\n\tmodule2 /boot/assets/cursor/cursor_hand.png /sys/gui/assets/cursor_hand.png\n\tboot\n}\n' > $@
+
+# Wallpaper PNGs shipped as real multiboot modules (see kernel.c's
+# seed_boot_modules_to_fs()) - not embedded in the ELF. Source names
+# have spaces/special chars that are awkward as GRUB module cmdlines,
+# so they're copied under sanitized names here; the sanitized name is
+# cosmetic only, the destination TRPFS path in grub.cfg above is what
+# actually matters to wallpaper.c.
+ASSET_WALLPAPERS_SRC := ../sys/gui/assets/desktop/wallpapers
+ASSET_STARTMENU_SRC  := ../sys/gui/assets/desktop/startmenu
+ASSET_CURSOR_SRC     := ../sys/gui/assets/desktop/mice
+
+$(ISO_DIR)/boot/assets/wallpapers/sky_blue.png: | $(ISO_DIR)/boot/grub
+	mkdir -p $(dir $@)
+	cp "$(ASSET_WALLPAPERS_SRC)/sky blu.png" $@
+
+$(ISO_DIR)/boot/assets/wallpapers/pinetree.png: | $(ISO_DIR)/boot/grub
+	mkdir -p $(dir $@)
+	cp "$(ASSET_WALLPAPERS_SRC)/unnamedpinetree^_^.png" $@
+
+# Start menu assets - already sanely named at their repo source, so
+# these are a straight copy, no renaming needed like the wallpapers
+# above.
+$(ISO_DIR)/boot/assets/startmenu/%.png: | $(ISO_DIR)/boot/grub
+	mkdir -p $(dir $@)
+	cp "$(ASSET_STARTMENU_SRC)/$*.png" $@
+
+# Cursor images already exist in the repo (root/sys/gui/assets/) but,
+# same gap as the wallpapers before this change, were never actually
+# wired onto the boot media - cursor.c has been reading real file
+# paths that nothing ever populated. "cursor_arrow" is the normal
+# pointer, "cursor_hand" is the click/interactive state - matching
+# cursor.h's CURSOR_ASSET_PATH_ARROW / CURSOR_ASSET_PATH_HAND.
+$(ISO_DIR)/boot/assets/cursor/cursor_arrow.png: | $(ISO_DIR)/boot/grub
+	mkdir -p $(dir $@)
+	cp "$(ASSET_CURSOR_SRC)/toriginal cursor.png" $@
+
+$(ISO_DIR)/boot/assets/cursor/cursor_hand.png: | $(ISO_DIR)/boot/grub
+	mkdir -p $(dir $@)
+	cp "$(ASSET_CURSOR_SRC)/toriginal cursor click.png" $@
 
 $(ISO_DIR)/boot/kernel.elf: $(BIN)/kernel.elf | $(ISO_DIR)/boot/grub
 	cp $< $@
 
-toriginal_OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg
+STARTMENU_ASSETS := orb orb_hover taskbar panel programs power
+
+toriginal_OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg \
+                   $(ISO_DIR)/boot/assets/wallpapers/sky_blue.png \
+                   $(ISO_DIR)/boot/assets/wallpapers/pinetree.png \
+                   $(ISO_DIR)/boot/assets/cursor/cursor_arrow.png \
+                   $(ISO_DIR)/boot/assets/cursor/cursor_hand.png \
+                   $(foreach a,$(STARTMENU_ASSETS),$(ISO_DIR)/boot/assets/startmenu/$(a).png)
 	$(MKISO) -o $@ $(ISO_DIR) -d /usr/lib/grub/i386-pc
 
 iso: toriginal_OS.iso

@@ -40,6 +40,8 @@
 #include "string.h"
 #include "wm.h"
 #include "desktop_menu.h"
+#include "wallpaper.h"
+#include "startmenu.h"
 #include "process.h"   /* process_create/process_start - launching terminal.trp/settings.trp for real */
 #include "loader.h"     /* loader_load_executable */
 #include "fs.h"         /* fs_stat - check the file actually exists before trying to run it */
@@ -285,6 +287,16 @@ static void action_settings(void *ctx) {
     launch_trp("/settings.trp");
 }
 
+static void action_next_wallpaper(void *ctx) {
+    (void)ctx;
+    wallpaper_next();
+    if (wallpaper_is_loaded()) {
+        set_status_message("wallpaper changed", g_now_ms_for_menu_actions);
+    } else {
+        set_status_message("no wallpapers found in " WALLPAPER_DIR, g_now_ms_for_menu_actions);
+    }
+}
+
 static void action_close_window(void *ctx) {
     wm_window_t *win = (wm_window_t *)ctx;
     if (win) wm_destroy_window(win->id);
@@ -313,6 +325,9 @@ void desktop_run(void) {
     uint32_t w = g_framebuffer.width;
     uint32_t h = g_framebuffer.height;
 
+    wallpaper_init(); /* loads whatever WALLPAPER_CFG_PATH points at, if anything - purely file-driven, see wallpaper.c */
+    startmenu_init(); /* loads orb/taskbar/panel/programs/power PNGs if installed - see startmenu.c */
+
     wm_init((int32_t)w, (int32_t)h);
     /* Maximized windows fill the screen minus the taskbar - not the
      * whole screen, or "maximize" would draw a window on top of (and
@@ -338,6 +353,15 @@ void desktop_run(void) {
     menu_init(&empty_space_menu);
     menu_add_item(&empty_space_menu, "New Terminal", action_new_terminal);
     menu_add_item(&empty_space_menu, "Settings", action_settings);
+    menu_add_item(&empty_space_menu, "Next Wallpaper", action_next_wallpaper);
+
+    /* Start menu's program list reuses the exact same actions as the
+     * right-click menu - two entry points to the same real launch
+     * logic (launch_trp()), not two separate implementations that
+     * could drift apart. */
+    startmenu_add_program("New Terminal", action_new_terminal, NULL);
+    startmenu_add_program("Settings", action_settings, NULL);
+    startmenu_add_program("Next Wallpaper", action_next_wallpaper, NULL);
 
     desktop_menu_t window_menu;
     menu_init(&window_menu);
@@ -374,6 +398,25 @@ void desktop_run(void) {
         int left_pressed  = st.left_button  && !last_left;
         int right_pressed = st.right_button && !last_right;
 
+        int startmenu_consumed = 0;
+        if (left_pressed) {
+            if (startmenu_orb_hit(h, TASKBAR_H, st.x, st.y)) {
+                startmenu_toggle();
+                startmenu_consumed = 1;
+            } else if (startmenu_is_open()) {
+                /* startmenu_handle_click() itself closes the menu on
+                 * a click outside the panel and returns 0 in that
+                 * case - that click should still fall through to the
+                 * normal window/chrome handling below (matching real
+                 * desktops: clicking elsewhere both dismisses the
+                 * start menu AND acts on whatever was actually
+                 * clicked), so only a genuine in-panel hit is treated
+                 * as consumed here. */
+                startmenu_consumed = startmenu_handle_click(h, TASKBAR_H, st.x, st.y);
+            }
+        }
+
+        if (!startmenu_consumed) {
         if (active_menu && active_menu->open && left_pressed) {
             menu_handle_click(active_menu, st.x, st.y, active_menu_target);
             menu_close(active_menu);
@@ -445,6 +488,7 @@ void desktop_run(void) {
         } else if (st.left_button) {
             wm_handle_mouse_move(st.x, st.y);
         }
+        } /* !startmenu_consumed */
 
         if (!st.left_button && last_left) {
             wm_handle_mouse_up(st.x, st.y, 0);
@@ -454,7 +498,11 @@ void desktop_run(void) {
         last_right = st.right_button;
 
         if (running && (now - last_frame >= 33 || last_frame == 0)) {
-            graphics_clear_screen(graphics_rgb(24, 58, 82));
+            /* Real file-driven wallpaper if one is loaded (see
+             * wallpaper.c); the flat navy fill is only the fallback
+             * for "nothing installed at WALLPAPER_DIR yet", not the
+             * default look. */
+            wallpaper_draw(w, h, graphics_rgb(24, 58, 82));
 
             wm_window_t *list; int count;
             wm_get_window_list(&list, &count);
@@ -472,18 +520,27 @@ void desktop_run(void) {
             color_t accent  = graphics_rgb(90, 190, 210);
             color_t white   = GRAPHICS_COLOR_WHITE;
 
-            graphics_fill_rect(0, h - TASKBAR_H, w, TASKBAR_H, taskbar);
+            /* Image-backed taskbar strip (see startmenu.c) - width
+             * always matches the current resolution, height always
+             * matches TASKBAR_H, falls back to the flat `taskbar`
+             * color if taskbar.png isn't installed yet. */
+            startmenu_draw_taskbar_bg(w, h, TASKBAR_H, taskbar);
             graphics_draw_line(0, h - TASKBAR_H, w - 1, h - TASKBAR_H, accent);
+
+            startmenu_draw_orb(h, TASKBAR_H, st.x, st.y);
 
             /* Taskbar left side: either the status message from a
              * recent menu action (launched/not-found/etc.), or the
              * default hint text - never both, so a real result isn't
-             * immediately buried under static help text. */
+             * immediately buried under static help text. Starts after
+             * the orb button (TASKBAR_H + 12px reserved) so the text
+             * never overlaps it. */
+            uint32_t hint_x = TASKBAR_H + 12;
             const char *left_text = "Toriginal OS - right-click for menu, Esc to exit";
             if (now < g_status_msg_until_ms) {
                 left_text = g_status_msg;
             }
-            draw_string(12, h - TASKBAR_H + (TASKBAR_H - FONT8X16_HEIGHT) / 2,
+            draw_string(hint_x, h - TASKBAR_H + (TASKBAR_H - FONT8X16_HEIGHT) / 2,
                         left_text, white, taskbar, 1, 1);
 
             /* Minimized windows get a small clickable label in the
@@ -515,6 +572,8 @@ void desktop_run(void) {
             draw_two_digit(clock_x + 6 * FONT8X16_WIDTH, clock_y, t.second, white, taskbar);
 
             if (active_menu) menu_draw(active_menu);
+
+            startmenu_draw_panel(h, TASKBAR_H);
 
             cursor_draw(st.x, st.y, st.left_button ? CURSOR_HAND : CURSOR_ARROW,
                         GRAPHICS_COLOR_WHITE);
