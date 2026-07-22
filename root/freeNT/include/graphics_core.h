@@ -38,6 +38,17 @@ extern framebuffer_t g_framebuffer;
 
 /* Initialization */
 int graphics_init(void);
+/* Copies the off-screen back buffer (what every draw call above
+ * actually writes to) onto the real hardware framebuffer in one bulk
+ * copy. Call this exactly once per frame, after all drawing for that
+ * frame is done - see desktop.c's main loop. Without this, every
+ * individual fill_rect/blit/pixel write was visible on the real
+ * screen the instant it happened, which is what caused the window/
+ * cursor flicker: the display could be scanned out mid-redraw, showing
+ * a half-drawn frame. No-op if graphics_init() couldn't allocate a
+ * back buffer (falls back to direct drawing - flickery but functional
+ * rather than non-functional). */
+void graphics_present(void);
 int graphics_set_mode(graphics_mode_t mode, uint32_t width, uint32_t height);
 int graphics_is_available(void);
 

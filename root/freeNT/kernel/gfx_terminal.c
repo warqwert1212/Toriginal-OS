@@ -532,6 +532,15 @@ void gterm_tick(void) {
     g_last_mouse_y = st.y;
     g_last_mouse_shape = shape;
     g_have_last_mouse = 1;
+
+    /* gterm_tick() runs on every keyboard-poll iteration in the plain
+     * shell (see shell.c's gterm_poll_tick() call) - entirely outside
+     * desktop.c's per-frame graphics_present() call, which only
+     * exists while desktop_run() owns the loop. Without this, mouse
+     * selection highlighting and the blinking text cursor would draw
+     * into the back buffer and never actually appear on screen
+     * outside the desktop. */
+    graphics_present();
 }
 
 void gterm_clear_selection(void) {

@@ -4,6 +4,7 @@
 
 #include "vga.h"
 #include "gfx_terminal.h"
+#include "graphics_core.h"
 
 #define VGA_WIDTH   80
 #define VGA_HEIGHT  25
@@ -120,6 +121,7 @@ void vga_draw_statusbar(const char *text)
      * must delegate rather than draw into memory nobody scans out. */
     if (gterm_is_active()) {
         gterm_draw_statusbar(text);
+        graphics_present();
         return;
     }
 
@@ -167,6 +169,7 @@ void vga_clear(void)
 {
     if (gterm_is_active()) {
         gterm_clear();
+        graphics_present();
         return;
     }
 
@@ -260,6 +263,19 @@ void vga_write(const char* str)
     if (!str) return;
     while (*str)
         vga_putc(*str++);
+
+    /* graphics_core.c now draws into an off-screen back buffer (see
+     * graphics_present()'s header comment) so windows/cursor don't
+     * flicker in the desktop's per-frame redraw loop - but the boot
+     * log and shell prompt run through this same gterm_is_active()
+     * path (see vga_putc() above) OUTSIDE that loop, so without this
+     * they'd draw into the back buffer and never actually reach the
+     * screen. One flush per string keeps text appearing exactly as
+     * before - desktop.c still does its own per-frame flush on top of
+     * this, so this line is a no-op cost-wise while the desktop is
+     * running (same buffer, redundant copy is cheap compared to a
+     * frame's worth of drawing already done). */
+    if (gterm_is_active()) graphics_present();
 }
 
 static const char vga_hex_digits[] = "0123456789ABCDEF";

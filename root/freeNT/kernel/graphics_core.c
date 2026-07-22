@@ -11,10 +11,19 @@
 
 #include "graphics_core.h"
 #include "kernel.h"
+#include "heap.h"
+#include "string.h"
 
 framebuffer_t g_framebuffer;
 
 static int g_gfx_ready = 0;
+/* The real, hardware-scanned-out framebuffer address - kept separate
+ * from g_framebuffer.framebuffer once a back buffer is allocated (see
+ * graphics_init()), since every existing draw primitive in this file
+ * reads/writes g_framebuffer.framebuffer directly and none of them
+ * needed to change for double buffering to work - they just end up
+ * drawing to the back buffer instead of the screen, invisibly. */
+static uint8_t *g_hw_framebuffer = NULL;
 
 int graphics_is_available(void) {
     return g_gfx_ready;
@@ -55,12 +64,38 @@ int graphics_init(void) {
     g_framebuffer.height = height;
     g_framebuffer.depth  = bpp;
     g_framebuffer.pitch  = pitch;
-    g_framebuffer.framebuffer = (uint8_t *)(uintptr_t)addr;
+    g_hw_framebuffer = (uint8_t *)(uintptr_t)addr;
     g_framebuffer.mode = (bpp == 16) ? GRAPHICS_MODE_VESA_16BIT
                                      : GRAPHICS_MODE_VESA_32BIT;
 
+    /* Back buffer: every draw call writes here, not to the real
+     * hardware framebuffer - graphics_present() (called once per
+     * frame by desktop.c) is the only thing that ever touches
+     * g_hw_framebuffer, in one bulk copy. Without this, the flicker
+     * seen in windows/cursor was every single fill_rect/blit call
+     * being visible on screen the instant it ran, so a frame could be
+     * scanned out to the display half-drawn. */
+    size_t fb_bytes = (size_t)pitch * height;
+    uint8_t *shadow = (uint8_t *)kmalloc(fb_bytes);
+    if (shadow) {
+        memset(shadow, 0, fb_bytes);
+        g_framebuffer.framebuffer = shadow;
+    } else {
+        /* Couldn't get a back buffer - draw straight to hardware
+         * instead of refusing to boot graphics at all. Flickery, but
+         * a working flickery desktop beats none. */
+        g_framebuffer.framebuffer = g_hw_framebuffer;
+    }
+
     g_gfx_ready = 1;
     return 0;
+}
+
+void graphics_present(void) {
+    if (!g_gfx_ready || !g_hw_framebuffer) return;
+    if (g_framebuffer.framebuffer == g_hw_framebuffer) return; /* no back buffer active - already drawing direct */
+    size_t fb_bytes = (size_t)g_framebuffer.pitch * g_framebuffer.height;
+    memcpy(g_hw_framebuffer, g_framebuffer.framebuffer, fb_bytes);
 }
 
 int graphics_set_mode(graphics_mode_t mode, uint32_t width, uint32_t height) {

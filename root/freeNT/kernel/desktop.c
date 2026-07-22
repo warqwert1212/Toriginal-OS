@@ -1,31 +1,4 @@
-/* desktop.c - Real windowed desktop environment.
- *
- * This REPLACES the previous desktop_run() (a dead-end icon screen
- * where both icons just quit back to the shell - see git history /
- * the .bak snapshots for that version). This version is backed by a
- * genuine window manager (wm.h - ported from the SDL-hosted
- * prototype at root/sys/gui/wm/, see wm.h's header comment) and a
- * right-click context menu (desktop_menu.h - ported from
- * root/sys/gui/desktop_env/desktop_menu.c), wired together with a
- * simple compositor that lives right here in this file rather than
- * as a separate compositor.c: window chrome drawing (titlebar,
- * borders, close button) plus the actual per-frame blit of each
- * window's client-area pixels onto the real screen framebuffer via
- * graphics_2d.h.
- *
- * Deliberately NOT ported: the SDL prototype's compositor.c Aero-
- * glass blur/tint effect. That's a real, separate rendering feature
- * (Gaussian blur of the framebuffer region behind a window frame)
- * that doesn't exist anywhere in this bare-metal kernel today and
- * would be its own substantial piece of work - flat-colored chrome
- * here is the honest "simple, but it works" version, not a
- * placeholder secretly standing in for glass that was actually
- * built.
- *
- * Runs its own event loop exactly like the previous desktop_run()
- * did: polls keyboard + PS/2 mouse directly, throttled to ~30fps via
- * pit_get_milliseconds(), restores the text terminal on exit.
- */
+
 #include "desktop.h"
 #include "graphics_core.h"
 #include "graphics_2d.h"
@@ -57,6 +30,15 @@
  * taskbar for a couple seconds, then cleared automatically. */
 static char     g_status_msg[128] = {0};
 static uint64_t g_status_msg_until_ms = 0;
+
+/* action_change_wallpaper() (below) can't reach desktop_run()'s local
+ * `active_menu`/`wallpaper_picker_menu` directly - menu actions are
+ * plain function pointers with no closure over the caller's locals.
+ * This flag is the handoff: the action sets it, the main loop (which
+ * DOES own those locals) checks it once per iteration and actually
+ * builds+opens the picker there. Same reasoning as
+ * g_now_ms_for_menu_actions below. */
+static int g_open_wallpaper_picker = 0;
 
 static void set_status_message(const char *msg, uint64_t now_ms) {
     strncpy(g_status_msg, msg, sizeof(g_status_msg) - 1);
@@ -97,18 +79,7 @@ static int point_in_rect(int32_t px, int32_t py, int32_t x, int32_t y,
     return px >= x && px < x + w && py >= y && py < y + h;
 }
 
-/* ── Window content demo ─────────────────────────────────────────────
- * wm_create_window() gives every new window a blank (transparent
- * black) client-area buffer - something has to actually paint into
- * it or every window looks like a hole in the desktop. This kernel
- * doesn't yet have a real windowed app running inside one of these
- * (see term.c's header comment: the real terminal app runs full-
- * screen today, not inside a WM window, since gterm is a single
- * global grid, not a multi-instance one) - so each demo window gets
- * a simple, distinct solid-color fill plus its window ID as text,
- * which is enough to prove multiple independently-movable, resizable,
- * closable windows genuinely work, without pretending a real app is
- * running inside them yet. */
+
 static void paint_demo_window_content(wm_window_t *win) {
     color_t fill = graphics_rgb(
         (uint8_t)(40 + (win->id * 47) % 160),
@@ -122,12 +93,6 @@ static void paint_demo_window_content(wm_window_t *win) {
     }
 }
 
-/* Titlebar button layout: close is rightmost, then maximize, then
- * minimize, matching the common left-to-right reading order of
- * "least destructive to most destructive" being closest to the
- * pointer's natural rest position - this is a convention choice, not
- * a technical requirement, but it's the one most desktops settled on
- * and there's no reason to invent a different one here. */
 static void chrome_button_rects(wm_window_t *win, gfx2d_rect_t *out_close,
                                 gfx2d_rect_t *out_maximize, gfx2d_rect_t *out_minimize) {
     int32_t y = win->y + (WM_TITLEBAR_HEIGHT - CHROME_BTN_SIZE) / 2;
@@ -287,13 +252,17 @@ static void action_settings(void *ctx) {
     launch_trp("/settings.trp");
 }
 
-static void action_next_wallpaper(void *ctx) {
+static void action_change_wallpaper(void *ctx) {
     (void)ctx;
-    wallpaper_next();
-    if (wallpaper_is_loaded()) {
+    g_open_wallpaper_picker = 1; /* handled in desktop_run()'s loop - see the flag's declaration above */
+}
+
+static void action_pick_wallpaper(void *ctx) {
+    const char *path = (const char *)ctx;
+    if (wallpaper_set_path(path)) {
         set_status_message("wallpaper changed", g_now_ms_for_menu_actions);
     } else {
-        set_status_message("no wallpapers found in " WALLPAPER_DIR, g_now_ms_for_menu_actions);
+        set_status_message("couldn't load that wallpaper", g_now_ms_for_menu_actions);
     }
 }
 
@@ -326,7 +295,8 @@ void desktop_run(void) {
     uint32_t h = g_framebuffer.height;
 
     wallpaper_init(); /* loads whatever WALLPAPER_CFG_PATH points at, if anything - purely file-driven, see wallpaper.c */
-    startmenu_init(); /* loads orb/taskbar/panel/programs/power PNGs if installed - see startmenu.c */
+    startmenu_init(); /* loads orb/taskbar/menu_bg/programs_block/shortcut/power PNGs if installed - see startmenu.c */
+    startmenu_set_launcher(launch_trp);
 
     wm_init((int32_t)w, (int32_t)h);
     /* Maximized windows fill the screen minus the taskbar - not the
@@ -353,7 +323,7 @@ void desktop_run(void) {
     menu_init(&empty_space_menu);
     menu_add_item(&empty_space_menu, "New Terminal", action_new_terminal);
     menu_add_item(&empty_space_menu, "Settings", action_settings);
-    menu_add_item(&empty_space_menu, "Next Wallpaper", action_next_wallpaper);
+    menu_add_item(&empty_space_menu, "Change Wallpaper", action_change_wallpaper);
 
     /* Start menu's program list reuses the exact same actions as the
      * right-click menu - two entry points to the same real launch
@@ -361,13 +331,22 @@ void desktop_run(void) {
      * could drift apart. */
     startmenu_add_program("New Terminal", action_new_terminal, NULL);
     startmenu_add_program("Settings", action_settings, NULL);
-    startmenu_add_program("Next Wallpaper", action_next_wallpaper, NULL);
+    startmenu_add_program("Change Wallpaper", action_change_wallpaper, NULL);
 
     desktop_menu_t window_menu;
     menu_init(&window_menu);
     menu_add_item(&window_menu, "Minimize", action_minimize_window);
     menu_add_item(&window_menu, "Maximize", action_maximize_window);
     menu_add_item(&window_menu, "Close Window", action_close_window);
+
+    /* Built fresh every time it's opened (see the g_open_wallpaper_picker
+     * handling below) by scanning WALLPAPER_DIR - never a fixed list.
+     * g_wallpaper_menu_paths holds the full path for each row since
+     * menu_item_t.label is display-only; item_ctx points into this
+     * array so action_pick_wallpaper() gets the real path to load. */
+    desktop_menu_t wallpaper_picker_menu;
+    menu_init(&wallpaper_picker_menu);
+    char g_wallpaper_menu_paths[MENU_MAX_ITEMS][256];
 
     /* Which menu is open, and (for window_menu specifically) which
      * window it targets - menu_handle_click()'s ctx argument is
@@ -490,6 +469,39 @@ void desktop_run(void) {
         }
         } /* !startmenu_consumed */
 
+        /* Checked unconditionally (not nested inside the branch
+         * above) because action_change_wallpaper() can be triggered
+         * from either the right-click menu OR the start menu's
+         * program list - two separate click-handling paths above -
+         * and this needs to fire regardless of which one set it. */
+        if (g_open_wallpaper_picker) {
+            g_open_wallpaper_picker = 0;
+
+            char names[MENU_MAX_ITEMS][64];
+            int count = wallpaper_list(names, MENU_MAX_ITEMS);
+
+            menu_init(&wallpaper_picker_menu);
+            if (count == 0) {
+                menu_add_item(&wallpaper_picker_menu,
+                              "(no wallpapers in " WALLPAPER_DIR ")", NULL);
+            } else {
+                for (int i = 0; i < count; i++) {
+                    size_t dl = strlen(WALLPAPER_DIR);
+                    memcpy(g_wallpaper_menu_paths[i], WALLPAPER_DIR, dl);
+                    g_wallpaper_menu_paths[i][dl] = '/';
+                    strncpy(g_wallpaper_menu_paths[i] + dl + 1, names[i],
+                            sizeof(g_wallpaper_menu_paths[i]) - dl - 2);
+                    g_wallpaper_menu_paths[i][sizeof(g_wallpaper_menu_paths[i]) - 1] = '\0';
+
+                    menu_add_item_ctx(&wallpaper_picker_menu, names[i],
+                                      action_pick_wallpaper, g_wallpaper_menu_paths[i]);
+                }
+            }
+            menu_open_at(&wallpaper_picker_menu, st.x, st.y);
+            active_menu = &wallpaper_picker_menu;
+            active_menu_target = NULL;
+        }
+
         if (!st.left_button && last_left) {
             wm_handle_mouse_up(st.x, st.y, 0);
         }
@@ -571,12 +583,21 @@ void desktop_run(void) {
             draw_string(clock_x + 5 * FONT8X16_WIDTH, clock_y, ":", white, taskbar, 1, 1);
             draw_two_digit(clock_x + 6 * FONT8X16_WIDTH, clock_y, t.second, white, taskbar);
 
-            if (active_menu) menu_draw(active_menu);
+            if (active_menu) menu_draw(active_menu, st.x, st.y);
 
             startmenu_draw_panel(h, TASKBAR_H);
 
             cursor_draw(st.x, st.y, st.left_button ? CURSOR_HAND : CURSOR_ARROW,
                         GRAPHICS_COLOR_WHITE);
+
+            /* The actual flicker fix: every draw call above wrote to
+             * an off-screen back buffer (see graphics_core.c's
+             * graphics_init()), not the real screen - this is the
+             * ONE place per frame anything becomes visible, in a
+             * single bulk copy instead of dozens of individual
+             * fill_rect/blit calls each being scanned out mid-draw. */
+            graphics_present();
+
             last_frame = now;
         }
 

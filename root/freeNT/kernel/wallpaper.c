@@ -188,6 +188,20 @@ static int collect_cb(const char *name, uint8_t name_len, uint8_t type, void *ct
     return 0;
 }
 
+int wallpaper_list(char out_names[][64], int max_entries) {
+    if (!out_names || max_entries <= 0) return 0;
+
+    wp_listing_t listing = {0};
+    if (fs_readdir(WALLPAPER_DIR, collect_cb, &listing) != 0) return 0;
+
+    int n = listing.count < max_entries ? listing.count : max_entries;
+    for (int i = 0; i < n; i++) {
+        strncpy(out_names[i], listing.names[i], 63);
+        out_names[i][63] = '\0';
+    }
+    return n;
+}
+
 void wallpaper_next(void) {
     wp_listing_t listing = {0};
     if (fs_readdir(WALLPAPER_DIR, collect_cb, &listing) != 0) return;

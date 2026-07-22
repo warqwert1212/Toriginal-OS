@@ -46,7 +46,16 @@ void wallpaper_next(void);
  * fills the screen with `fallback_color` if no wallpaper is loaded. */
 void wallpaper_draw(uint32_t screen_w, uint32_t screen_h, color_t fallback_color);
 
-/* 1 if a wallpaper is currently decoded and ready to draw. */
+/* Scans WALLPAPER_DIR for *.png files and writes up to `max_entries`
+ * filenames (not full paths) into `out_names`. Returns the count
+ * actually found (0 if the directory doesn't exist or has no PNGs).
+ * This is what backs the right-click "Change Wallpaper" picker in
+ * desktop.c - the picker's contents are exactly and only whatever's
+ * really sitting in this directory on disk, scanned fresh every time
+ * it's opened. No hardcoded list anywhere. */
+int wallpaper_list(char out_names[][64], int max_entries);
+
+/* True if wallpaper_set_path() has ever succeeded this session. */
 int wallpaper_is_loaded(void);
 
 #endif /* WALLPAPER_H */
