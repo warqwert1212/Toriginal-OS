@@ -112,6 +112,22 @@ void vga_set_statusbar_enabled(int enabled)
     }
 }
 
+/* Was hardcoded (VGA_BLUE << 4) | VGA_WHITE; now settable via
+ * vga_set_statusbar_color() (called from settings.c). Default values
+ * match the original hardcoded ones so an install that never touches
+ * settings looks the same as it always did. */
+static vga_color_t g_statusbar_fg = VGA_WHITE;
+static vga_color_t g_statusbar_bg = VGA_BLUE;
+
+void vga_set_statusbar_color(vga_color_t fg, vga_color_t bg)
+{
+    g_statusbar_fg = fg;
+    g_statusbar_bg = bg;
+    if (gterm_is_active()) {
+        gterm_set_statusbar_color((uint8_t)fg, (uint8_t)bg);
+    }
+}
+
 void vga_draw_statusbar(const char *text)
 {
     if (!text) text = "";
@@ -125,7 +141,7 @@ void vga_draw_statusbar(const char *text)
         return;
     }
 
-    uint8_t bar_color = (uint8_t)((VGA_BLUE << 4) | VGA_WHITE);
+    uint8_t bar_color = (uint8_t)(((uint8_t)g_statusbar_bg << 4) | (uint8_t)g_statusbar_fg);
     uint16_t saved_color = terminal_color;
     terminal_color = bar_color;
 

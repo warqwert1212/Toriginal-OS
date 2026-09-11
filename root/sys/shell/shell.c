@@ -20,6 +20,9 @@
 #include "sha256.h"
 #include "config.h"
 #include "desktop.h"
+#include "syscfg.h"
+#include "graphics_core.h"
+#include "vbe_dispi.h"
 
 #define OS_NAME    "Toriginal OS"
 #define OS_VERSION "1.2"
@@ -37,7 +40,109 @@
 static char g_cwd[256] = "/";
 static char g_username[32] = "user";
 static int  g_username_loaded = 0;
-static char g_resolution[16] = "720p";
+
+/* ── Real, saveable display settings ─────────────────────────────────────
+ * Backed by /toriginal_os/config.ini via syscfg.h. g_resolution here is
+ * the *label* for whatever's currently active (e.g. "1024x768"), not a
+ * fake cosmetic string - it always matches g_framebuffer's real
+ * width/height once graphics is up, because cmd_settings() only updates
+ * it after graphics_set_mode() reports success. */
+static char g_resolution[16] = "1024x768";
+
+typedef struct { const char *name; vga_color_t value; } named_color_t;
+static const named_color_t COLOR_NAMES[] = {
+    { "black",       VGA_BLACK },
+    { "blue",        VGA_BLUE },
+    { "green",       VGA_GREEN },
+    { "cyan",        VGA_CYAN },
+    { "red",         VGA_RED },
+    { "magenta",     VGA_MAGENTA },
+    { "brown",       VGA_BROWN },
+    { "lightgrey",   VGA_LIGHT_GREY },
+    { "lightgray",   VGA_LIGHT_GREY },
+    { "darkgrey",    VGA_DARK_GREY },
+    { "darkgray",    VGA_DARK_GREY },
+    { "lightblue",   VGA_LIGHT_BLUE },
+    { "lightgreen",  VGA_LIGHT_GREEN },
+    { "lightcyan",   VGA_LIGHT_CYAN },
+    { "lightred",    VGA_LIGHT_RED },
+    { "pink",        VGA_LIGHT_RED },
+    { "lightmagenta",VGA_LIGHT_MAGENTA },
+    { "yellow",      VGA_YELLOW },
+    { "white",       VGA_WHITE },
+};
+#define COLOR_NAME_COUNT (sizeof(COLOR_NAMES) / sizeof(COLOR_NAMES[0]))
+
+/* Parses either a color name ("cyan") or a raw 0-15 VGA index ("3") -
+ * both are reasonable things to type, and this codebase's palette is
+ * always exactly the 16-entry VGA set (see vga.h), so a plain numeric
+ * index is unambiguous and worth supporting for anyone who already
+ * knows the standard VGA color table. Returns 1 and fills *out on
+ * success, 0 if arg matches neither form. */
+static int parse_color(const char *arg, vga_color_t *out) {
+    if (!arg || !arg[0]) return 0;
+
+    /* Numeric form: exactly digits, 0-15. */
+    int is_numeric = 1;
+    for (const char *p = arg; *p; p++) {
+        if (*p < '0' || *p > '9') { is_numeric = 0; break; }
+    }
+    if (is_numeric) {
+        int v = 0;
+        for (const char *p = arg; *p; p++) v = v * 10 + (*p - '0');
+        if (v >= 0 && v <= 15) { *out = (vga_color_t)v; return 1; }
+        return 0;
+    }
+
+    for (unsigned i = 0; i < COLOR_NAME_COUNT; i++) {
+        if (strcmp(arg, COLOR_NAMES[i].name) == 0) {
+            *out = COLOR_NAMES[i].value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const char *color_name(vga_color_t c) {
+    for (unsigned i = 0; i < COLOR_NAME_COUNT; i++) {
+        if (COLOR_NAMES[i].value == c) return COLOR_NAMES[i].name;
+    }
+    return "unknown";
+}
+
+/* Applies (from config.ini) the text/background/status-bar colors
+ * saved by a previous 'settings' run. Safe to call every boot even on
+ * a fresh install with no saved colors yet - syscfg_get_or() falls
+ * back to this codebase's original hardcoded defaults (white text,
+ * black background, white-on-blue status bar), so a never-configured
+ * system looks exactly like it always did. Called once from
+ * kernel_os_shell() at startup (kernel/shell.c) - color changes made
+ * afterward via 'settings' apply live and re-save immediately, they
+ * don't need a second call to this. */
+void sys_shell_apply_saved_display_settings(void) {
+    if (!trpfs_is_mounted()) return;
+
+    char buf[8];
+    vga_color_t fg, bg, sfg, sbg;
+
+    syscfg_get_or("text_color", buf, sizeof(buf), "7"); /* VGA_LIGHT_GREY */
+    if (!parse_color(buf, &fg)) fg = VGA_LIGHT_GREY;
+    syscfg_get_or("bg_color", buf, sizeof(buf), "0"); /* VGA_BLACK */
+    if (!parse_color(buf, &bg)) bg = VGA_BLACK;
+    vga_set_color(fg, bg);
+
+    syscfg_get_or("statusbar_color", buf, sizeof(buf), "15"); /* VGA_WHITE fg */
+    if (!parse_color(buf, &sfg)) sfg = VGA_WHITE;
+    sbg = VGA_BLUE; /* status bar background stays fixed; only its
+                      * foreground/text color is user-configurable for
+                      * now, matching what was actually asked for
+                      * ("time bar colour") without also risking an
+                      * unreadable bar from two independently-chosen
+                      * colors landing on the same value. */
+    vga_set_statusbar_color(sfg, sbg);
+
+    syscfg_get_or("resolution", g_resolution, sizeof(g_resolution), "1024x768");
+}
 
 /* Exposed so kernel/shell.c can build the prompt (os~$ vs os/folder~$) */
 const char *sys_shell_get_cwd(void) { return g_cwd; }
@@ -83,6 +188,25 @@ static void u2s(uint32_t v, char *out) {
     out[0] = (char)('0' + (v / 10) % 10);
     out[1] = (char)('0' + v % 10);
     out[2] = '\0';
+}
+
+/* Writes v (0-99, which is all this file ever needs it for - VGA
+ * color indices are 0-15) as decimal into out, no leading zero.
+ * Unlike u2s() above this doesn't pad to 2 digits, since
+ * syscfg-stored values should round-trip through syscfg_get() and a
+ * leading zero would still parse fine there but reads oddly in
+ * config.ini for a human editing it by hand. */
+static void int_to_str(int v, char *out, size_t out_len) {
+    if (v < 0) v = 0;
+    if (out_len < 2) { if (out_len == 1) out[0] = '\0'; return; }
+    if (v < 10) {
+        out[0] = (char)('0' + v);
+        out[1] = '\0';
+    } else {
+        out[0] = (char)('0' + (v / 10) % 10);
+        out[1] = (char)('0' + v % 10);
+        if (out_len >= 3) out[2] = '\0'; else out[1] = '\0';
+    }
 }
 
 /* Rebuild and redraw the top status bar: "username | Mon DD YYYY  HH:MM:SS" */
@@ -508,29 +632,169 @@ static void cmd_desktop(void) {
     desktop_run();
 }
 
+/* ── Resolution presets, capped at 1080p per what was asked for ─────────── */
+typedef struct { const char *name; uint32_t w; uint32_t h; } res_preset_t;
+static const res_preset_t RES_PRESETS[] = {
+    { "800x600",   800,  600  },
+    { "1024x768",  1024, 768  },
+    { "1280x720",  1280, 720  },
+    { "1280x1024", 1280, 1024 },
+    { "1366x768",  1366, 768  },
+    { "1920x1080", 1920, 1080 },
+};
+#define RES_PRESET_COUNT (sizeof(RES_PRESETS) / sizeof(RES_PRESETS[0]))
+
+/* Accepts either a preset name ("1280x720") or a raw "WxH" pair typed
+ * directly - both land on the same graphics_set_mode() call, presets
+ * just save the user from typing exact numbers for the common cases. */
+static int parse_resolution(const char *arg, uint32_t *w, uint32_t *h) {
+    for (unsigned i = 0; i < RES_PRESET_COUNT; i++) {
+        if (strcmp(arg, RES_PRESETS[i].name) == 0) {
+            *w = RES_PRESETS[i].w; *h = RES_PRESETS[i].h;
+            return 1;
+        }
+    }
+    const char *x = strchr(arg, 'x');
+    if (!x) return 0;
+    uint32_t width = 0, height = 0;
+    for (const char *p = arg; p < x; p++) {
+        if (*p < '0' || *p > '9') return 0;
+        width = width * 10 + (uint32_t)(*p - '0');
+    }
+    for (const char *p = x + 1; *p; p++) {
+        if (*p < '0' || *p > '9') return 0;
+        height = height * 10 + (uint32_t)(*p - '0');
+    }
+    if (width == 0 || height == 0) return 0;
+    *w = width; *h = height;
+    return 1;
+}
+
+static void print_settings_usage(void) {
+    io_put_string("usage:\n");
+    io_put_string("  settings                         show current settings\n");
+    io_put_string("  settings resolution <WxH>         e.g. 1280x720 (max 1920x1080)\n");
+    io_put_string("  settings textcolor <name|0-15>    e.g. white, lightcyan, 15\n");
+    io_put_string("  settings bgcolor <name|0-15>      e.g. black, blue, 0\n");
+    io_put_string("  settings statusbarcolor <name|0-15>  status/time bar text color\n");
+    io_put_string("colors: black blue green cyan red magenta brown lightgrey darkgrey\n");
+    io_put_string("        lightblue lightgreen lightcyan lightred lightmagenta yellow white\n");
+}
+
 static void cmd_settings(const char *arg) {
     if (!arg || !arg[0]) {
-        io_put_string("settings: current resolution = ");
+        char buf[8];
+        io_put_string("resolution:       "); io_put_string(g_resolution); io_put_char('\n');
+
+        io_put_string("text color:       ");
+        syscfg_get_or("text_color", buf, sizeof(buf), "7");
+        vga_color_t c; if (parse_color(buf, &c)) io_put_string(color_name(c)); else io_put_string(buf);
+        io_put_char('\n');
+
+        io_put_string("background color: ");
+        syscfg_get_or("bg_color", buf, sizeof(buf), "0");
+        if (parse_color(buf, &c)) io_put_string(color_name(c)); else io_put_string(buf);
+        io_put_char('\n');
+
+        io_put_string("status bar color: ");
+        syscfg_get_or("statusbar_color", buf, sizeof(buf), "15");
+        if (parse_color(buf, &c)) io_put_string(color_name(c)); else io_put_string(buf);
+        io_put_char('\n');
+
+        print_settings_usage();
+        return;
+    }
+
+    /* Split "settings <sub> <value>" into sub/value in place. */
+    char sub[24]; char value[24];
+    unsigned i = 0;
+    while (arg[i] && arg[i] != ' ' && i < sizeof(sub) - 1) { sub[i] = arg[i]; i++; }
+    sub[i] = '\0';
+    while (arg[i] == ' ') i++;
+    unsigned j = 0;
+    while (arg[i] && j < sizeof(value) - 1) { value[j++] = arg[i++]; }
+    value[j] = '\0';
+
+    if (!value[0]) {
+        print_settings_usage();
+        return;
+    }
+
+    if (strcmp(sub, "resolution") == 0) {
+        uint32_t w, h;
+        if (!parse_resolution(value, &w, &h)) {
+            io_put_string("settings: unrecognized resolution - try e.g. 1280x720\n");
+            return;
+        }
+        if (w > 1920 || h > 1080) {
+            io_put_string("settings: max supported resolution is 1920x1080\n");
+            return;
+        }
+        if (graphics_set_mode(GRAPHICS_MODE_VESA_32BIT, w, h) != 0) {
+            io_put_string("settings: mode switch failed - this display adapter may not\n");
+            io_put_string("support the Bochs/QEMU VBE interface, or rejected that mode.\n");
+            io_put_string("check the serial log ([VBE] lines) for details.\n");
+            return;
+        }
+        strncpy(g_resolution, value, sizeof(g_resolution) - 1);
+        g_resolution[sizeof(g_resolution) - 1] = '\0';
+        syscfg_set("resolution", g_resolution);
+        trpfs_sync();
+        sys_shell_update_statusbar();
+        io_put_string("settings: resolution set to ");
         io_put_string(g_resolution);
         io_put_char('\n');
-        io_put_string("usage: settings [480p|720p]\n");
         return;
     }
 
-    if (strcmp(arg, "480p") == 0) {
-        strncpy(g_resolution, "480p", sizeof(g_resolution) - 1);
-        g_resolution[sizeof(g_resolution) - 1] = '\0';
-    } else if (strcmp(arg, "720p") == 0) {
-        strncpy(g_resolution, "720p", sizeof(g_resolution) - 1);
-        g_resolution[sizeof(g_resolution) - 1] = '\0';
-    } else {
-        io_put_string("settings: unsupported resolution; use 480p or 720p\n");
+    if (strcmp(sub, "textcolor") == 0 || strcmp(sub, "bgcolor") == 0 ||
+        strcmp(sub, "statusbarcolor") == 0) {
+        vga_color_t c;
+        if (!parse_color(value, &c)) {
+            io_put_string("settings: unrecognized color - see 'settings' for the list\n");
+            return;
+        }
+
+        char cur_text[8], cur_bg[8], cur_sb[8];
+        syscfg_get_or("text_color", cur_text, sizeof(cur_text), "7");
+        syscfg_get_or("bg_color", cur_bg, sizeof(cur_bg), "0");
+        syscfg_get_or("statusbar_color", cur_sb, sizeof(cur_sb), "15");
+        vga_color_t text_c, bg_c, sb_c;
+        if (!parse_color(cur_text, &text_c)) text_c = VGA_LIGHT_GREY;
+        if (!parse_color(cur_bg, &bg_c)) bg_c = VGA_BLACK;
+        if (!parse_color(cur_sb, &sb_c)) sb_c = VGA_WHITE;
+
+        if (strcmp(sub, "textcolor") == 0) text_c = c;
+        else if (strcmp(sub, "bgcolor") == 0) bg_c = c;
+        else sb_c = c;
+
+        vga_set_color(text_c, bg_c);
+        vga_set_statusbar_color(sb_c, VGA_BLUE);
+
+        char nb[4];
+        int_to_str((int)text_c, nb, sizeof(nb));
+        syscfg_set("text_color", nb);
+
+        int_to_str((int)bg_c, nb, sizeof(nb));
+        syscfg_set("bg_color", nb);
+
+        int_to_str((int)sb_c, nb, sizeof(nb));
+        syscfg_set("statusbar_color", nb);
+
+        trpfs_sync();
+        sys_shell_update_statusbar();
+        io_put_string("settings: ");
+        io_put_string(sub);
+        io_put_string(" set to ");
+        io_put_string(color_name(c));
+        io_put_char('\n');
         return;
     }
 
-    io_put_string("settings: resolution set to ");
-    io_put_string(g_resolution);
-    io_put_char('\n');
+    io_put_string("settings: unknown setting '");
+    io_put_string(sub);
+    io_put_string("'\n");
+    print_settings_usage();
 }
 
 static void cmd_halt(void) {

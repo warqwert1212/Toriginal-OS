@@ -250,6 +250,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
 }
 
 void kernel_os_shell(void) {
+    sys_shell_apply_saved_display_settings();
     shell_loop(
        "\n\n"
         "    ______           _         _             __   ____  _____\n"

@@ -1,27 +1,4 @@
-/* trsys.h - User-space syscall ABI for Toriginal OS .trp apps.
- *
- * This is the FIRST real user-space syscall wrapper in the codebase -
- * previously the only example app (root/sys/userpc/home/.../oobe.c)
- * called kernel-internal functions directly as `extern`s, which only
- * works because it's actually compiled INTO the kernel binary, not
- * loaded as a separate .trp payload the way app.ld's ENTRY
- * (main_explorer_executable) and the TRP loader (trploader.h) are
- * built for. A real .trp app can't call kernel C functions directly
- * (it doesn't link against kernel object files) - it has to cross
- * into the kernel via the `syscall` instruction, the same way any
- * real userspace program on any real OS does.
- *
- * ABI, reverse-engineered exactly from syscall.c's syscall_entry_stub
- * and syscall_dispatch signature (both in root/freeNT/kernel/
- * syscall.c) rather than assumed: syscall number in RAX, arguments in
- * RDI, RSI, RDX, R10, R8, R9 (R10 instead of RCX, because the
- * `syscall` instruction itself clobbers RCX/R11 - standard x86-64
- * SysV syscall convention, not just "coincidentally like Linux").
- * Return value comes back in RAX. Every wrapper below is a thin
- * `syscall` instruction plus the register shuffle needed to get
- * arguments into the right places from a normal C function call -
- * nothing here talks to any kernel data structure directly.
- */
+
 #ifndef _TRSYS_H
 #define _TRSYS_H
 
@@ -86,9 +63,7 @@ typedef struct {
 #define PROT_WRITE  0x2
 #define MAP_ANONYMOUS  0x20
 
-/* Six-argument form - every real syscall funnels through this one so
- * the inline asm (the only place that can go wrong at the ABI level)
- * exists in exactly one place. */
+
 static inline int64_t trsys_call6(int64_t num, int64_t a1, int64_t a2,
                                    int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     int64_t ret;
@@ -117,7 +92,7 @@ static inline int64_t trsys_call3(int64_t num, int64_t a1, int64_t a2, int64_t a
     return trsys_call6(num, a1, a2, a3, 0, 0, 0);
 }
 
-/* - Ergonomic wrappers - */
+
 
 static inline void    sys_exit(int status)              { trsys_call1(SYS_EXIT, status); }
 static inline int64_t sys_write(int fd, const void *buf, uint64_t len) {

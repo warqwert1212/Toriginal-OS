@@ -36,6 +36,13 @@ int  gterm_statusbar_enabled(void);
  * and drawn the moment the bar is enabled. */
 void gterm_draw_statusbar(const char *text);
 
+/* Sets the status bar's own fg/bg (independent of gterm_set_color(),
+ * which only affects ordinary text rows) - was hardcoded to
+ * white-on-blue before this existed. Takes effect on the next
+ * gterm_draw_statusbar_row() (i.e. the next statusbar refresh, or
+ * immediately if the bar is already enabled - it redraws right away). */
+void gterm_set_statusbar_color(uint8_t fg_index, uint8_t bg_index);
+
 
 void gterm_tick(void);
 

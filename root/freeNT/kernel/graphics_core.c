@@ -29,6 +29,17 @@ int graphics_is_available(void) {
     return g_gfx_ready;
 }
 
+/* Lets a mode-switch driver (vbe_dispi.c) update the hardware LFB
+ * pointer graphics_present() copies to, and mark graphics ready even
+ * if boot-time multiboot init never found a framebuffer tag (e.g. a
+ * fresh mode switch happening from VGA text mode). width/height/pitch/
+ * depth on g_framebuffer are expected to already be set by the caller
+ * before this runs. */
+void graphics_set_hw_framebuffer(uint8_t *hw_ptr) {
+    g_hw_framebuffer = hw_ptr;
+    g_gfx_ready = 1;
+}
+
 int graphics_init(void) {
     if (!mb_fb_found()) {
         g_gfx_ready = 0;
@@ -99,13 +110,18 @@ void graphics_present(void) {
 }
 
 int graphics_set_mode(graphics_mode_t mode, uint32_t width, uint32_t height) {
-    /* Mode switching after boot would require re-invoking VBE, which
-     * needs real-mode (or a v86 monitor) - out of scope for this
-     * stage. The mode is fixed at whatever GRUB negotiated via the
-     * multiboot framebuffer request tag. Report not-supported rather
-     * than pretending to succeed. */
-    (void)mode; (void)width; (void)height;
-    return -1;
+    /* Real runtime mode switch via the Bochs/QEMU VBE dispi interface -
+     * see vbe_dispi.c. This needs no BIOS real-mode call and no v86
+     * monitor: dispi is a fixed pair of I/O ports the virtual display
+     * adapter itself implements, so the kernel can reprogram it
+     * directly from long mode, the same way a real driver would talk
+     * to real display hardware registers. mode is accepted but ignored
+     * beyond "must be a VESA mode" - depth is always 32bpp (see
+     * vbe_dispi.h), matching what graphics_init() already required
+     * from the multiboot tag. */
+    if (mode != GRAPHICS_MODE_VESA_32BIT && mode != GRAPHICS_MODE_VESA_16BIT) return -1;
+    extern int vbe_dispi_set_mode(uint32_t width, uint32_t height);
+    return vbe_dispi_set_mode(width, height);
 }
 
 /* Public row-pointer + bpp-switched pixel write. This is the single

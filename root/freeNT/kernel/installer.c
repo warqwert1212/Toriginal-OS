@@ -18,7 +18,8 @@
 #include "keyboard.h"
 #include "serial.h"
 #include "ata.h"
-#include "serial.h"
+#include "syscfg.h"
+#include "net.h"
 
 #define INSTALLER_DISK_BYTES   (4ULL * 1024ULL * 1024ULL)  /* 4 MiB TRPFS volume */
 #define INSTALLER_MAX_ERRORS   16
@@ -325,6 +326,11 @@ typedef struct {
     char username[32];
     char password[32];
     char timezone[16];
+    char ip[16];
+    char netmask[16];
+    char gateway[16];
+    char dns[16];
+    int  network_configured;
 } installer_account_t;
 
 static void collect_account_info(installer_account_t *acct, int unattended) {
@@ -332,10 +338,12 @@ static void collect_account_info(installer_account_t *acct, int unattended) {
         memcpy(acct->username, "user", 5);
         memcpy(acct->password, "password", 9);
         memcpy(acct->timezone, "UTC", 4);
+        acct->ip[0] = acct->netmask[0] = acct->gateway[0] = acct->dns[0] = '\0';
+        acct->network_configured = 0;
         return;
     }
 
-    io_put_string("[4/5] OOBE setup\n");
+    io_put_string("[4/6] OOBE setup\n");
 
     io_put_string("Username: ");
     read_line(acct->username, sizeof(acct->username), 0);
@@ -353,17 +361,41 @@ static void collect_account_info(installer_account_t *acct, int unattended) {
     }
 }
 
-/* ── Step 5: write config + flag, create home directory ──────────────────── */
+/* ── Step 5: internet setup ───────────────────────────────────────────────── */
 
-static void write_kv(fd_t fd, const char *key, const char *value) {
-    fs_write(fd, key, strlen(key));
-    fs_write(fd, "=", 1);
-    fs_write(fd, value, strlen(value));
-    fs_write(fd, "\n", 1);
+static void collect_network_info(installer_account_t *acct, int unattended) {
+    if (unattended) return;
+
+    io_put_string("[5/6] Internet setup\n");
+    io_put_string("Configure a network connection now? (Y/N): ");
+
+    char yn[4];
+    read_line(yn, sizeof(yn), 0);
+    if (!(yn[0] == 'y' || yn[0] == 'Y')) {
+        io_put_string("Skipped - run 'ifconfig <ip> <netmask> <gateway> [dns]' later.\n");
+        acct->network_configured = 0;
+        return;
+    }
+
+    io_put_string("IP address: ");
+    read_line(acct->ip, sizeof(acct->ip), 0);
+    io_put_string("Netmask: ");
+    read_line(acct->netmask, sizeof(acct->netmask), 0);
+    io_put_string("Gateway: ");
+    read_line(acct->gateway, sizeof(acct->gateway), 0);
+    io_put_string("DNS (blank to skip): ");
+    read_line(acct->dns, sizeof(acct->dns), 0);
+
+    acct->network_configured = (acct->ip[0] && acct->netmask[0] && acct->gateway[0]);
+    if (!acct->network_configured) {
+        io_put_string("Incomplete network info - skipped. Use 'ifconfig' later.\n");
+    }
 }
 
+/* ── Step 5: write config + flag, create home directory ──────────────────── */
+
 static int finalize_install(const installer_account_t *acct, installer_errors_t *errs) {
-    io_put_string("[5/5] Writing configuration...\n");
+    io_put_string("[6/6] Writing configuration...\n");
 
     /* /toriginal_os/home/<username> */
     char home_path[64] = "/toriginal_os/home/";
@@ -377,23 +409,54 @@ static int finalize_install(const installer_account_t *acct, installer_errors_t 
         err_add(errs, "Failed to create user home directory");
     }
 
-    fd_t fd = fs_open("/toriginal_os/config.ini",
-                       O_CREAT | O_WRONLY | O_TRUNC,
-                       FILE_PERM_OWNER_R | FILE_PERM_OWNER_W);
-    if (fd < 0) {
-        err_add(errs, "Failed to create /toriginal_os/config.ini");
-    } else {
-        write_kv(fd, "username", acct->username);
-        write_kv(fd, "timezone", acct->timezone);
-        write_kv(fd, "resolution", "720p");
-        write_kv(fd, "storage", "ata");
-        /* NOTE: storing a plaintext password is a placeholder for v1 - a
-         * real build should hash this before writing it to disk. */
-        write_kv(fd, "password", acct->password);
-        fs_close(fd);
+    int ok = 1;
+    ok &= (syscfg_set("username", acct->username) == 0);
+    ok &= (syscfg_set("timezone", acct->timezone) == 0);
+
+    /* Display settings: only stamp a default if the key isn't already
+     * present. finalize_install() runs twice per install (the silent
+     * staging pass, then the interactive OOBE pass right after) - if
+     * this unconditionally wrote defaults both times, a 'settings'
+     * change made between those two boots would get clobbered. */
+    char probe[16];
+    if (!syscfg_get("resolution", probe, sizeof(probe)))
+        ok &= (syscfg_set("resolution", "1024x768") == 0);
+    if (!syscfg_get("text_color", probe, sizeof(probe)))
+        ok &= (syscfg_set("text_color", "7") == 0);   /* VGA_LIGHT_GREY */
+    if (!syscfg_get("bg_color", probe, sizeof(probe)))
+        ok &= (syscfg_set("bg_color", "0") == 0);      /* VGA_BLACK */
+    if (!syscfg_get("statusbar_color", probe, sizeof(probe)))
+        ok &= (syscfg_set("statusbar_color", "7") == 0);
+
+    ok &= (syscfg_set("storage", "ata") == 0);
+    /* NOTE: storing a plaintext password is a placeholder for v1 - a
+     * real build should hash this before writing it to disk. */
+    ok &= (syscfg_set("password", acct->password) == 0);
+
+    if (acct->network_configured) {
+        ok &= (syscfg_set("net_ip", acct->ip) == 0);
+        ok &= (syscfg_set("net_netmask", acct->netmask) == 0);
+        ok &= (syscfg_set("net_gateway", acct->gateway) == 0);
+        if (acct->dns[0]) ok &= (syscfg_set("net_dns", acct->dns) == 0);
+
+        net_device_t *dev = net_get_device();
+        uint32_t ip, nm, gw, dns = 0;
+        if (dev && ip_parse(acct->ip, &ip) && ip_parse(acct->netmask, &nm) &&
+            ip_parse(acct->gateway, &gw)) {
+            dev->ip = ip; dev->netmask = nm; dev->gateway_ip = gw;
+            if (acct->dns[0] && ip_parse(acct->dns, &dns)) dev->dns_ip = dns;
+            io_put_string("      Network configured and applied.\n");
+        }
     }
 
-    fd = fs_open("/toriginal_os/installed.flag",
+    /* This account/network pass is the interactive OOBE - once it's run,
+     * the "please reboot to finish setup" flag from the silent staging
+     * pass no longer applies. */
+    ok &= (syscfg_set("oobe_pending", "0") == 0);
+
+    if (!ok) err_add(errs, "Failed to write one or more settings to config.ini");
+
+    fd_t fd = fs_open("/toriginal_os/installed.flag",
                   O_CREAT | O_WRONLY | O_TRUNC,
                   FILE_PERM_OWNER_R | FILE_PERM_OWNER_W);
     if (fd < 0) {
@@ -409,76 +472,139 @@ static int finalize_install(const installer_account_t *acct, installer_errors_t 
 
 /* ── Public entry points ─────────────────────────────────────────────────── */
 
-static void installer_run_internal(int unattended) {
+/* Silent first-ever-boot pass: formats TRPFS, copies every file/asset
+ * the OS ships with (wallpapers, start menu art, cursors, seed payload)
+ * onto the disk, and stamps default settings - all with no keyboard
+ * prompts, because the install disc is still in the drive at this
+ * point and this pass runs unattended from kernel_init(). It does NOT
+ * collect a username/password/network config: those need the disc
+ * out (see the comment on installer_try_automount() for why), so it
+ * leaves oobe_pending=1 for the next boot to pick up. */
+static int installer_stage_files(installer_errors_t *errs) {
+    io_put_string("\n==================================================\n");
+    io_put_string("   TORIGINAL OS — FIRST BOOT: STAGING INSTALL\n");
+    io_put_string("==================================================\n\n");
+
+    if (provision_disk(errs) != 0) return -1;
+    if (build_filesystem(errs) != 0) return -1;
+    if (seed_install_payload(errs) != 0) return -1;
+
+    seed_boot_modules_to_fs();
+
+    /* Placeholder account so config.ini / installed.flag exist and
+     * installer_print_status()/settings reads work right away - the
+     * real values get overwritten by the interactive OOBE next boot. */
+    installer_account_t acct;
+    memset(&acct, 0, sizeof(acct));
+    memcpy(acct.username, "user", 5);
+    memcpy(acct.timezone, "UTC", 4);
+    finalize_install(&acct, errs);
+    /* finalize_install() clears oobe_pending as its last step (it's also
+     * used by the real OOBE path below) - re-set it here since this is
+     * the staging pass, not the finished setup. */
+    syscfg_set("oobe_pending", "1");
+    trpfs_sync();
+
+    return (errs->count == 0) ? 0 : -1;
+}
+
+/* Interactive OOBE-only pass: runs on the boot *after* staging, once the
+ * install disc has been removed and the disk-backed filesystem is the
+ * only thing GRUB is booting from. Filesystem already exists (staged
+ * above) - this only collects the real account + network config and
+ * overwrites the placeholder values. */
+static void installer_run_oobe(installer_errors_t *errs) {
+    io_put_string("\n==================================================\n");
+    io_put_string("        TORIGINAL OS SETUP / OOBE (TRPFS v1)\n");
+    io_put_string("==================================================\n\n");
+
+    installer_account_t acct;
+    memset(&acct, 0, sizeof(acct));
+    collect_account_info(&acct, 0);
+    collect_network_info(&acct, 0);
+    finalize_install(&acct, errs);
+
+    err_print_all(errs);
+    if (errs->count == 0) {
+        io_put_string("Setup complete. Welcome to Toriginal OS.\n");
+        serial_puts("[INSTALL] OOBE completed successfully.\n");
+    } else {
+        io_put_string("Setup finished with warnings/errors (see above).\n");
+        serial_puts("[INSTALL] OOBE completed with errors.\n");
+    }
+}
+
+/* Fully interactive, single-boot install+OOBE in one pass - used by the
+ * manual 'install'/'setup'/'oobe' shell commands (run.c calls this
+ * directly, disc-removal concerns don't apply since the user is already
+ * sitting at a live shell driving it by hand). */
+void installer_run(void) {
     installer_errors_t errs;
     memset(&errs, 0, sizeof(errs));
 
-    if (!unattended) {
-        io_put_string("\n==================================================\n");
-        io_put_string("        TORIGINAL OS SETUP / OOBE (TRPFS v1)\n");
-        io_put_string("==================================================\n\n");
-    }
+    io_put_string("\n==================================================\n");
+    io_put_string("        TORIGINAL OS SETUP / OOBE (TRPFS v1)\n");
+    io_put_string("==================================================\n\n");
 
-    if (provision_disk(&errs) != 0) {
-        err_print_all(&errs);
-        return;
-    }
-
-    if (!unattended) {
-        scan_existing_os(&errs); /* may halt internally if the user declines */
-    }
-
-    if (build_filesystem(&errs) != 0) {
-        err_print_all(&errs);
-        return;
-    }
-
-    if (seed_install_payload(&errs) != 0) {
-        err_print_all(&errs);
-        return;
-    }
-
-    /* Wallpapers/start menu images/cursor land on disk right now, as
-     * part of this install, instead of requiring a reboot before
-     * they'd show up via kernel_init()'s automount path. */
+    if (provision_disk(&errs) != 0) { err_print_all(&errs); return; }
+    scan_existing_os(&errs); /* may halt internally if the user declines */
+    if (build_filesystem(&errs) != 0) { err_print_all(&errs); return; }
+    if (seed_install_payload(&errs) != 0) { err_print_all(&errs); return; }
     seed_boot_modules_to_fs();
 
     installer_account_t acct;
     memset(&acct, 0, sizeof(acct));
-    collect_account_info(&acct, unattended);
-
+    collect_account_info(&acct, 0);
+    collect_network_info(&acct, 0);
     finalize_install(&acct, &errs);
 
     err_print_all(&errs);
-
     if (errs.count == 0) {
-        if (unattended) {
-            io_put_string("First-boot installation complete.\n");
-            serial_puts("[INSTALL] First-boot installation completed successfully.\n");
-        } else {
-            io_put_string("Setup complete. Type 'status' to verify.\n");
-            serial_puts("[INSTALL] Setup completed successfully.\n");
-        }
+        io_put_string("Setup complete. Type 'status' to verify.\n");
+        serial_puts("[INSTALL] Setup completed successfully.\n");
     } else {
         io_put_string("Installation finished with warnings/errors (see above).\n");
         serial_puts("[INSTALL] Completed with errors.\n");
     }
 }
 
-void installer_run(void) {
-    installer_run_internal(0);
+void installer_run_unattended(void) {
+    installer_errors_t errs;
+    memset(&errs, 0, sizeof(errs));
+    installer_stage_files(&errs);
+    err_print_all(&errs);
 }
 
-void installer_run_unattended(void) {
-    installer_run_internal(1);
+/* Halts with a message telling the user to eject the install disc and
+ * reboot. Used once, right after the silent staging pass, so the next
+ * boot (disc out, booting the on-disk install) lands on the real
+ * interactive OOBE instead of re-running the unattended stager. This
+ * never returns - same pattern as scan_existing_os()'s decline path. */
+static void halt_for_reboot(const char *msg) {
+    io_put_string("\n==================================================\n");
+    io_put_string(msg);
+    io_put_string("==================================================\n\n");
+    serial_puts("[INSTALL] Halting for reboot: ");
+    serial_puts(msg);
+    __asm__ volatile("cli");
+    for (;;) { __asm__ volatile("hlt"); }
 }
 
 /* ── Boot-time auto-mount ─────────────────────────────────────────────────
- * Called once from kernel_init(), before the shell starts. If a real ATA
- * disk is present AND it already has a valid TRPFS superblock (i.e. the
- * user ran 'install' in a previous boot), mount it directly - no
- * reformatting, no account setup, just bring the existing filesystem
- * online so all prior files/folders are exactly as they were left. */
+ * Called once from kernel_init(), before the shell starts.
+ *
+ * Three cases:
+ *   1. No valid TRPFS volume yet -> this is the very first boot (still
+ *      running off the install disc). Silently stage the whole OS onto
+ *      the ATA disk (format, copy every file/asset, default settings),
+ *      then halt and tell the user to remove the disc and reboot. No
+ *      account prompts here - see installer_stage_files()'s comment.
+ *   2. Valid volume, but oobe_pending=1 -> this is the second boot, now
+ *      running off the disk-backed install with the disc out. Run the
+ *      real interactive OOBE (account + network) and continue into the
+ *      shell once it's done.
+ *   3. Valid volume, oobe_pending=0 (or unset, for installs made before
+ *      this flow existed) -> ordinary boot, just mount and go. */
 int installer_try_automount(void) {
     trpfs_blkdev_t *ata = ata_init_blkdev(INSTALLER_DISK_BYTES);
     if (!ata) {
@@ -491,21 +617,34 @@ int installer_try_automount(void) {
     g_using_real_disk = 1;
 
     if (trpfs_mount(g_disk) == 0) {
+        char pending[8];
+        syscfg_get_or("oobe_pending", pending, sizeof(pending), "0");
+        if (strcmp(pending, "1") == 0) {
+            serial_puts("[INSTALL] Existing filesystem found, OOBE pending - "
+                        "running interactive setup.\n");
+            installer_errors_t errs;
+            memset(&errs, 0, sizeof(errs));
+            installer_run_oobe(&errs);
+            return 0;
+        }
         serial_puts("[INSTALL] Existing filesystem found on disk - auto-mounted.\n");
         return 0;
     }
 
     serial_puts("[INSTALL] ATA disk present but no valid filesystem found - "
-                "starting first-boot installation.\n");
+                "starting first-boot staging.\n");
     installer_run_unattended();
 
     if (trpfs_mount(g_disk) == 0) {
-        serial_puts("[INSTALL] First-boot installation completed and filesystem "
-                    "is now mounted.\n");
-        return 0;
+        serial_puts("[INSTALL] First-boot staging completed - prompting for reboot.\n");
+        halt_for_reboot(
+            "  Initial setup complete.\n"
+            "  Please REMOVE the install disc/ISO now, then reboot.\n"
+            "  Toriginal OS will finish setup (OOBE) on the next boot.\n");
+        /* unreachable - halt_for_reboot() never returns */
     }
 
-    serial_puts("[INSTALL] First-boot installation did not leave a valid filesystem "
+    serial_puts("[INSTALL] First-boot staging did not leave a valid filesystem "
                 "mounted.\n");
     return -1;
 }

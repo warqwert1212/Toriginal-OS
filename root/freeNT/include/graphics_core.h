@@ -49,6 +49,11 @@ int graphics_init(void);
  * back buffer (falls back to direct drawing - flickery but functional
  * rather than non-functional). */
 void graphics_present(void);
+/* Updates the hardware LFB pointer graphics_present() copies to (see
+ * vbe_dispi.c) - only meant to be called by a mode-switch driver right
+ * after it reprograms the display and re-points g_framebuffer at the
+ * new geometry/back-buffer. */
+void graphics_set_hw_framebuffer(uint8_t *hw_ptr);
 int graphics_set_mode(graphics_mode_t mode, uint32_t width, uint32_t height);
 int graphics_is_available(void);
 

@@ -48,4 +48,10 @@ void vga_update_cursor(void);
 void vga_set_statusbar_enabled(int enabled);
 void vga_draw_statusbar(const char *text);
 
+/* Sets the status bar's own fg/bg. Was hardcoded blue-background/
+ * white-text before this existed. Delegates to gterm's own status
+ * bar color when gterm is active, same as vga_draw_statusbar() does
+ * for the text itself. */
+void vga_set_statusbar_color(vga_color_t fg, vga_color_t bg);
+
 #endif

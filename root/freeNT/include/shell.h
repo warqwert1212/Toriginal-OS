@@ -15,4 +15,11 @@ void sys_shell_dispatch(const char *line);
  * Safe to call even if the bar isn't enabled yet (no-op until installed). */
 void sys_shell_update_statusbar(void);
 
+/* sys/shell/shell.c — applies saved text/background/status-bar colors
+ * from /toriginal_os/config.ini (falls back to this codebase's
+ * original hardcoded defaults if nothing's saved yet, or if no
+ * filesystem is mounted). Call once at shell startup, after TRPFS is
+ * mounted - kernel_os_shell() does this. */
+void sys_shell_apply_saved_display_settings(void);
+
 #endif /* _KERNEL_SHELL_H */

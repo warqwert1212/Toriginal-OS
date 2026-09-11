@@ -1,25 +1,3 @@
-/* term.c - Toriginal OS terminal app.
- *
- * This is a genuine user-space .trp program: it is built and linked
- * separately from the kernel (see app.ld's ENTRY(main_explorer_executable)
- * and ../include/trsys.h's header comment on why this is the first
- * real example of that), and talks to the kernel exclusively through
- * the `syscall` instruction via trsys.h - no kernel headers, no
- * kernel data structures, no `extern` reach into kernel globals.
- *
- * What it actually does right now: a line-editing REPL that reads
- * from stdin (fd 0 - newly wired to the keyboard driver, see
- * syscall.c's sys_read() comment) and echoes/dispatches simple
- * built-in commands by writing to stdout (fd 1). It does NOT yet run
- * arbitrary programs (that needs sys_exec() wired to actually load
- * and run another .trp while this one waits - process_exec() exists
- * in process.c but nothing in this app calls it yet) - this is
- * intentionally scoped to "a real, working terminal input/output
- * loop using the real syscall surface" as the foundation piece, not
- * a claim that command execution is done. Built-ins (pwd, echo,
- * clear, exit) are enough to prove the syscall path end-to-end
- * (getcwd, write, ioctl) without overclaiming a full shell.
- */
 #include "../include/trsys.h"
 
 #define LINE_MAX 256
@@ -42,14 +20,7 @@ static void term_write(const char *s) {
     sys_write(1, s, strlen_(s));
 }
 
-/* Blocking line read built on the non-blocking stdin syscall (see
- * syscall.c's sys_read() comment on why fd 0 is non-blocking at the
- * syscall level) - yields between empty reads rather than busy-
- * spinning the CPU pegged at 100% while waiting for a keypress,
- * which matters a lot more on real hardware than it would look like
- * in a quick test (a busy-wait here would starve every other process
- * of CPU time on a cooperative-yield-friendly but still single-core
- * scheduler). Returns line length (without the trailing newline). */
+
 static int term_getline(char *buf, int max_len) {
     int len = 0;
     for (;;) {
@@ -99,14 +70,7 @@ static void cmd_echo(const char *args) {
 }
 
 static void cmd_clear(void) {
-    /* ANSI clear+home - the gterm/vga text backend this eventually
-     * feeds into doesn't parse ANSI escapes today (see gfx_terminal.c
-     * - it's a plain cell grid, no escape-sequence state machine), so
-     * for now this is a readable no-op on-screen rather than a
-     * guaranteed-working clear; kept as a real command (not silently
-     * dropped) so scripts/muscle-memory using it don't hard-fail,
-     * and so the moment ANSI parsing lands in gterm this starts
-     * working with zero changes needed here. */
+
     term_write("\x1b[2J\x1b[H");
 }
 

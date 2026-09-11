@@ -15,9 +15,11 @@ void panic(const char* message)
 
     vga_write("\n");
     vga_write("=========================================================================\n");
-    vga_write("                             KERNEL PANIC!!              \n");
-    vga_write("     ohhhh fuck, you messed up bad how the fuck did you kernel panic?       \n");
-    vga_write("=============================================================================\n\n");
+   vga_write("                           KERNEL PANIC!!\n");
+   vga_write("  Ohhhh fuck, you messed up bad. How the fuck did you kernel panic?\n");
+   vga_write("  This is a critical error and the system will now halt.\n");
+   vga_write("  PLEASE BE CAREFUL.\n");
+   vga_write("=========================================================================\n\n");
 
     vga_write(message);
     vga_write("\n");

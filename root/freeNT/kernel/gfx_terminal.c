@@ -226,6 +226,13 @@ int gterm_init(void) {
     void *mem = kmalloc((size_t)bytes);
     if (!mem) return -1;
 
+    /* Free any previous grid before replacing it - gterm_init() used
+     * to only ever run once per boot, so this never mattered before,
+     * but a runtime resolution change (vbe_dispi.c) now calls this a
+     * second time with a different cols*rows, and without this the
+     * old grid's memory would just leak. */
+    if (g_grid) kfree(g_grid);
+
     g_grid = (gterm_cell_t *)mem;
     g_cols = cols;
     g_rows = rows;
@@ -354,11 +361,24 @@ void gterm_write(const char *str) {
  * gterm_is_active() is true, the same way it already delegates
  * vga_putc()/vga_clear()/vga_set_cursor() to gterm. */
 
+/* Was hardcoded VGA_WHITE-on-VGA_BLUE; now settable via
+ * gterm_set_statusbar_color() (called from settings.c). Keeps the
+ * original values as the default so an install that never touches
+ * settings looks exactly like it did before this existed. */
+static uint8_t g_statusbar_fg = VGA_WHITE;
+static uint8_t g_statusbar_bg = VGA_BLUE;
+
+void gterm_set_statusbar_color(uint8_t fg_index, uint8_t bg_index) {
+    g_statusbar_fg = fg_index;
+    g_statusbar_bg = bg_index;
+    if (g_active && g_statusbar_enabled) gterm_draw_statusbar_row();
+}
+
 static void gterm_draw_statusbar_row(void) {
     if (!g_active || g_cols == 0) return;
 
-    uint8_t bar_fg = VGA_WHITE;
-    uint8_t bar_bg = VGA_BLUE;
+    uint8_t bar_fg = g_statusbar_fg;
+    uint8_t bar_bg = g_statusbar_bg;
 
     for (uint32_t c = 0; c < g_cols; c++) {
         gterm_cell_t *cell = &g_grid[0 * g_cols + c];
