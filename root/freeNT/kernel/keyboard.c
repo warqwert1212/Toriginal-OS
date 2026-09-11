@@ -20,14 +20,6 @@ static uint8_t keyboard_command(uint8_t cmd) {
     return ps2_read_data();
 }
 
-static inline void send_eoi(void) {
-    if (apic_available()) {
-        apic_send_eoi();
-    } else {
-        outb(0x20, 0x20);
-    }
-}
-
 static inline uint8_t scancode_to_keycode(uint8_t scancode) {
     return (uint8_t)(scancode & 0x7F);
 }
@@ -228,7 +220,6 @@ void keyboard_irq_handler(void)
             keyboard_handle_byte(byte);
         }
     }
-    send_eoi();
 }
 
 void keyboard_init(void)

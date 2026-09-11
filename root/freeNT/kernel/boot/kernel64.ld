@@ -46,6 +46,18 @@ PHDRS
     text    PT_LOAD FLAGS(5) ;   /* R+X: .multiboot + .text             */
     rodata  PT_LOAD FLAGS(4) ;   /* R                                    */
     data    PT_LOAD FLAGS(6) ;   /* R+W: .data + .bss                    */
+    /* FIX (overlap bug): .asset_blobs/.kernel_blob are placed AFTER
+     * .trp_code_area, i.e. after every section already assigned to
+     * `data` below - reusing `:rodata` for them made that PT_LOAD's
+     * address range (first .rodata section -> last .kernel_blob
+     * section) fully swallow the `data` PT_LOAD's range in between,
+     * since a PHDR segment's bounds are just its first/last assigned
+     * section, not literal contiguous membership. GRUB's multiboot2
+     * loader allocates one chunk per PT_LOAD and refuses to load two
+     * that overlap ("error: overlap detected."). Giving these two
+     * sections their own PT_LOAD keeps every segment's address range
+     * disjoint again. */
+    assets  PT_LOAD FLAGS(4) ;   /* R: .asset_blobs + .kernel_blob       */
     stack   PT_GNU_STACK FLAGS(6) ;
 }
 
@@ -158,6 +170,46 @@ SECTIONS
         __trp_code_area_end = .;
     } :data
 
+    /* ── .asset_blobs — embedded wallpapers/start-menu-images/cursors/
+     * boot logo (kernel/boot/asset_blob.s, kernel/boot/trbl_logo_blob.s)
+     * ──────────────────────────────────────────────────────────────────
+     * Deliberately placed AFTER .trp_code_area, not folded into the
+     * ordinary .rodata section above with everything else - that
+     * section sits packed right up against .trp_code_area's pinned
+     * 0x500000 boundary, so anything added there directly risks
+     * pushing the kernel over that boundary and forcing a breaking
+     * TRP_CODE_LOAD_ADDR change (see the ASSERT below, and the
+     * comment on .trp_code_area itself, for why that address must
+     * never move casually - every already-compiled .trp binary is
+     * linked against it). These assets can only grow as more/larger
+     * wallpapers get added, so they get their own section here,
+     * clear of that constraint, growing harmlessly toward the 16 MiB
+     * heap-window ceiling instead. */
+    .asset_blobs ALIGN(4K) :
+    {
+        __asset_blobs_start = .;
+        *(.asset_blobs)
+        __asset_blobs_end = .;
+    } :assets
+
+    /* ── .kernel_blob — TRBL stage1/stage2 + the embedded PASS-1 kernel
+     * copy (kernel/boot/bootloader_blobs.s) ─────────────────────────────
+     * Same reasoning as .asset_blobs directly above: bootloader_blobs.o
+     * is PASS-2-only and embeds a full copy of PASS 1's own kernel.elf
+     * (installer.c writes these bytes straight to disk) - by
+     * definition at least as large as the kernel image itself, so it
+     * can never safely share the tightly-packed .rodata sitting right
+     * up against .trp_code_area's pinned boundary. Placed after
+     * .asset_blobs for no reason other than declaration order - both
+     * sections are equally safe out here, clear of every fixed
+     * address anything else depends on. */
+    .kernel_blob ALIGN(4K) :
+    {
+        __kernel_blob_start = .;
+        *(.kernel_blob)
+        __kernel_blob_end = .;
+    } :assets
+
     __kernel_end = .;
 
     /* ── Stack ───────────────────────────────────────────────────────── *
@@ -193,10 +245,10 @@ SECTIONS
 /* ── Sanity checks ───────────────────────────────────────────────────────── *
  * The identity-mapped region boot64.s sets up covers 0x0 – 0x40000000
  * (1 GiB with 512 × 2 MiB huge pages).  The kernel image must fit inside
- * 16 MiB to leave room for the heap window at 16 MiB – 80 MiB.            */
+ * 32 MiB to leave room for the heap window at 32 MiB – 80 MiB.            */
 ASSERT(__bss_end <= 0x500000,
     "ERROR: kernel image has grown into the pinned .trp_code_area address (0x500000) — move it up in kernel64.ld, update TRP_CODE_LOAD_ADDR in trploader.c, update trpc's -Ttext, and recompile every existing .trp binary payload against the new address")
-ASSERT(__kernel_end <= 0x1000000,
-    "ERROR: kernel image exceeds 16 MiB — it would overlap the heap window")
+ASSERT(__kernel_end <= 0x2000000,
+    "ERROR: kernel image exceeds 32 MiB — it would overlap the heap window")
 ASSERT(__kernel_end > 0x200000,
     "ERROR: kernel image appears empty")

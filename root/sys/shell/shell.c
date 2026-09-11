@@ -25,7 +25,7 @@
 #include "vbe_dispi.h"
 
 #define OS_NAME    "Toriginal OS"
-#define OS_VERSION "1.2"
+#define OS_VERSION "1.2.4"
 #define KERNEL_NAME "freeNT"
 #define BUILD_ARCH  "x86-64"
 
@@ -41,12 +41,7 @@ static char g_cwd[256] = "/";
 static char g_username[32] = "user";
 static int  g_username_loaded = 0;
 
-/* ── Real, saveable display settings ─────────────────────────────────────
- * Backed by /toriginal_os/config.ini via syscfg.h. g_resolution here is
- * the *label* for whatever's currently active (e.g. "1024x768"), not a
- * fake cosmetic string - it always matches g_framebuffer's real
- * width/height once graphics is up, because cmd_settings() only updates
- * it after graphics_set_mode() reports success. */
+
 static char g_resolution[16] = "1024x768";
 
 typedef struct { const char *name; vga_color_t value; } named_color_t;
@@ -73,16 +68,10 @@ static const named_color_t COLOR_NAMES[] = {
 };
 #define COLOR_NAME_COUNT (sizeof(COLOR_NAMES) / sizeof(COLOR_NAMES[0]))
 
-/* Parses either a color name ("cyan") or a raw 0-15 VGA index ("3") -
- * both are reasonable things to type, and this codebase's palette is
- * always exactly the 16-entry VGA set (see vga.h), so a plain numeric
- * index is unambiguous and worth supporting for anyone who already
- * knows the standard VGA color table. Returns 1 and fills *out on
- * success, 0 if arg matches neither form. */
 static int parse_color(const char *arg, vga_color_t *out) {
     if (!arg || !arg[0]) return 0;
 
-    /* Numeric form: exactly digits, 0-15. */
+
     int is_numeric = 1;
     for (const char *p = arg; *p; p++) {
         if (*p < '0' || *p > '9') { is_numeric = 0; break; }
@@ -110,44 +99,30 @@ static const char *color_name(vga_color_t c) {
     return "unknown";
 }
 
-/* Applies (from config.ini) the text/background/status-bar colors
- * saved by a previous 'settings' run. Safe to call every boot even on
- * a fresh install with no saved colors yet - syscfg_get_or() falls
- * back to this codebase's original hardcoded defaults (white text,
- * black background, white-on-blue status bar), so a never-configured
- * system looks exactly like it always did. Called once from
- * kernel_os_shell() at startup (kernel/shell.c) - color changes made
- * afterward via 'settings' apply live and re-save immediately, they
- * don't need a second call to this. */
+
 void sys_shell_apply_saved_display_settings(void) {
     if (!trpfs_is_mounted()) return;
 
     char buf[8];
     vga_color_t fg, bg, sfg, sbg;
 
-    syscfg_get_or("text_color", buf, sizeof(buf), "7"); /* VGA_LIGHT_GREY */
+    syscfg_get_or("text_color", buf, sizeof(buf), "7"); 
     if (!parse_color(buf, &fg)) fg = VGA_LIGHT_GREY;
-    syscfg_get_or("bg_color", buf, sizeof(buf), "0"); /* VGA_BLACK */
+    syscfg_get_or("bg_color", buf, sizeof(buf), "0"); 
     if (!parse_color(buf, &bg)) bg = VGA_BLACK;
     vga_set_color(fg, bg);
 
-    syscfg_get_or("statusbar_color", buf, sizeof(buf), "15"); /* VGA_WHITE fg */
+    syscfg_get_or("statusbar_color", buf, sizeof(buf), "15");
     if (!parse_color(buf, &sfg)) sfg = VGA_WHITE;
-    sbg = VGA_BLUE; /* status bar background stays fixed; only its
-                      * foreground/text color is user-configurable for
-                      * now, matching what was actually asked for
-                      * ("time bar colour") without also risking an
-                      * unreadable bar from two independently-chosen
-                      * colors landing on the same value. */
+    sbg = VGA_BLUE;
     vga_set_statusbar_color(sfg, sbg);
 
     syscfg_get_or("resolution", g_resolution, sizeof(g_resolution), "1024x768");
 }
 
-/* Exposed so kernel/shell.c can build the prompt (os~$ vs os/folder~$) */
+
 const char *sys_shell_get_cwd(void) { return g_cwd; }
 
-/* Read "username=..." out of /toriginal_os/config.ini, once, cached. */
 static void load_username(void) {
     if (g_username_loaded) return;
     g_username_loaded = 1;
@@ -472,7 +447,25 @@ static void cmd_advanced_help(void) {
 
 static void cmd_sysver(void) {
     io_put_string(OS_NAME " v" OS_VERSION " (" KERNEL_NAME "/" BUILD_ARCH ")\n");
-    io_put_string("heap . TRPFS . PS/2 kbd+mouse . PIT . TRP packages\n");
+    io_put_string("heap . TRPFS . PS/2 kbd+mouse . PIT . TRP packages\n\n");
+
+    io_put_string(
+"             _______               \n"
+"        ${c2}, ${c5}:8@@@@B@@@@@@B. ${c2},         \n"
+"      _P${c4}_${c2}gggggggggggggggg;${c4}_${c2}@_       \n"
+"    ,@@{${c3}g${c2}@@@@@@@@@@@@@@@@|${c3}g${c2}[@@,     \n"
+"   _@@@@_${c3}@@@@@@${c2}@@@@]${c3}@@@@@W${c2}_@@@@,    \n"
+"  ${c1}.${c2}9@@@W${c3}_g@P${c4}_g@${c2}@@@@]${c4}@g${c3}\"4@@${c2}\"%@@@C    \n"
+"  .@@@\"${c3}@@P${c4}g@@@@${c2}@@@@]${c4}@@@@g${c3}t@[${c2}%@@@`   \n"
+"  [@@${c3};@@/${c4}@@@@@@${c2}@@@@]${c4}@@@@@@${c3}\\\\@b${c2}4@@${c3}'   \n"
+"  ${c2}'@@${c3}[@@${c4}@@@@@@@${c2}@@@@]${c4}@@@@@@]${c3}@@${c2}!@@'   \n"
+"   @@${c3}[@]${c4}@@@@@@@${c2}@@@@]${c4}@@@@@@@${c3}@@'${c2}@,    \n"
+"   '@${c3}.@@${c4}[@@@@@@${c2}@@@@]${c4}@@@@@@T${c3}@@${c2}|@     \n"
+"     .${c3}4@p${c4}4@@@@@${c2}@@@@]${c4}@@@@@P${c3}g@/${c2}P      \n"
+"       ${c3}^@@${c4}\"@@@@${c2}BBBB\"${c4}@@@@\"${c3}@W'        \n"
+"         '@@~${c4}\"0B@@@BD\"${c3}o@D'          \n"
+"             \"\"<===\"\"               \n"
+    );
 }
 
 static void cmd_cls(void) { io_clear_screen(); }

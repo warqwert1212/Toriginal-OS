@@ -27,6 +27,9 @@ static int has_supported_ext(const char *name) {
     size_t len = strlen(name);
     if (len >= 4 && strcasecmp(name + len - 4, ".png") == 0) return 1;
     if (len >= 4 && strcasecmp(name + len - 4, ".bmp") == 0) return 1;
+    if (len >= 4 && strcasecmp(name + len - 4, ".jpg") == 0) return 1;
+    if (len >= 5 && strcasecmp(name + len - 5, ".jpeg") == 0) return 1;
+    if (len >= 4 && strcasecmp(name + len - 4, ".ico") == 0) return 1;
     return 0;
 }
 

@@ -13,3 +13,98 @@ MOVING root/installer/installer.c + installer.h into root/freeNT/kernel/ and roo
 FIXED shell.c: install OS / status commands now call the real installer_run()/installer_print_status() instead of a broken inline duplicate that never mounted a filesystem
 root/sys/gui/* - NOT added to kernel build. Requires a framebuffer/VBE driver, PS/2 mouse driver, and VFS file-existence shims that do not exist yet. Documented as a follow-up, not silently dropped.
 DELETING root/freeNT/kernel/Makefile - broken/non-functional duplicate (wrong relative paths for kernel64.ld, include/, boot/). root/freeNT/Makefile is the one true build entry point.
+
+--- 2026-08-01 update (v1.1.0): TRP execution fix + manifest system additions ---
+FIXED kernel/trploader.c: trp_load() was parsing the manifest TWICE with two
+  incompatible grammars - the real one (Execute at/:, Window name/:, etc., what
+  trpbuild/trpc actually write) for the gate, then a second dead-on-arrival
+  "/directive:value" leading-slash grammar (trp_pkg_manifest_t/pkg_parse) to
+  decide is_executable. No manifest anyone actually generates satisfies the
+  second parser, so a package built by trpbuild would always pass the gate and
+  then be refused as "not executable" - every locally-built .trp was silently
+  unrunnable via `run`/`trpm install`. Removed the dead parser entirely; trp_load
+  now parses the manifest exactly once via the new trp_manifest_run_gate2() and
+  reads language/executability/checksum straight off the one real trp_manifest_t.
+NEW include/trp_manifest.h, kernel/trp_manifest.c: added Description/:, Args/:,
+  and Checksum/: manifest directives. Checksum/: is a 64-hex-char sha256 of the
+  embedded payload, verified at load time via trp_manifest_verify_checksum() -
+  a mismatch refuses the load. Added trp_manifest_validate_ex()/
+  trp_manifest_run_gate2() with a has_embedded_payload flag so self-contained
+  packages (payload embedded right in the .trp) don't get an on-disk-existence
+  check against their own Execute at value; old trp_manifest_validate()/
+  trp_manifest_run_gate() kept as back-compat wrappers.
+FIXED sys/shell/shell.c cmd_trpbuild: auto-computes and appends a Checksum/:
+  directive at build time if the manifest doesn't already carry one, so every
+  locally-built package is integrity-protected by default.
+NEW sys/shell/shell.c: `trpinfo <path.trp>` - dump a .trp's header + full
+  manifest (including checksum match/mismatch) without running it, safe to
+  point at anything. `trpm verify <name>` - re-check an installed package's
+  manifest + checksum against what's actually on disk in /pkgs/, catching
+  post-install corruption/tampering the remote-install HMAC check can't.
+NEW trpc/ (separate zip, ships to the package repo): full host-side compiler.
+  Compiles freestanding C (or accepts a prebuilt code/ binary, trpbuild-
+  compatible) to the same flat-binary-at-0x500000 payload format the kernel
+  expects, using the same TRP file header layout and the same manifest
+  grammar (ported 1:1 from trp_manifest.c) as the on-target tooling. Includes
+  trplibc (crt0.s + a real syscall.s built against the kernel's actual
+  SYSCALL/SYSRET dispatch convention in kernel/syscall.c) so compiled programs
+  can genuinely make syscalls (write/exit/etc.) when run on target. Verified
+  end-to-end on-host: built a hello-world project, confirmed _start lands at
+  exactly file offset 0 / address 0x500000 via objdump, and confirmed
+  checksum-tamper detection via `trpc verify`.
+
+--- 2026-08-22 update: TRBL bootloader settings ---
+NEW include/trbl_settings.h, kernel/trbl_settings.c: real on-disk
+  settings sector (LBA 2000 + backup 2001) for TRBL boot-time
+  resolution/network/boot-flags config, replacing the old install-
+  time byte-patch of stage2.bin.
+FIXED kernel/boot/loader/stage2.s: added load_trbl_settings, reads
+  the settings sector at every boot and applies width/height
+  dynamically instead of relying on installer.c to have patched the
+  binary. Rebranded "TRP stage1/stage2" boot messages to "TRBL".
+  Removed leftover debug print calls (msg_dbg_a/b/c).
+FIXED kernel/installer.c: write_bootloader_to_disk() writes stage1/
+  stage2 byte-identical on every install now; calls
+  trbl_settings_write() instead of memcpy'ing width/height into the
+  stage2 blob at a build-generated offset.
+DELETING kernel/boot/loader/stage2_offsets.h and its generation step
+  in build_loader.sh - no longer needed, settings live in their own
+  disk sector now, not inside the compiled binary.
+NEW sys/shell/shell.c: `settings network <off|dhcp|static ip mask gw
+  dns>` command; `settings resolution` now also persists to the TRBL
+  settings sector (previously only wrote syscfg.ini, which the
+  bootloader never reads - a resolution change took effect live but
+  was lost on reboot).
+NEW kernel/kernel.c: g_trbl_settings global, populated at boot step
+  [8/8] via trbl_settings_read(). Logs saved network intent
+  (DHCP/static) to serial/kprint; does NOT yet automatically bring up
+  the NIC from it - net.c has no DHCP client yet and static bring-up
+  still requires a manual `ifconfig` call. Documented as real
+  follow-up work, not silently faked.
+
+--- 2026-08-23 update: TRBLU (UEFI boot support) ---
+NEW kernel/boot/uefi/efi.h: hand-written minimal UEFI protocol/type
+  definitions (no gnu-efi dependency) - Simple Text Output, Graphics
+  Output, Block I/O, Loaded Image, Boot Services, System Table.
+NEW kernel/boot/uefi/main.c: TRBLU loader - reads TRBL settings
+  sector, sets GOP mode, loads kernel.elf from the same raw LBAs the
+  BIOS path uses, finds _start64_uefi via the kernel's own symbol
+  table, synthesizes the same multiboot2 info block the BIOS path
+  builds, exits boot services, jumps to the kernel.
+NEW kernel/boot/uefi/make_esp.py: from-scratch FAT12 ESP image
+  builder (no mtools available). Verified byte-exact via
+  reconstruction from the generated image.
+NEW kernel/boot/uefi/build_uefi.sh: builds BOOTX64.EFI end to end.
+  Verified: produces a real "PE32+ executable (EFI application)
+  x86-64" binary per `file`.
+FIXED kernel/boot/boot64.s: added _start64_uefi entry point (UEFI
+  hands off already in long mode - this skips the BIOS path's
+  CPUID/EFER/CR0 setup but reuses the same page-table build routines
+  and long_mode_start, so both boot paths produce identical kernel
+  memory layout).
+NOT DONE: parent-disk lookup when the ESP's Block I/O handle doesn't
+  expose the underlying raw disk directly (GPT walking) - TRBLU
+  reports this plainly and halts rather than guessing. Also not
+  boot-tested on real hardware/emulator - no QEMU or real machine
+  available in this environment; verified via static compilation,
+  disassembly, and byte-exact FAT round-trip only.

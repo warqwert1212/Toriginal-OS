@@ -79,18 +79,31 @@ def make_handler(upstream_base: str, secret: bytes):
                 self._serve_bytes(data)
                 return
 
-            upstream_url = f"{upstream_base}/{path}"
-            self.log_message("fetching from real repo: %s", upstream_url)
-            try:
-                with urllib.request.urlopen(upstream_url, timeout=15) as resp:
-                    data = resp.read()
-            except urllib.error.HTTPError as e:
-                self.log_message("upstream returned %s for %s", e.code, path)
-                self.send_error(e.code, f"upstream: {e.reason}")
-                return
-            except urllib.error.URLError as e:
-                self.log_message("upstream fetch failed: %s", e.reason)
-                self.send_error(502, f"upstream unreachable: {e.reason}")
+            upstream_candidates = [
+                f"{upstream_base}/pkg/{path}",
+                f"{upstream_base}/{path}",
+            ]
+            data = None
+            used_url = None
+            for upstream_url in upstream_candidates:
+                self.log_message("fetching from real repo: %s", upstream_url)
+                try:
+                    with urllib.request.urlopen(upstream_url, timeout=15) as resp:
+                        data = resp.read()
+                    used_url = upstream_url
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code != 404:
+                        self.log_message("upstream returned %s for %s", e.code, path)
+                        self.send_error(e.code, f"upstream: {e.reason}")
+                        return
+                except urllib.error.URLError as e:
+                    self.log_message("upstream fetch failed: %s", e.reason)
+                    self.send_error(502, f"upstream unreachable: {e.reason}")
+                    return
+
+            if data is None:
+                self.send_error(404, "package not found in upstream repo")
                 return
 
             os.makedirs(CACHE_DIR, exist_ok=True)

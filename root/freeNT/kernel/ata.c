@@ -167,10 +167,16 @@ typedef struct {
 
 static ata_blkdev_ctx_t g_blkdev_ctx[4];
 
+/* ── Reserved boot region ─────────────────────────────────────────────────
+ * ATA_BOOT_RESERVED_SECTORS is defined in ata.h (shared with
+ * installer.c's raw-sector bootloader write) - every TRPFS block LBA
+ * here is offset by that many sectors so the filesystem starts right
+ * after the boot region instead of colliding with it at sector 0. */
+
 static int ata_blk_read(trpfs_blkdev_t *dev, uint64_t lba, void *buf) {
     ata_blkdev_ctx_t *ctx = (ata_blkdev_ctx_t *)dev->ctx;
     ata_channel_t *ch = ctx->channel;
-    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK);
+    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ATA_BOOT_RESERVED_SECTORS;
     uint8_t *out = (uint8_t *)buf;
     for (uint32_t i = 0; i < SECTORS_PER_BLOCK; i++) {
         if (ata_read_sector(ch, base + i, out + i * ATA_SECTOR_SIZE) != 0) return -1;
@@ -181,7 +187,7 @@ static int ata_blk_read(trpfs_blkdev_t *dev, uint64_t lba, void *buf) {
 static int ata_blk_write(trpfs_blkdev_t *dev, uint64_t lba, const void *buf) {
     ata_blkdev_ctx_t *ctx = (ata_blkdev_ctx_t *)dev->ctx;
     ata_channel_t *ch = ctx->channel;
-    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK);
+    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ATA_BOOT_RESERVED_SECTORS;
     const uint8_t *in = (const uint8_t *)buf;
     for (uint32_t i = 0; i < SECTORS_PER_BLOCK; i++) {
         if (ata_write_sector(ch, base + i, in + i * ATA_SECTOR_SIZE) != 0) return -1;
@@ -213,5 +219,23 @@ trpfs_blkdev_t *ata_init_blkdev_drive(int drive_index, uint64_t total_bytes) {
 
 trpfs_blkdev_t *ata_init_blkdev(uint64_t total_bytes) {
     return ata_init_blkdev_drive(0, total_bytes);
+}
+
+/* ── Raw, absolute-LBA sector I/O (drive 0 only) ─────────────────────────
+ * Used by installer.c to write stage1/stage2/kernel.elf directly into
+ * the reserved boot region (sectors 0..ATA_BOOT_RESERVED_SECTORS-1),
+ * which sits below where TRPFS's own block-offset addressing even
+ * starts - ata_blk_read/write above can't reach it (by design: TRPFS
+ * must never be able to overwrite the bootloader), so these bypass
+ * that offset entirely and talk straight to ata_read_sector/
+ * ata_write_sector on drive 0. */
+int ata_raw_read_sector(uint32_t lba, void *buf) {
+    if (!g_channels[0].present && !ata_detect_channel(0)) return -1;
+    return ata_read_sector(&g_channels[0], lba, buf);
+}
+
+int ata_raw_write_sector(uint32_t lba, const void *buf) {
+    if (!g_channels[0].present && !ata_detect_channel(0)) return -1;
+    return ata_write_sector(&g_channels[0], lba, buf);
 }
 

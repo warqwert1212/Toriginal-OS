@@ -35,6 +35,51 @@ multiboot_header:
 
 multiboot_end:
 
+/* ── 64-bit UEFI entry point ─────────────────────────────────────────────
+ * TRBLU (kernel/boot/uefi/) hands off here already in long mode with
+ * paging enabled (UEFI guarantees this on x86_64 - unlike the BIOS
+ * path above, there's no real/protected mode to climb out of, no
+ * CPUID/EFER/CR0 dance to run). What TRBLU does NOT guarantee is that
+ * its page tables cover the same layout the rest of this kernel
+ * assumes, so this entry point still calls the exact same
+ * clear_page_tables/build_page_tables routines _start uses above and
+ * switches CR3 to them before falling into long_mode_start - one
+ * single page table layout regardless of which loader got us here.
+ *
+ * Calling convention: TRBLU jumps here (not calls - there's no return)
+ * with RDI = a multiboot2-format info pointer it has synthesized
+ * itself (identical tag layout to build_multiboot2_info in
+ * stage2_pm.s - see kernel/boot/uefi/main.c's build_multiboot2_info),
+ * and RSI = the multiboot2 bootloader magic (0x36D76289) - same two
+ * values kernel_main() already expects from the BIOS path, just
+ * shuffled into 64-bit registers directly instead of arriving in
+ * EAX/EBX at a 32-bit entry. This is the ONLY new thing kernel_main
+ * needs to understand about UEFI: nothing, because as far as it's
+ * concerned this is just another multiboot2 boot. */
+.global _start64_uefi
+
+_start64_uefi:
+    cli
+    cld
+
+    /* Stash TRBLU's info pointer/magic - build_page_tables clobbers
+     * plenty of registers and we still need these after it returns. */
+    movq %rdi, %r14        /* info pointer */
+    movq %rsi, %r15        /* magic */
+
+    movq $stack_top, %rsp
+
+    call clear_page_tables
+    call build_page_tables
+
+    movq $pml4_table, %rax
+    movq %rax, %cr3
+
+    movl %r15d, multiboot_magic
+    movl %r14d, multiboot_info
+
+    jmp long_mode_start
+
 /* ── 32-bit entry point ──────────────────────────────────────────────── */
 .section .text
 .code32

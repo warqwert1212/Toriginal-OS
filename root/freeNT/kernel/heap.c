@@ -61,8 +61,8 @@
 extern void mm_map_page(vaddr_t vaddr, paddr_t paddr, uint64_t flags);
 
 /* Kernel heap virtual address window (above the 2 MiB GRUB load point).
- * 16 MiB – 80 MiB gives 64 MiB of virtual heap space. */
-#define HEAP_VIRT_START  0x0000000001000000ULL   /* 16 MiB */
+ * 32 MiB – 80 MiB gives 48 MiB of virtual heap space. */
+#define HEAP_VIRT_START  0x0000000002000000ULL   /* 32 MiB */
 #define HEAP_VIRT_END    0x0000000005000000ULL   /* 80 MiB */
 
 /* Pages to map per growth step when the allocator needs more arena. */

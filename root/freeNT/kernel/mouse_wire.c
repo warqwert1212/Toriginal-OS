@@ -11,6 +11,7 @@ static void mouse_irq_adapter(interrupt_frame_t *frame) {
 void mouse_wire_init(void) {
     interrupts_register_handler(0x2C, mouse_irq_adapter);
     mouse_init();
+    interrupts_unmask_irq(12);
     serial_puts("[MOUSE] IRQ12 wired to vector 0x2C.\n");
 
     if (apic_available()) {

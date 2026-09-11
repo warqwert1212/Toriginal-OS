@@ -1,14 +1,4 @@
-/* wallpaper.c - see wallpaper.h for the contract.
- *
- * Everything the desktop shows here comes from a file: the PNG bytes
- * are read from TRPFS, decoded with png_decode() (already in this
- * kernel - see png.c), and the chosen path is round-tripped through
- * WALLPAPER_CFG_PATH so a reboot doesn't lose the choice. Nothing is
- * compiled into the binary. If no wallpaper file exists yet, or the
- * one on disk fails to decode, wallpaper_draw() falls back to a flat
- * color instead of pretending something loaded - that's an honest
- * "nothing installed yet" state, not a bug to hide.
- */
+
 #include "wallpaper.h"
 #include "fs.h"
 #include "png.h"

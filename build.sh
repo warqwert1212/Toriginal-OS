@@ -45,7 +45,16 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"   # script location = repo root
 KERNEL_SRC="$ROOT/root/freeNT/kernel"
 INCLUDE_DIR="$ROOT/root/freeNT/include"
 GRUB_CFG="$ROOT/root/freeNT/isodir/boot/grub/grub.cfg"
-LINKER_LD="$ROOT/linker.ld"
+# FIX (overlap bug): the repo-root linker.ld is a stale reference-only
+# stub (see its own header comment - it says as much) with no
+# __kernel_end/PHDRS/.asset_blobs support at all. The real linker
+# script the Makefile actually uses is kernel64.ld; build.sh was
+# pointed at the wrong file, which is why kernel.c's __kernel_end
+# reference failed to link and, once that's fixed too, is the file
+# that actually needs the PT_LOAD-overlap fix (see kernel64.ld itself).
+LINKER_LD="$KERNEL_SRC/boot/kernel64.ld"
+ASSET_BLOB_SCRIPT="$KERNEL_SRC/boot/build_asset_blob.py"
+TRBL_LOGO_PATH="$KERNEL_SRC/boot/assets/trbl_logo.png"
 
 BUILD_DIR="$ROOT/build"
 ISO_ROOT="$BUILD_DIR/iso_root"
@@ -124,72 +133,165 @@ do_build() {
     echo "  Toriginal OS — build"
     echo "========================================"
 
-    rm -rf "$OBJ_DIR"
-    mkdir -p "$OBJ_DIR" "$ISO_ROOT/boot/grub"
-    : > "$OBJ_DIR/.objlist"
+    # ── 0. build the custom bootloader (stage1.bin/stage2.bin) BEFORE
+    #      anything else - bootloader_blobs.s below .incbin's them, so
+    #      they must exist on disk first. This is a completely separate
+    #      build (16/32-bit real/protected-mode code, its own linker
+    #      script) from the 64-bit kernel build the rest of this
+    #      function does - see build_loader.sh's own header comment. ──
+    echo "  LOADER  stage1/stage2"
+    "$KERNEL_SRC/boot/loader/build_loader.sh"
 
-    # ── 1. boot stubs (order matters: boot64.o's multiboot header must be
-    #      first in the final link, see linker.ld's KEEP(*(.multiboot))) ────
-    assemble "$KERNEL_SRC/boot/boot64.s"        "$OBJ_DIR/boot/boot64.o"
-    assemble "$KERNEL_SRC/boot/interrupts.s"    "$OBJ_DIR/boot/interrupts_asm.o"
-    assemble "$KERNEL_SRC/boot/keyboard_isr.s"  "$OBJ_DIR/boot/keyboard_isr.o"
+    # FIX (overlap bug follow-on): asset_blob.s/trbl_logo_blob.s were
+    # never assembled at all by this script (only boot64.s,
+    # interrupts.s, keyboard_isr.s, bootloader_blobs.s were
+    # hand-listed), which is why kernel.c's g_asset_blob/
+    # g_trbl_logo_png references failed to link. Regenerate the
+    # packed asset archive up front, same as the Makefile's
+    # $(BIN)/asset_blob.bin rule.
+    echo "  ASSETS  packing wallpapers/startmenu/cursors"
+    ASSET_BLOB_BIN="$BUILD_DIR/asset_blob.bin"
+    mkdir -p "$BUILD_DIR"
+    python3 "$ASSET_BLOB_SCRIPT" "$ASSET_BLOB_BIN"
 
-    # ── 2. every other kernel .c, auto-discovered ───────────────────────────
-    while IFS= read -r -d '' src; do
-        # FIX: graphics_3d.c returns small float structs (vec3_t, mat4_t)
-        # by value - the x86-64 SysV ABI passes/returns those in XMM
-        # registers, which -mno-sse (used kernel-wide, since nothing else
-        # touches floats and interrupt handlers don't save/restore SSE
-        # state on every entry) makes flatly impossible to compile
-        # ("SSE register return with SSE disabled"). This was never caught
-        # before because the old build.sh never actually compiled this
-        # file at all (see this script's top-of-file comment) - discovered
-        # for the first time by this rewrite actually building everything.
-        # Nothing in the kernel calls into graphics_3d.c yet (it's staged,
-        # unused code for a future 3D pipeline), so enabling SSE2 for just
-        # this one translation unit is safe today; the moment something
-        # calls these functions from interrupt/ISR context, that call site
-        # needs its own fxsave/fxrstor around the call (see process.c's
-        # fxsave_state/fxrstor_state for the existing pattern) since this
-        # flag alone doesn't make ISRs SSE-safe.
-        if [[ "$(basename "$src")" == "graphics_3d.c" ]]; then
-            rel="${src#"$KERNEL_SRC"/}"
-            obj="$OBJ_DIR/${rel%.c}.o"
+    # ── TWO-PASS BUILD ────────────────────────────────────────────────
+    # installer.c's write_bootloader_to_disk() needs the exact built
+    # kernel.elf file embedded in itself (as real bytes, not a runtime
+    # memory reconstruction - the running kernel's loaded segments
+    # don't preserve the original file layout, see installer.c's own
+    # comment on this for the full reasoning) so it can write a working
+    # copy to disk during install. That's a genuine chicken-and-egg
+    # problem: the kernel can't embed a file that doesn't exist until
+    # the kernel itself finishes building. Solved the same way
+    # self-referential payloads always are (e.g. Linux's own bzImage):
+    # build twice.
+    #
+    #   PASS 1 (build_pass PASS1_BUILD "$OBJ_DIR_PASS1" "$KERNEL_PASS1_ELF"):
+    #     ordinary kernel build, installer.c compiled with -DPASS1_BUILD
+    #     (stub write_bootloader_to_disk(), see that #ifndef guard in
+    #     installer.c), bootloader_blobs.o excluded entirely. This is
+    #     the exact binary that gets embedded and shipped to disk.
+    #
+    #   PASS 2 (build_pass "" "$OBJ_DIR" "$KERNEL_ELF"):
+    #     real installer.o (no -DPASS1_BUILD), PLUS bootloader_blobs.o,
+    #     which .incbin's PASS 1's kernel.elf output alongside
+    #     stage1.bin/stage2.bin. This is what actually ships as
+    #     ToriginalOS.iso - byte-identical to PASS 1 except for the
+    #     added .rodata blob data.
+    build_pass() {
+        local pass1_define="$1" obj_dir="$2" out_elf="$3"
+
+        rm -rf "$obj_dir"
+        mkdir -p "$obj_dir"
+        : > "$obj_dir/.objlist"
+
+        local local_assemble
+        local_assemble() {
+            local src="$1" obj="$2"
+            echo "  AS  ${src#"$ROOT"/}"
             mkdir -p "$(dirname "$obj")"
-            echo "  CC  $rel (with -msse2, see build.sh comment)"
-            $CC "${CFLAGS[@]}" -mmmx -msse -msse2 -c "$src" -o "$obj"
-            echo "$obj" >> "$OBJ_DIR/.objlist"
-        else
-            compile "$src"
+            $AS -c -m64 "$src" -o "$obj"
+            echo "$obj" >> "$obj_dir/.objlist"
+        }
+        local local_compile
+        local_compile() {
+            local src="$1" extra_defines="$2"
+            local rel="${src#"$KERNEL_SRC"/}"
+            local obj="$obj_dir/${rel%.c}.o"
+            mkdir -p "$(dirname "$obj")"
+            echo "  CC  $rel"
+            # shellcheck disable=SC2086
+            $CC "${CFLAGS[@]}" $extra_defines -c "$src" -o "$obj"
+            echo "$obj" >> "$obj_dir/.objlist"
+        }
+
+        local_assemble "$KERNEL_SRC/boot/boot64.s"        "$obj_dir/boot/boot64.o"
+        local_assemble "$KERNEL_SRC/boot/interrupts.s"    "$obj_dir/boot/interrupts_asm.o"
+        local_assemble "$KERNEL_SRC/boot/keyboard_isr.s"  "$obj_dir/boot/keyboard_isr.o"
+
+        # FIX (overlap bug follow-on): both blobs are referenced directly
+        # by kernel.c (g_asset_blob/g_trbl_logo_png), not just PASS 2 like
+        # bootloader_blobs.s, so assemble them unconditionally in every pass.
+        echo "  AS  boot/asset_blob.s"
+        mkdir -p "$obj_dir/boot"
+        $CC -m64 -x assembler-with-cpp \
+            -DASSET_BLOB_PATH="\"$ASSET_BLOB_BIN\"" \
+            -c "$KERNEL_SRC/boot/asset_blob.s" -o "$obj_dir/boot/asset_blob.o"
+        echo "$obj_dir/boot/asset_blob.o" >> "$obj_dir/.objlist"
+
+        echo "  AS  boot/trbl_logo_blob.s"
+        $CC -m64 -x assembler-with-cpp \
+            -DTRBL_LOGO_PATH="\"$TRBL_LOGO_PATH\"" \
+            -c "$KERNEL_SRC/boot/trbl_logo_blob.s" -o "$obj_dir/boot/trbl_logo_blob.o"
+        echo "$obj_dir/boot/trbl_logo_blob.o" >> "$obj_dir/.objlist"
+
+        if [ -z "$pass1_define" ]; then
+            # PASS 2 only: bootloader_blobs.s needs real C-preprocessor
+            # handling (for the STAGE1_BIN_PATH/STAGE2_BIN_PATH/
+            # KERNEL_ELF_PATH .incbin paths - a plain relative .incbin
+            # path can't work here, see that file's header comment).
+            echo "  AS  boot/bootloader_blobs.s"
+            mkdir -p "$obj_dir/boot"
+            $CC -m64 -x assembler-with-cpp \
+                -DSTAGE1_BIN_PATH="\"$KERNEL_SRC/boot/loader/stage1.bin\"" \
+                -DSTAGE2_BIN_PATH="\"$KERNEL_SRC/boot/loader/stage2.bin\"" \
+                -DKERNEL_ELF_PATH="\"$KERNEL_PASS1_ELF\"" \
+                -c "$KERNEL_SRC/boot/bootloader_blobs.s" -o "$obj_dir/boot/bootloader_blobs.o"
+            echo "$obj_dir/boot/bootloader_blobs.o" >> "$obj_dir/.objlist"
         fi
-    done < <(find "$KERNEL_SRC" -maxdepth 1 -iname '*.c' -print0 | sort -z)
 
-    # ── 3. sys/shell/shell.c — the command dispatcher (kernel_os_shell,
-    #      defined in $KERNEL_SRC/shell.c, calls sys_shell_dispatch, defined
-    #      here - see shell.h's comment on why these are two separate files
-    #      with the same base name). Compiled into its own object path
-    #      (sys_shell/shell.o) so it never collides with $OBJ_DIR/shell.o
-    #      from step 2 above. ──────────────────────────────────────────────
-    SYS_SHELL_C="$ROOT/root/sys/shell/shell.c"
-    if [ -f "$SYS_SHELL_C" ]; then
-        echo "  CC  sys/shell/shell.c"
-        mkdir -p "$OBJ_DIR/sys_shell"
-        $CC "${CFLAGS[@]}" -c "$SYS_SHELL_C" -o "$OBJ_DIR/sys_shell/shell.o"
-        echo "$OBJ_DIR/sys_shell/shell.o" >> "$OBJ_DIR/.objlist"
-    else
-        echo "  !!  $SYS_SHELL_C not found - kernel_os_shell() will fail to" \
-             "link against sys_shell_dispatch()"
-        exit 1
-    fi
+        # ── every other kernel .c, auto-discovered ──────────────────
+        while IFS= read -r -d '' src; do
+            if [[ "$(basename "$src")" == "graphics_3d.c" ]]; then
+                local rel="${src#"$KERNEL_SRC"/}"
+                local obj="$obj_dir/${rel%.c}.o"
+                mkdir -p "$(dirname "$obj")"
+                echo "  CC  $rel (with -msse2, see build.sh comment)"
+                $CC "${CFLAGS[@]}" -mmmx -msse -msse2 -c "$src" -o "$obj"
+                echo "$obj" >> "$obj_dir/.objlist"
+            elif [[ "$(basename "$src")" == "installer.c" ]]; then
+                # The one file whose compilation genuinely differs
+                # between passes - see the TWO-PASS BUILD comment above.
+                local_compile "$src" "$pass1_define"
+            else
+                local_compile "$src" ""
+            fi
+        done < <(find "$KERNEL_SRC" -maxdepth 1 -iname '*.c' -print0 | sort -z)
 
-    # ── 4. link everything the .objlist collected ───────────────────────────
-    echo "  LD  $KERNEL_ELF"
-    mapfile -t ALL_OBJS < "$OBJ_DIR/.objlist"
-    $LD "${LDFLAGS[@]}" "${ALL_OBJS[@]}" -o "$KERNEL_ELF"
+        # ── sys/shell/shell.c (see original comment: two files share
+        #    the basename shell.c, this is the CLI dispatcher one) ────
+        local SYS_SHELL_C="$ROOT/root/sys/shell/shell.c"
+        if [ -f "$SYS_SHELL_C" ]; then
+            echo "  CC  sys/shell/shell.c"
+            mkdir -p "$obj_dir/sys_shell"
+            $CC "${CFLAGS[@]}" -c "$SYS_SHELL_C" -o "$obj_dir/sys_shell/shell.o"
+            echo "$obj_dir/sys_shell/shell.o" >> "$obj_dir/.objlist"
+        else
+            echo "  !!  $SYS_SHELL_C not found - kernel_os_shell() will fail to" \
+                 "link against sys_shell_dispatch()"
+            exit 1
+        fi
 
-    echo "  Kernel: $KERNEL_ELF  ($(du -h "$KERNEL_ELF" | cut -f1))"
+        echo "  LD  $out_elf"
+        mkdir -p "$(dirname "$out_elf")"
+        mapfile -t ALL_OBJS < "$obj_dir/.objlist"
+        $LD "${LDFLAGS[@]}" "${ALL_OBJS[@]}" -o "$out_elf"
+        echo "  Kernel: $out_elf  ($(du -h "$out_elf" | cut -f1))"
+    }
 
-    # ── 5. assemble ISO ──────────────────────────────────────────────────────
+    KERNEL_PASS1_ELF="$BUILD_DIR/kernel_pass1.elf"
+    OBJ_DIR_PASS1="$BUILD_DIR/obj_pass1"
+
+    echo ""
+    echo "── PASS 1 (no bootloader blob) ──"
+    build_pass "-DPASS1_BUILD" "$OBJ_DIR_PASS1" "$KERNEL_PASS1_ELF"
+
+    echo ""
+    echo "── PASS 2 (with embedded bootloader + kernel copy) ──"
+    mkdir -p "$ISO_ROOT/boot/grub"
+    build_pass "" "$OBJ_DIR" "$KERNEL_ELF"
+
+    # ── assemble ISO ─────────────────────────────────────────────────
     cp "$KERNEL_ELF" "$ISO_ROOT/boot/kernel.elf"
     cp "$GRUB_CFG"   "$ISO_ROOT/boot/grub/grub.cfg"
 

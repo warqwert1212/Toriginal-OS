@@ -1,22 +1,22 @@
 
 #include <stdint.h>
-#include "idt.h"
+#include "interrupts.h"
 #include "keyboard.h"
 #include "serial.h"
 #include "apic.h"
 
-extern void keyboard_isr_stub(void);
+static void keyboard_irq_adapter(interrupt_frame_t *frame)
+{
+    (void)frame;
+    keyboard_irq_handler();
+}
 
 void keyboard_wire_idt(void)
 {
-    idt_set_gate(0x21,
-                 (uint64_t)(uintptr_t)keyboard_isr_stub,
-                 0x08,
-                 0x8E);
-
-    serial_puts("[KBD] IRQ1 wired to IDT vector 0x21.\n");
-
+    interrupts_register_handler(0x21, keyboard_irq_adapter);
     keyboard_init();
+    interrupts_unmask_irq(1);
+    serial_puts("[KBD] IRQ1 registered on the shared dispatcher.\n");
 
     if (apic_available()) {
         apic_route_irq(1, 0x21);
