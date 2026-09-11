@@ -7,3 +7,4 @@ backup/
 
 # Ignore the generated ramdisk archive
 sysroot.tar
+*.zip
