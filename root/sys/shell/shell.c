@@ -23,9 +23,16 @@
 #include "syscfg.h"
 #include "graphics_core.h"
 #include "vbe_dispi.h"
+#include "trbl_settings.h"
+#include "pmm.h"
+#include "cpu.h"
+#include "pci.h"
+#include "ata.h"
+#include "uhci.h"
+#include "shell.h"
 
 #define OS_NAME    "Toriginal OS"
-#define OS_VERSION "1.2.4"
+#define OS_VERSION "1.2"
 #define KERNEL_NAME "freeNT"
 #define BUILD_ARCH  "x86-64"
 
@@ -41,7 +48,12 @@ static char g_cwd[256] = "/";
 static char g_username[32] = "user";
 static int  g_username_loaded = 0;
 
-
+/* ── Real, saveable display settings ─────────────────────────────────────
+ * Backed by /toriginal_os/config.ini via syscfg.h. g_resolution here is
+ * the *label* for whatever's currently active (e.g. "1024x768"), not a
+ * fake cosmetic string - it always matches g_framebuffer's real
+ * width/height once graphics is up, because cmd_settings() only updates
+ * it after graphics_set_mode() reports success. */
 static char g_resolution[16] = "1024x768";
 
 typedef struct { const char *name; vga_color_t value; } named_color_t;
@@ -68,10 +80,16 @@ static const named_color_t COLOR_NAMES[] = {
 };
 #define COLOR_NAME_COUNT (sizeof(COLOR_NAMES) / sizeof(COLOR_NAMES[0]))
 
+/* Parses either a color name ("cyan") or a raw 0-15 VGA index ("3") -
+ * both are reasonable things to type, and this codebase's palette is
+ * always exactly the 16-entry VGA set (see vga.h), so a plain numeric
+ * index is unambiguous and worth supporting for anyone who already
+ * knows the standard VGA color table. Returns 1 and fills *out on
+ * success, 0 if arg matches neither form. */
 static int parse_color(const char *arg, vga_color_t *out) {
     if (!arg || !arg[0]) return 0;
 
-
+    /* Numeric form: exactly digits, 0-15. */
     int is_numeric = 1;
     for (const char *p = arg; *p; p++) {
         if (*p < '0' || *p > '9') { is_numeric = 0; break; }
@@ -99,30 +117,44 @@ static const char *color_name(vga_color_t c) {
     return "unknown";
 }
 
-
+/* Applies (from config.ini) the text/background/status-bar colors
+ * saved by a previous 'settings' run. Safe to call every boot even on
+ * a fresh install with no saved colors yet - syscfg_get_or() falls
+ * back to this codebase's original hardcoded defaults (white text,
+ * black background, white-on-blue status bar), so a never-configured
+ * system looks exactly like it always did. Called once from
+ * kernel_os_shell() at startup (kernel/shell.c) - color changes made
+ * afterward via 'settings' apply live and re-save immediately, they
+ * don't need a second call to this. */
 void sys_shell_apply_saved_display_settings(void) {
     if (!trpfs_is_mounted()) return;
 
     char buf[8];
     vga_color_t fg, bg, sfg, sbg;
 
-    syscfg_get_or("text_color", buf, sizeof(buf), "7"); 
+    syscfg_get_or("text_color", buf, sizeof(buf), "7"); /* VGA_LIGHT_GREY */
     if (!parse_color(buf, &fg)) fg = VGA_LIGHT_GREY;
-    syscfg_get_or("bg_color", buf, sizeof(buf), "0"); 
+    syscfg_get_or("bg_color", buf, sizeof(buf), "0"); /* VGA_BLACK */
     if (!parse_color(buf, &bg)) bg = VGA_BLACK;
     vga_set_color(fg, bg);
 
-    syscfg_get_or("statusbar_color", buf, sizeof(buf), "15");
+    syscfg_get_or("statusbar_color", buf, sizeof(buf), "15"); /* VGA_WHITE fg */
     if (!parse_color(buf, &sfg)) sfg = VGA_WHITE;
-    sbg = VGA_BLUE;
+    sbg = VGA_BLUE; /* status bar background stays fixed; only its
+                      * foreground/text color is user-configurable for
+                      * now, matching what was actually asked for
+                      * ("time bar colour") without also risking an
+                      * unreadable bar from two independently-chosen
+                      * colors landing on the same value. */
     vga_set_statusbar_color(sfg, sbg);
 
     syscfg_get_or("resolution", g_resolution, sizeof(g_resolution), "1024x768");
 }
 
-
+/* Exposed so kernel/shell.c can build the prompt (os~$ vs os/folder~$) */
 const char *sys_shell_get_cwd(void) { return g_cwd; }
 
+/* Read "username=..." out of /toriginal_os/config.ini, once, cached. */
 static void load_username(void) {
     if (g_username_loaded) return;
     g_username_loaded = 1;
@@ -231,6 +263,14 @@ static void print_size(uint64_t b) {
     if      (b >= 1024*1024) { print_u64(b/(1024*1024)); io_put_string(" MB"); }
     else if (b >= 1024)      { print_u64(b/1024);        io_put_string(" KB"); }
     else                     { print_u64(b);             io_put_string(" B");  }
+}
+
+static void print_hex_u32(uint32_t v, int digits) {
+    static const char hexd[] = "0123456789abcdef";
+    char buf[9];
+    for (int i = digits - 1; i >= 0; i--) { buf[i] = hexd[v & 0xF]; v >>= 4; }
+    buf[digits] = '\0';
+    io_put_string(buf);
 }
 
 static void resolve_path(const char *arg, char *dst, size_t n) {
@@ -394,8 +434,23 @@ static char *split_first(char *buf) {
     return NULL;
 }
 
+/* Set for the duration of a `force <command>` dispatch (see cmd_force
+ * below) - checked by the few gates in this file that normally refuse
+ * to run something (need_fs()'s "filesystem not mounted" check,
+ * cmd_run()'s loader-format rejection) so `force` can push past them
+ * on request. It does not and cannot make a genuinely broken
+ * operation succeed - it just skips the OS's own gatekeeping, not the
+ * underlying reason the gate existed. */
+static int g_force_mode = 0;
+
 static int need_fs(const char *cmd) {
     if (trpfs_is_mounted()) return 1;
+    if (g_force_mode) {
+        io_put_string(cmd);
+        io_put_string(": forced ahead with no filesystem mounted - this will "
+                       "likely fail or behave unpredictably\n");
+        return 1;
+    }
     io_put_string(cmd);
     io_put_string(": filesystem not mounted - run 'setup' first\n");
     return 0;
@@ -409,7 +464,6 @@ static void fd_puts(fd_t fd, const char *s) {
 static void cmd_help(void) {
     io_put_string("copy <src> <dst> - copy a regular file\n");
     io_put_string("write <path> <text> - write text into a file\n");
-    io_put_string("echo <text> - print text\n");
     io_put_string("cat <path> - print a file to screen\n");
     io_put_string("run <path.trp> - execute a TRP package\n");
     io_put_string("rm <path> - delete a file\n");
@@ -434,6 +488,7 @@ static void cmd_help(void) {
 }
 
 static void cmd_advanced_help(void) {
+    io_put_string("echo <text> - print text\n");
     io_put_string("trpbuild <folder> - build a .trp from a folder\n");
     io_put_string("trpm list - list installed packages\n");
     io_put_string("trpm install <pkg.trp> - install a TRP package\n");
@@ -442,6 +497,9 @@ static void cmd_advanced_help(void) {
     io_put_string("ifconfig [ip nm gw [dns]] - show/set net config\n");
     io_put_string("ping <ip|hostname> - real ICMP echo request\n");
     io_put_string("free - show heap memory stats\n");
+    io_put_string("hardware - list every kernel-recognized device (CPU, RAM, ports, drives, PCI)\n");
+    io_put_string("mem <amount>[KB|MB|GB] | max | least - set the OS's RAM allocation\n");
+    io_put_string("force <command> - run <command>, skipping its normal safety checks\n");
     io_put_string("\n");
 }
 
@@ -606,7 +664,19 @@ static void cmd_run(const char *arg) {
     io_put_string("run: loading "); io_put_string(path); io_put_string(" ...\n");
     process_t *proc = process_create(path, 1);
     if (!proc) { io_put_string("run: failed to create process\n"); return; }
-    if (loader_load_executable(path, proc->pid) == 0) {
+    int rc = loader_load_executable(path, proc->pid);
+    if (rc != 0 && g_force_mode) {
+        /* loader_load_executable() rejects on unrecognized extension
+         * or a failed format-specific loader (see loader_enhanced.c).
+         * Forced, skip that gate and hand it to the TRP loader
+         * directly regardless of extension - it's still that loader's
+         * own internal validation from here, not a guarantee it'll
+         * actually run correctly. */
+        io_put_string("run: normal loader rejected it - forcing it through "
+                       "the TRP loader anyway\n");
+        rc = loader_load_trp(path, proc->pid);
+    }
+    if (rc == 0) {
         process_start(proc->pid);
     } else {
         io_put_string("run: loader rejected "); io_put_string(path); io_put_char('\n');
@@ -619,6 +689,127 @@ static void cmd_free(void) {
     io_put_string("heap  total : "); print_size(ar);               io_put_char('\n');
     io_put_string("      used  : "); print_size(al);               io_put_char('\n');
     io_put_string("      free  : "); print_size(ar>al?ar-al:0);    io_put_char('\n');
+}
+
+static void cmd_hardware(void) {
+    io_put_string("=== CPU ===\n  ");
+    char brand[49];
+    cpu_get_brand_string(brand);
+    io_put_string(brand); io_put_char('\n');
+
+    io_put_string("\n=== RAM ===\n");
+    io_put_string("  detected  : "); print_u64((uint64_t)pmm_get_total_ram_kb() / 1024); io_put_string(" MB\n");
+    io_put_string("  allocated : "); print_u64((uint64_t)pmm_get_ram_limit_kb() / 1024); io_put_string(" MB  (see `mem`)\n");
+
+    io_put_string("\n=== Ports / onboard controllers ===\n");
+    io_put_string("  PS/2 keyboard   (0x60/0x64)\n");
+    io_put_string("  PS/2 mouse      (0x60/0x64, aux channel)\n");
+    io_put_string("  Serial COM1     (0x3F8)\n");
+    if (uhci_available()) io_put_string("  USB (UHCI)      controller present\n");
+
+    io_put_string("\n=== Drives ===\n");
+    ata_detect_all();
+    int any_drive = 0;
+    for (int i = 0; i < 4; i++) {
+        if (ata_drive_present(i)) {
+            any_drive = 1;
+            io_put_string("  ATA drive "); print_u64((uint64_t)i); io_put_char('\n');
+        }
+    }
+    if (!any_drive) io_put_string("  (none detected)\n");
+
+    io_put_string("\n=== PCI / PCIe devices ===\n");
+    static pci_device_t devs[64];
+    int count = pci_scan(devs, 64);
+    if (count <= 0) {
+        io_put_string("  (none found)\n");
+    } else {
+        for (int i = 0; i < count; i++) {
+            io_put_string("  ");
+            print_hex_u32(devs[i].bus, 2);      io_put_char(':');
+            print_hex_u32(devs[i].device, 2);   io_put_char('.');
+            print_hex_u32(devs[i].function, 1);
+            io_put_string("  vendor="); print_hex_u32(devs[i].vendor_id, 4);
+            io_put_string(" device=");  print_hex_u32(devs[i].device_id, 4);
+            io_put_string(" class=");   print_hex_u32(devs[i].class_code, 2);
+            io_put_char(':');           print_hex_u32(devs[i].subclass, 2);
+            io_put_char('\n');
+        }
+        io_put_string("  ("); print_u64((uint64_t)count); io_put_string(" device(s) total)\n");
+    }
+}
+
+/* Parses a bare number with an optional unit ("14", "14MB", "512KB",
+ * "2GB") into an exact KB amount. Defaults to MB when no unit is
+ * given, matching `mem 14 MB`'s style but also accepting `mem 14`. */
+static int parse_mem_amount_kb(const char *arg, uint32_t *out_kb) {
+    while (*arg == ' ') arg++;
+    if (*arg < '0' || *arg > '9') return 0;
+    uint64_t n = 0;
+    while (*arg >= '0' && *arg <= '9') { n = n * 10 + (uint64_t)(*arg - '0'); arg++; }
+    while (*arg == ' ') arg++;
+    uint64_t mult = 1024; /* default unit: MB */
+    if (*arg) {
+        char u = (char)((*arg >= 'a' && *arg <= 'z') ? *arg - 32 : *arg);
+        if      (u == 'K') mult = 1;
+        else if (u == 'M') mult = 1024;
+        else if (u == 'G') mult = 1024ull * 1024;
+        else return 0;
+    }
+    uint64_t kb = n * mult;
+    if (kb == 0 || kb > 0xFFFFFFFFull) return 0;
+    *out_kb = (uint32_t)kb;
+    return 1;
+}
+
+static void cmd_mem(const char *arg) {
+    if (!arg || !arg[0]) {
+        io_put_string("usage: mem <amount>[KB|MB|GB] | mem max | mem least\n");
+        io_put_string("  currently allocated: ");
+        print_u64((uint64_t)pmm_get_ram_limit_kb() / 1024); io_put_string(" MB of ");
+        print_u64((uint64_t)pmm_get_total_ram_kb() / 1024); io_put_string(" MB detected\n");
+        return;
+    }
+
+    char lower[16]; size_t li = 0;
+    for (; arg[li] && arg[li] != ' ' && li < sizeof(lower)-1; li++)
+        lower[li] = (char)((arg[li] >= 'A' && arg[li] <= 'Z') ? arg[li] + 32 : arg[li]);
+    lower[li] = '\0';
+
+    uint8_t mode; uint32_t custom_kb = 0;
+    if (strcmp(lower, "max") == 0) {
+        mode = TRBL_MEM_MODE_MAX;
+    } else if (strcmp(lower, "least") == 0 || strcmp(lower, "lest") == 0) {
+        mode = TRBL_MEM_MODE_LEAST;
+    } else {
+        if (!parse_mem_amount_kb(arg, &custom_kb)) {
+            io_put_string("mem: bad amount - try `mem 512MB`, `mem 2GB`, `mem max`, or `mem least`\n");
+            return;
+        }
+        mode = TRBL_MEM_MODE_CUSTOM;
+    }
+
+    if (pmm_apply_ram_config(mode, custom_kb) != 0) {
+        io_put_string("mem: failed to apply (value out of range?)\n");
+        return;
+    }
+    trbl_settings_set_memory(mode, custom_kb); /* persists across reboots too */
+
+    io_put_string("mem: now allocated "); print_u64((uint64_t)pmm_get_ram_limit_kb() / 1024);
+    io_put_string(" MB of "); print_u64((uint64_t)pmm_get_total_ram_kb() / 1024);
+    io_put_string(" MB detected\n");
+}
+
+static void cmd_force(const char *arg) {
+    if (!arg || !arg[0]) {
+        io_put_string("usage: force <command> - runs <command>, skipping the "
+                       "OS's own safety/validation checks for it\n");
+        return;
+    }
+    int was_forcing = g_force_mode;
+    g_force_mode = 1;
+    sys_shell_dispatch(arg);
+    g_force_mode = was_forcing;
 }
 
 static void cmd_desktop(void) {
@@ -663,10 +854,40 @@ static int parse_resolution(const char *arg, uint32_t *w, uint32_t *h) {
     return 1;
 }
 
+/* Parses one "a.b.c.d" IPv4 octet quad starting at s, writing to
+ * out[4] and advancing *end past it (leaving any trailing whitespace
+ * for the caller). Returns 0 on any malformed input (out-of-range
+ * octet, missing dot, empty field) without touching out[]/end. */
+static int parse_ipv4(const char *s, uint8_t out[4], const char **end) {
+    uint8_t tmp[4];
+    const char *p = s;
+    for (int octet = 0; octet < 4; octet++) {
+        if (*p < '0' || *p > '9') return 0;
+        uint32_t v = 0;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10 + (uint32_t)(*p - '0');
+            p++; digits++;
+            if (digits > 3 || v > 255) return 0;
+        }
+        tmp[octet] = (uint8_t)v;
+        if (octet < 3) {
+            if (*p != '.') return 0;
+            p++;
+        }
+    }
+    if (*p != '\0' && *p != ' ') return 0;
+    memcpy(out, tmp, 4);
+    *end = p;
+    return 1;
+}
+
 static void print_settings_usage(void) {
     io_put_string("usage:\n");
     io_put_string("  settings                         show current settings\n");
     io_put_string("  settings resolution <WxH>         e.g. 1280x720 (max 1920x1080)\n");
+    io_put_string("  settings network <off|dhcp>       boot-time network bring-up\n");
+    io_put_string("  settings network static <ip> <mask> <gateway> <dns>\n");
     io_put_string("  settings textcolor <name|0-15>    e.g. white, lightcyan, 15\n");
     io_put_string("  settings bgcolor <name|0-15>      e.g. black, blue, 0\n");
     io_put_string("  settings statusbarcolor <name|0-15>  status/time bar text color\n");
@@ -699,7 +920,11 @@ static void cmd_settings(const char *arg) {
     }
 
     /* Split "settings <sub> <value>" into sub/value in place. */
-    char sub[24]; char value[24];
+    /* value needs room for "static ip mask gateway dns" - four dotted-
+     * quad IPv4 addresses plus spaces, up to 15*4 + "static " + 3
+     * spaces = ~70 chars; 24 (fine for resolution/color values) would
+     * silently truncate a static network config mid-address. */
+    char sub[24]; char value[80];
     unsigned i = 0;
     while (arg[i] && arg[i] != ' ' && i < sizeof(sub) - 1) { sub[i] = arg[i]; i++; }
     sub[i] = '\0';
@@ -733,10 +958,76 @@ static void cmd_settings(const char *arg) {
         g_resolution[sizeof(g_resolution) - 1] = '\0';
         syscfg_set("resolution", g_resolution);
         trpfs_sync();
+
+        /* Also persist to the TRBL boot-time settings sector (see
+         * trbl_settings.h) - syscfg.ini only affects the live
+         * in-OS display API; without this, the change would be lost
+         * on reboot and stage2.s would keep booting into whatever
+         * resolution was last written here (or the 1024x768 default
+         * on a fresh install). Not fatal if it fails - the live
+         * session's resolution has already changed either way, this
+         * only affects what greets you on the next boot. */
+        if (trbl_settings_set_resolution((uint16_t)w, (uint16_t)h) != 0) {
+            io_put_string("settings: warning - could not persist resolution to the\n");
+            io_put_string("TRBL boot sector; it will apply this session but not survive reboot.\n");
+        }
+
         sys_shell_update_statusbar();
         io_put_string("settings: resolution set to ");
         io_put_string(g_resolution);
         io_put_char('\n');
+        return;
+    }
+
+    if (strcmp(sub, "network") == 0) {
+        /* settings network off
+         * settings network dhcp
+         * settings network static <ip> <mask> <gateway> <dns>
+         * Stores boot-time network config TRBL's kernel-side bring-up
+         * (not yet wired to the live NIC - see trbl_settings.c) will
+         * read on a future boot. Doesn't touch the live `ifconfig`
+         * session at all; this is boot config, not runtime config. */
+        char mode_str[16]; unsigned k = 0;
+        while (value[k] && value[k] != ' ' && k < sizeof(mode_str) - 1) {
+            mode_str[k] = value[k]; k++;
+        }
+        mode_str[k] = '\0';
+
+        if (strcmp(mode_str, "off") == 0) {
+            if (trbl_settings_set_network(TRBL_NET_OFF, 0, 0, 0, 0) != 0) {
+                io_put_string("settings: failed to write TRBL settings sector\n");
+                return;
+            }
+            io_put_string("settings: boot-time networking disabled\n");
+            return;
+        }
+        if (strcmp(mode_str, "dhcp") == 0) {
+            if (trbl_settings_set_network(TRBL_NET_DHCP, 0, 0, 0, 0) != 0) {
+                io_put_string("settings: failed to write TRBL settings sector\n");
+                return;
+            }
+            io_put_string("settings: boot-time networking set to DHCP\n");
+            return;
+        }
+        if (strcmp(mode_str, "static") == 0) {
+            const char *rest = value + k;
+            while (*rest == ' ') rest++;
+            uint8_t ip[4], mask[4], gw[4], dns[4];
+            if (!parse_ipv4(rest, ip, &rest) ||
+                !parse_ipv4(rest, mask, &rest) ||
+                !parse_ipv4(rest, gw, &rest) ||
+                !parse_ipv4(rest, dns, &rest)) {
+                io_put_string("settings: usage - settings network static <ip> <mask> <gateway> <dns>\n");
+                return;
+            }
+            if (trbl_settings_set_network(TRBL_NET_STATIC, ip, mask, gw, dns) != 0) {
+                io_put_string("settings: failed to write TRBL settings sector\n");
+                return;
+            }
+            io_put_string("settings: boot-time networking set to static\n");
+            return;
+        }
+        io_put_string("settings: usage - settings network <off|dhcp|static ip mask gw dns>\n");
         return;
     }
 
@@ -1369,6 +1660,9 @@ void sys_shell_dispatch(const char *line) {
     if (strcmp(cmd,"ifconfig") ==0) { cmd_ifconfig(arg);           return; }
     if (strcmp(cmd,"ping")     ==0) { cmd_ping(arg);               return; }
     if (strcmp(cmd,"free")     ==0) { cmd_free();                  return; }
+    if (strcmp(cmd,"hardware") ==0) { cmd_hardware();               return; }
+    if (strcmp(cmd,"mem")      ==0) { cmd_mem(arg);                 return; }
+    if (strcmp(cmd,"force")    ==0) { cmd_force(arg);               return; }
     if (strcmp(cmd,"setup")    ==0 || strcmp(cmd,"oobe") ==0 || strcmp(cmd,"install") ==0) {
         installer_run();
         g_username_loaded = 0; /* force re-read in case account changed */

@@ -125,23 +125,28 @@ a20_done:
      * anything but a real disk error" policy. */
     call    load_trbl_settings
 
-    /* ── Step 3: VBE mode set - TEMPORARILY DISABLED ──────────────────────
-     * "TRBL startup shows for a sec then black" after the video-mode-
-     * reset fix strongly points at this step or draw_logo: both are
-     * new, hand-written, and never boot-tested in an emulator (none
-     * was available while writing them), unlike everything before
-     * this point which is now confirmed working (text is visible).
-     * Skipping this call leaves fb_found=0, which already makes
-     * draw_logo and draw_progress_bar into safe no-ops on their own
-     * (see their own fb_found checks) - so nothing else needs
-     * touching to fully remove this step's effect. Re-enable once
-     * plain-text loading is confirmed reaching "kernel loaded...". */
-    /* call    vbe_set_mode */
-    /* call    draw_logo */
-
-    /* ── Step 4: load kernel ELF from disk ────────────────────────────── */
+    /* ── Step 3: load kernel ELF from disk ────────────────────────────── */
+    /* FIX: this used to run AFTER VBE mode-set below. That's exactly
+     * backwards: once vbe_set_mode succeeds, INT 10h AH=0x0E teletype
+     * output stops being visible at all - there's no text-mode
+     * character buffer to write into once the display is a linear
+     * pixel framebuffer, so it silently does nothing. Every
+     * print_string call after that point - "loading kernel...", any
+     * disk error, the new BIOS-status/LBA diagnostics - was running
+     * and (on failure) genuinely printing, just into a screen that
+     * could no longer show it. That's what "shows text for a second
+     * then black" actually was. Kernel loading now happens first,
+     * while we can still see if it goes wrong. */
     call    load_kernel_elf
     jc      fatal_disk_error
+
+    /* ── Step 4: VBE mode set + boot logo (framebuffer test) ──────────────
+     * Runs last, right before the jump into the kernel - exactly the
+     * "is the framebuffer actually working" check this was meant to
+     * be, with no more text-mode diagnostics after it that could get
+     * silently swallowed by the mode switch. */
+    call    vbe_set_mode
+    call    draw_logo
 
     /* ── Step 5: enter 32-bit protected mode ──────────────────────────── */
     cli
@@ -156,26 +161,120 @@ a20_done:
 fatal_disk_error:
     movw    $msg_disk_err, %si
     call    print_string
+
+    /* DIAGNOSTIC (temporary): print the BIOS status code and the LBA
+     * being read when load_kernel_elf failed - see its comment for
+     * why. disk_err_code/disk_err_lba are 0 if the failure was
+     * anything else (e.g. load_trbl_settings), which is still useful
+     * information. Remove once diagnosed. */
+    movw    $msg_err_code, %si
+    call    print_string
+    movb    disk_err_code, %al
+    call    print_hex_byte
+    movw    $msg_err_lba, %si
+    call    print_string
+    movl    disk_err_lba, %eax
+    call    print_hex_dword
+    movw    $msg_crlf, %si
+    call    print_string
 stage2_halt:
     hlt
     jmp     stage2_halt
+
+/* ---- print_hex_byte: prints AL as 2 hex digits via INT 10h teletype. */
+print_hex_byte:
+    pusha
+    movb    %al, %bl
+    shrb    $4, %al
+    call    print_hex_nibble
+    movb    %bl, %al
+    andb    $0x0F, %al
+    call    print_hex_nibble
+    popa
+    ret
+
+/* ---- print_hex_dword: prints EAX as 8 hex digits via INT 10h teletype.
+ * Explicit pushl/popl %ebx around the internal work below, in
+ * addition to pusha/popa: this is .code16, so pusha/popa only saves
+ * the 16-bit half of each register - not enough, since this function
+ * does full 32-bit work in %ebx internally. Without this, a caller's
+ * EBX would come back with its low 16 bits correctly restored but its
+ * high 16 bits silently clobbered - exactly the bug class that broke
+ * boot64.s's multiboot handoff earlier; worth closing here too rather
+ * than leaving it dormant for whoever calls this next. */
+print_hex_dword:
+    pusha
+    pushl   %ebx
+    movl    %eax, %ebx
+    movl    $8, %ecx
+print_hex_dword_loop:
+    movl    %ebx, %eax
+    shll    $4, %ebx             /* shift next nibble into position for   */
+    shrl    $28, %eax            /* the loop after, while this one reads  */
+    andl    $0x0F, %eax          /* the current top nibble out of eax     */
+    call    print_hex_nibble
+    decl    %ecx
+    jnz     print_hex_dword_loop
+    popl    %ebx
+    popa
+    ret
+
+/* ---- print_hex_nibble: prints the low nibble of AL as one hex digit. */
+print_hex_nibble:
+    pusha
+    andb    $0x0F, %al
+    cmpb    $10, %al
+    jb      print_hex_nibble_digit
+    addb    $('A' - 10), %al
+    jmp     print_hex_nibble_out
+print_hex_nibble_digit:
+    addb    $'0', %al
+print_hex_nibble_out:
+    movb    $0x0E, %ah
+    movw    $0, %bx
+    int     $0x10
+    popa
+    ret
 
 /* ── BIOS teletype string print (16-bit real mode) ───────────────────────
  * SI = pointer to NUL-terminated string. Same helper as stage1's -
  * duplicated rather than shared because stage1 and stage2 are two
  * independent flat binaries with no linking between them. */
+/* Also mirrors every character to COM1 - see stage1.s's comment at
+ * _start for why. The UART is already initialized by stage1 (its
+ * state persists across the far jump into stage2), so no re-init
+ * needed here. */
 print_string:
     pusha
 print_string_loop:
     lodsb
     testb   %al, %al
     jz      print_string_done
+    pushw   %ax
     movb    $0x0E, %ah
     movw    $0x0007, %bx
     int     $0x10
+    popw    %ax
+    call    serial_putc
     jmp     print_string_loop
 print_string_done:
     popa
+    ret
+
+/* ---- serial_putc: sends AL as one byte to COM1, polling the line
+ * status register until the transmit holding register is empty. */
+serial_putc:
+    pushw   %dx
+    pushw   %ax
+    movw    $0x3FD, %dx
+serial_putc_wait:
+    inb     %dx, %al
+    testb   $0x20, %al
+    jz      serial_putc_wait
+    popw    %ax
+    movw    $0x3F8, %dx
+    outb    %al, %dx
+    popw    %dx
     ret
 
 /* ── VBE mode set ─────────────────────────────────────────────────────────
@@ -575,16 +674,13 @@ load_kernel_elf:
     movw    $msg_loading_kernel, %si
     call    print_string
 
-    /* Same INT13h extensions handshake as stage1 - see its comment.
-     * A fresh execution context (stage2 is a separate flat binary),
-     * so this doesn't assume stage1's earlier check "carries over". */
-    movw    $0x55AA, %bx
-    movb    $0x41, %ah
-    movb    boot_drive, %dl
-    int     $0x13
-    jc      load_kernel_elf_fail
-    cmpw    $0xAA55, %bx
-    jne     load_kernel_elf_fail
+    /* FIX: removed the AH=0x41 "check extensions present" handshake
+     * that used to sit here - see stage1.s's matching comment. This
+     * was the actual cause of "KERNEL DISK READ ERROR" reappearing:
+     * load_trbl_settings, called just before this in the exact same
+     * boot session, reads a sector with plain AH=0x42 and no such
+     * check, and it works - proof this handshake was never needed on
+     * this BIOS and was actively breaking the one read that had it. */
 
     movl    $KERNEL_MAX_SECTORS, %ecx   /* sectors still to read           */
     movl    $KERNEL_LOAD_LBA, %ebx      /* next LBA to read from           */
@@ -605,6 +701,16 @@ load_chunk_size_ok:
     movl    $0, dap_lba+4
     movw    $(KERNEL_CHUNK_BUF_ADDR >> 4), dap_seg
 
+    /* Record what we're about to ask for BEFORE the BIOS call, not
+     * after. A real BIOS's extended-read handler (VirtualBox's
+     * included - see stage1.s's comment on its AH=0x42 quirks) isn't
+     * guaranteed to leave every register untouched on an error path;
+     * if it clobbers EBX internally while reporting the failure,
+     * reading EBX back afterward would show BIOS-side garbage instead
+     * of the LBA we actually requested. This way the error report is
+     * always accurate regardless of what the BIOS does. */
+    movl    %ebx, disk_err_lba
+
     /* DS is a normal real-mode segment here (matching CS) - either
      * because we've never called enter_unreal yet this iteration, or
      * because the previous iteration's leave_unreal already restored
@@ -613,7 +719,7 @@ load_chunk_size_ok:
     movb    $0x42, %ah
     movb    boot_drive, %dl
     int     $0x13
-    jc      load_kernel_elf_fail
+    jc      load_kernel_elf_read_failed
 
     /* Copy this chunk from the low buffer up to %edi using a flat
      * 32-bit copy (this is the actual unreal-mode payoff: %edi can be
@@ -638,15 +744,29 @@ load_chunk_size_ok:
 
     /* Progress bar - still in unreal mode here, so this costs no extra
      * CR0.PE toggle: draw_progress_bar writes straight to the
-     * framebuffer. Save %ebx (our LBA accumulator) first since we're
-     * about to reuse it to pass draw_progress_bar's "total" argument -
-     * the routine's own pusha/popa preserves whatever it's *given*,
-     * not our value from before we overwrite it. */
+     * framebuffer. Save %ebx/%ecx/%edi first (full 32-bit, via the
+     * stack) since we're about to call into a routine that only
+     * wraps itself in pusha/popa - in .code16 that only protects each
+     * register's low 16 bits, and draw_progress_bar does real 32-bit
+     * work internally on eax/ecx/esi/edi (framebuffer pointer math)
+     * once fb_found=1. Right now this call is a no-op (fb_found is
+     * still 0 here - VBE mode-set runs after kernel load, see step
+     * 3/4 reordering above), so none of that code path actually
+     * executes yet - but %edi in particular is this loop's live
+     * kernel-copy destination pointer, and leaving it unprotected
+     * would mean the instant fb_found becomes 1 here (a future
+     * reorder, or any other caller), the next chunk would get copied
+     * to a silently wrong address with no error message at all. Cheap
+     * to just close now rather than leave it as a landmine. */
     pushl   %ebx
+    pushl   %ecx
+    pushl   %edi
     movl    $KERNEL_MAX_SECTORS, %eax
     movl    %eax, %ebx
     subl    %ecx, %eax
     call    draw_progress_bar
+    popl    %edi
+    popl    %ecx
     popl    %ebx
 
     call    leave_unreal
@@ -671,6 +791,15 @@ load_kernel_elf_fail:
     stc
     ret
 
+load_kernel_elf_read_failed:
+    /* disk_err_lba was already recorded right before the int13 call
+     * above (see that comment for why it isn't captured here, from
+     * EBX, instead: EBX after a failing BIOS call isn't trustworthy).
+     * disk_err_code just needs AH, captured here before popa
+     * overwrites it. */
+    movb    %ah, disk_err_code
+    jmp     load_kernel_elf_fail
+
 
 boot_drive:   .byte 0
 
@@ -689,6 +818,12 @@ msg_vbe_fail:        .asciz "TRBL stage2: VBE mode unavailable - continuing with
 msg_loading_kernel:  .asciz "TRBL stage2: loading kernel...\r\n"
 msg_kernel_loaded:   .asciz "TRBL stage2: kernel loaded, entering protected mode...\r\n"
 msg_disk_err:        .asciz "TRBL stage2: KERNEL DISK READ ERROR\r\n"
+/* DIAGNOSTIC (temporary) - see fatal_disk_error's comment. */
+msg_err_code:        .asciz "  BIOS status (AH): 0x"
+msg_err_lba:         .asciz "\r\n  attempted LBA:   0x"
+msg_crlf:            .asciz "\r\n"
+disk_err_code:       .byte 0
+disk_err_lba:        .long 0
 msg_settings_ok:     .asciz "TRBL stage2: settings sector loaded\r\n"
 msg_settings_default:.asciz "TRBL stage2: no valid settings sector, using defaults\r\n"
 
@@ -744,6 +879,47 @@ gdt32_pointer:
                                         * load base back in to get the real
                                         * linear address the CPU needs. */
 
+/* ---- pm_serial_putc / pm_serial_puts: 32-bit-protected-mode COM1
+ * byte/string send - the whole diagnostic system for this file.
+ * IN (pm_serial_putc): %al  = byte to send.
+ * IN (pm_serial_puts): %esi = pointer to a NUL-terminated string.
+ * Both fully preserve every register they use. ---- */
+.global pm_serial_putc
+pm_serial_putc:
+    pushl   %edx
+    pushl   %eax
+pm_serial_putc_wait:
+    movw    $0x3FD, %dx
+    inb     %dx, %al
+    testb   $0x20, %al
+    jz      pm_serial_putc_wait
+    popl    %eax
+    movw    $0x3F8, %dx
+    outb    %al, %dx
+    popl    %edx
+    ret
+
+.global pm_serial_puts
+pm_serial_puts:
+    pushl   %esi
+    pushl   %eax
+pm_serial_puts_loop:
+    movb    (%esi), %al
+    testb   %al, %al
+    jz      pm_serial_puts_done
+    call    pm_serial_putc
+    incl    %esi
+    jmp     pm_serial_puts_loop
+pm_serial_puts_done:
+    popl    %eax
+    popl    %esi
+    ret
+
+msg_p1: .asciz "P1: entered protected mode, loading ELF segments\n"
+msg_p2: .asciz "P2: ELF segments loaded, building multiboot2 info\n"
+msg_p3: .asciz "P3: multiboot2 info built\n"
+msg_p4: .asciz "P4: jumping to kernel entry\n"
+
 /* =============================================================================
  * 32-bit protected mode continuation
  * ============================================================================= */
@@ -759,9 +935,27 @@ protected_mode_entry:
                                        * ELF staging buffer (0x20000+) and
                                        * everything below it */
 
+    movl    $msg_p1, %esi
+    call    pm_serial_puts
+
     call    elf_load_segments
+
+    movl    $msg_p2, %esi
+    call    pm_serial_puts
+
     call    build_multiboot2_info
+
+    movl    $msg_p3, %esi
+    call    pm_serial_puts
 
     movl    $MB2_MAGIC, %eax
     movl    $MB2_INFO_ADDR, %ebx
+
+    pushl   %eax
+    pushl   %ebx
+    movl    $msg_p4, %esi
+    call    pm_serial_puts
+    popl    %ebx
+    popl    %eax
+
     ljmp    $0x08, $KERNEL_ENTRY_LINK_ADDR

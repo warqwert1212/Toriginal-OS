@@ -118,6 +118,37 @@ void isr_common_handler(interrupt_frame_t *frame)
     else if (handlers[frame->interrupt_number]) handlers[frame->interrupt_number](frame);
 }
 
+/* isr_trampoline: the one entry point every single interrupt vector
+ * (all 256 - every CPU exception and every hardware IRQ) funnels
+ * through via stub_table/build_stubs below.
+ *
+ * Explicit 16-byte stack alignment before `call isr_common_handler`:
+ * a same-privilege-level interrupt (the normal case - hardware IRQs
+ * firing while the kernel is already running in ring 0) does NOT get
+ * automatic stack realignment from the CPU the way a ring-transition
+ * does. RSP on entry here is whatever it happened to be in the code
+ * that got interrupted - unpredictable, not guaranteed 16-aligned,
+ * since the x86-64 ABI only promises that alignment at call sites,
+ * not at every instruction boundary. The 15 pushes below happen to
+ * total a multiple of 16 bytes, which silently hides this exactly
+ * half the time (whenever the interrupted code's RSP was already
+ * 16-aligned) and produces a misaligned RSP at the call the other
+ * half. A misaligned call is invisible right up until something
+ * downstream uses an alignment-sensitive instruction - and this
+ * codebase already has one concrete path there: graphics_3d.c is
+ * deliberately compiled with SSE/SSE2 enabled (see the Makefile's
+ * graphics_3d.o rule, the one file that overrides the kernel's normal
+ * -mno-sse), so a movaps/movdqa reachable from any interrupt handler
+ * chain would #GP fault on a misaligned stack - intermittently, only
+ * on the roughly-half of interrupts that land on the wrong parity,
+ * which is exactly the kind of bug that's nearly impossible to
+ * reproduce from a bug report. Cheap to close for good instead:
+ * capture the frame pointer (for %rdi) before touching alignment,
+ * align down, call, then restore the exact pre-alignment RSP before
+ * unwinding the pushes below - %rbx is free to reuse as scratch here
+ * since its real value is already safely on the stack from the push
+ * above and gets restored from there, not from this register, by the
+ * corresponding pop. */
 __asm__(
 ".global isr_trampoline\n"
 "isr_trampoline:\n"
@@ -125,8 +156,11 @@ __asm__(
     "push %rsi\n" "push %rdi\n" "push %rbp\n"
     "push %r8\n"  "push %r9\n"  "push %r10\n" "push %r11\n"
     "push %r12\n" "push %r13\n" "push %r14\n" "push %r15\n"
-    "mov %rsp, %rdi\n"
+    "mov %rsp, %rdi\n"          /* frame pointer arg - captured before any alignment change */
+    "mov %rsp, %rbx\n"          /* remember exact pre-alignment RSP, to restore after the call */
+    "and $-16, %rsp\n"          /* align down to 16 bytes for the call, ABI-required */
     "call isr_common_handler\n"
+    "mov %rbx, %rsp\n"          /* undo the alignment adjustment */
     "pop %r15\n" "pop %r14\n" "pop %r13\n" "pop %r12\n"
     "pop %r11\n" "pop %r10\n" "pop %r9\n"  "pop %r8\n"
     "pop %rbp\n" "pop %rdi\n" "pop %rsi\n" "pop %rdx\n"

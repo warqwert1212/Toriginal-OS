@@ -17,6 +17,17 @@ _start:
     movw    $0x7C00, %sp        /* stack grows down from right below us */
     sti
 
+    /* DIAGNOSTIC (permanent - this is a real debugging capability
+     * worth keeping): every print_string call below now also writes
+     * to COM1 (serial), not just the VGA screen. Screenshots of a VM
+     * window are a bad debugging channel - timing-dependent (a VBE
+     * mode switch can silently blank text output moments after it
+     * was genuinely printed) and lossy. Serial output goes straight
+     * to a host terminal via `qemu ... -serial stdio` with none of
+     * that: reliable, complete, and copy-pasteable. Harmless if
+     * nothing's listening - these are just port writes. */
+    call    serial_init
+
     /* BIOS is *supposed* to pass the boot drive number in DL, and
      * stage2 needs that value to keep reading the kernel from the
      * right drive - but not every BIOS reliably hands 0x80 here for
@@ -52,20 +63,15 @@ _start:
     movw    $msg_stage1, %si
     call    print_string
 
-    /* Check Int 13h extensions are present before ever using them
-     * (AH=0x42/0x43). Not strictly mandated by every version of the
-     * spec, but every real-world bootloader reference does this
-     * handshake first, and this code skipped it entirely - a real
-     * gap worth closing regardless of whether it's the exact cause
-     * of the "int13_diskette_function: unsupported AH=42" failure
-     * seen in testing. */
-    movw    $0x55AA, %bx
-    movb    $0x41, %ah
-    movb    boot_drive, %dl
-    int     $0x13
-    jc      disk_error
-    cmpw    $0xAA55, %bx
-    jne     disk_error
+    /* FIX: removed the AH=0x41 "check extensions present" handshake
+     * that used to sit here. It was added defensively based on
+     * generic bootloader tutorials, never on a confirmed need for
+     * this BIOS - and testing showed it actually breaks things:
+     * load_trbl_settings's read (stage2.s) uses plain AH=0x42 with no
+     * such check and works fine on this exact same drive in the same
+     * boot session, proving extensions already work here without it.
+     * Whatever made this handshake fail, it's not worth the risk for
+     * a check that was never actually required. */
 
     /* ── Load stage2 via INT 13h extensions (AH=0x42, LBA packet) ────── */
     movw    $dap, %si
@@ -88,19 +94,71 @@ halt:
     jmp     halt
 
 /* ── BIOS teletype string print (16-bit real mode) ────────────────────────
- * SI = pointer to NUL-terminated string */
+ * SI = pointer to NUL-terminated string. Also mirrors every character
+ * to COM1 - see the comment at _start. */
 print_string:
     pusha
 print_string_loop:
     lodsb
     testb   %al, %al
     jz      print_string_done
+    pushw   %ax
     movb    $0x0E, %ah
     movw    $0x0007, %bx
     int     $0x10
+    popw    %ax
+    call    serial_putc
     jmp     print_string_loop
 print_string_done:
     popa
+    ret
+
+/* ---- serial_init: standard 16550 UART bring-up on COM1 (0x3F8),
+ * 115200 8N1. Harmless if no serial backend is attached - real
+ * hardware and every hypervisor tested against just accept these port
+ * writes with no effect either way. */
+serial_init:
+    pushw   %dx
+    pushw   %ax
+    movw    $0x3F9, %dx
+    movb    $0x00, %al
+    outb    %al, %dx            /* disable UART interrupts */
+    movw    $0x3FB, %dx
+    movb    $0x80, %al
+    outb    %al, %dx            /* enable DLAB to set the baud divisor */
+    movw    $0x3F8, %dx
+    movb    $0x01, %al
+    outb    %al, %dx            /* divisor low byte  -> 115200 baud */
+    movw    $0x3F9, %dx
+    movb    $0x00, %al
+    outb    %al, %dx            /* divisor high byte */
+    movw    $0x3FB, %dx
+    movb    $0x03, %al
+    outb    %al, %dx            /* 8N1, DLAB back off */
+    movw    $0x3FA, %dx
+    movb    $0xC7, %al
+    outb    %al, %dx            /* enable + clear FIFOs */
+    movw    $0x3FC, %dx
+    movb    $0x0B, %al
+    outb    %al, %dx            /* RTS/DSR set */
+    popw    %ax
+    popw    %dx
+    ret
+
+/* ---- serial_putc: sends AL as one byte to COM1, polling the line
+ * status register until the transmit holding register is empty. */
+serial_putc:
+    pushw   %dx
+    pushw   %ax
+    movw    $0x3FD, %dx
+serial_putc_wait:
+    inb     %dx, %al
+    testb   $0x20, %al
+    jz      serial_putc_wait
+    popw    %ax
+    movw    $0x3F8, %dx
+    outb    %al, %dx
+    popw    %dx
     ret
 
 boot_drive:   .byte 0

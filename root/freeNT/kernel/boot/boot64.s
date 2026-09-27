@@ -87,21 +87,52 @@ _start64_uefi:
 .global _start
 .extern kernel_main
 
+/* IMPORTANT: kernel64.ld's `*(.text._start)` rule to force _start
+ * first is a no-op here (nothing in this file emits a section
+ * literally named .text._start), so _start's actual link address is
+ * just "whatever comes first, byte-for-byte, in this file's .text
+ * section" - and this file's .text is linked first among all objects
+ * (boot64.o is first in the Makefile's OBJS list). That address must
+ * stay exactly 0x201000: stage2.s's KERNEL_ENTRY_LINK_ADDR and
+ * installer.c's EXPECTED_KERNEL_ENTRY_ADDR both hardcode it (the
+ * bootloader has to know the kernel's entry point before the kernel
+ * is even loaded, so it can't be resolved as a normal symbol the way
+ * protected_mode_entry's own jump target is). Concretely: _start must
+ * be the FIRST label after the `.code32` line above - nothing,
+ * including new diagnostic helpers, goes before it. (serial_putc32
+ * learned this the hard way: it briefly sat here and silently shifted
+ * the real entry point to 0x201013, which install-time's own
+ * EXPECTED_KERNEL_ENTRY_ADDR check would have caught - "Kernel entry
+ * point does not match what stage2.s expects" - rather than let it
+ * boot wrong, but better to just not get it wrong. It now lives after
+ * _start's body, same place check_cpuid/build_page_tables/etc.
+ * already were.) */
 _start:
     cli
     cld
 
-    /* Save multiboot registers before we clobber eax/ebx */
+    /* Save multiboot registers FIRST, before anything else touches
+     * eax/ebx - GRUB hands the multiboot2 magic in EAX and the info
+     * pointer in EBX at entry. Nothing below may run before this. */
     movl %eax, multiboot_magic
     movl %ebx, multiboot_info
+
+    movl $msg_k1, %esi
+    call serial_puts32
 
     movl $stack_top, %esp
 
     call check_cpuid
     call check_long_mode
 
+    movl $msg_k2, %esi
+    call serial_puts32
+
     call clear_page_tables
     call build_page_tables
+
+    movl $msg_k3, %esi
+    call serial_puts32
 
     movl %cr4, %eax
     orl  $0x620, %eax
@@ -122,15 +153,76 @@ _start:
     andl $0xFFFFFFFB, %eax   /* clear EM (bit 2) explicitly */
     movl %eax, %cr0
 
+    movl $msg_k4, %esi
+    call serial_puts32
+
     lgdt gdt64_pointer
     ljmp $0x08, $long_mode_start
 
-/* ── Hang forever ────────────────────────────────────────────────────── */
+/* ── Hang forever ─────────────────────────────────────────────────────
+ * Reached only if check_cpuid or check_long_mode fails - this exact
+ * CPU/VM config doesn't support long mode at all (some hypervisor CPU
+ * presets disable the long-mode CPUID bit by default). Says which
+ * check failed before halting, instead of just going dark. */
+hang_no_cpuid:
+    movl $msg_no_cpuid, %esi
+    call serial_puts32
+    jmp  hang
+hang_no_longmode:
+    movl $msg_no_longmode, %esi
+    call serial_puts32
 hang:
     cli
 1:
     hlt
     jmp 1b
+
+/* ---- Boot checkpoint messages, read by serial_puts32/64 below.
+ * Plain C strings - this is the entire diagnostic system now: every
+ * checkpoint is one "load the message, call the print routine" pair,
+ * nothing per-character to get wrong. ---- */
+msg_k1:          .asciz "K1: _start entered, multiboot regs saved\n"
+msg_k2:          .asciz "K2: CPUID/long-mode checks passed\n"
+msg_k3:          .asciz "K3: page tables built\n"
+msg_k4:          .asciz "K4: paging+long mode enabled, jumping to long_mode_start\n"
+msg_k5:          .asciz "K5: long_mode_start reached, calling kernel_main\n"
+msg_no_cpuid:    .asciz "K: FATAL - this CPU has no CPUID support\n"
+msg_no_longmode: .asciz "K: FATAL - this CPU/VM has no long mode support\n"
+
+/* ---- serial_putc32: 32-bit COM1 byte send. IN: %al = byte.
+ * Preserves %eax/%edx. ---- */
+.global serial_putc32
+serial_putc32:
+    pushl   %edx
+    pushl   %eax
+serial_putc32_wait:
+    movw    $0x3FD, %dx
+    inb     %dx, %al
+    testb   $0x20, %al
+    jz      serial_putc32_wait
+    popl    %eax
+    movw    $0x3F8, %dx
+    outb    %al, %dx
+    popl    %edx
+    ret
+
+/* ---- serial_puts32: prints a NUL-terminated string over COM1.
+ * IN: %esi = pointer to the string. Preserves %esi/%eax/%edx. ---- */
+.global serial_puts32
+serial_puts32:
+    pushl   %esi
+    pushl   %eax
+serial_puts32_loop:
+    movb    (%esi), %al
+    testb   %al, %al
+    jz      serial_puts32_done
+    call    serial_putc32
+    incl    %esi
+    jmp     serial_puts32_loop
+serial_puts32_done:
+    popl    %eax
+    popl    %esi
+    ret
 
 /* ── CPUID availability check ────────────────────────────────────────── */
 check_cpuid:
@@ -144,7 +236,7 @@ check_cpuid:
     pushfl
     popl  %eax
     xorl  %ecx, %eax
-    jz    hang
+    jz    hang_no_cpuid
     ret
 
 /* ── Long-mode availability check ───────────────────────────────────── */
@@ -152,11 +244,11 @@ check_long_mode:
     movl $0x80000000, %eax
     cpuid
     cmpl $0x80000001, %eax
-    jb   hang
+    jb   hang_no_longmode
     movl $0x80000001, %eax
     cpuid
     testl $0x20000000, %edx
-    jz   hang
+    jz   hang_no_longmode
     ret
 
 /* ── FIX 2 – Zero ALL page-table levels ──────────────────────────────── */
@@ -229,6 +321,42 @@ build_pd_loop:
 /* ── 64-bit long-mode entry ──────────────────────────────────────────── */
 .code64
 
+/* ---- serial_putc64 / serial_puts64: COM1 byte/string send in
+ * 64-bit mode. Same shape as serial_putc32/serial_puts32 above -
+ * re-implemented per-bitness because a `call` across a code-width
+ * change isn't valid, not because the logic differs at all.
+ * IN (serial_putc64):  %al  = byte to send.
+ * IN (serial_puts64):  %rsi = pointer to a NUL-terminated string.
+ * Both preserve every register they use. ---- */
+serial_putc64:
+    pushq   %rdx
+    pushq   %rax
+serial_putc64_wait:
+    movw    $0x3FD, %dx
+    inb     %dx, %al
+    testb   $0x20, %al
+    jz      serial_putc64_wait
+    popq    %rax
+    movw    $0x3F8, %dx
+    outb    %al, %dx
+    popq    %rdx
+    ret
+
+serial_puts64:
+    pushq   %rsi
+    pushq   %rax
+serial_puts64_loop:
+    movb    (%rsi), %al
+    testb   %al, %al
+    jz      serial_puts64_done
+    call    serial_putc64
+    incq    %rsi
+    jmp     serial_puts64_loop
+serial_puts64_done:
+    popq    %rax
+    popq    %rsi
+    ret
+
 long_mode_start:
     /* Reload all data segment registers with the 64-bit data descriptor */
     movw $0x10, %ax
@@ -240,6 +368,12 @@ long_mode_start:
 
     movq $stack_top, %rsp
     xorq %rbp, %rbp
+
+    /* Checkpoint BEFORE loading the real kernel_main arguments below,
+     * so this can freely use %rsi as its string-pointer argument
+     * without needing to save/restore anything. */
+    movq $msg_k5, %rsi
+    call serial_puts64
 
     /* FIX 4 – Zero-extend 32-bit saved values into 64-bit registers.
      *          kernel_main(uint32_t magic, uint32_t info) uses the

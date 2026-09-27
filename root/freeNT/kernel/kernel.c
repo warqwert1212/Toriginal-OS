@@ -76,6 +76,7 @@ static void early_print_hex(uint64_t v) {
 
 #define MB2_TAG_END       0u
 #define MB2_TAG_CMDLINE   1u
+#define MB2_TAG_BOOT_LOADER_NAME 2u
 #define MB2_TAG_MODULE     3u
 #define MB2_TAG_MMAP      6u
 #define MB2_TAG_FB        8u
@@ -165,6 +166,15 @@ uint8_t  mb_fb_bpp(void)    { return g_mb_fb_bpp; }
 static int g_boot_gui_requested = 0;
 int kernel_boot_gui_requested(void) { return g_boot_gui_requested; }
 
+/* Set from the multiboot2 boot-loader-name tag (type 2) - only TRBL's
+ * own bootloader (stage2_pm.s's build_multiboot2_info) sets this
+ * string to "TRBL"; GRUB identifies itself differently (e.g.
+ * "GRUB 2.06"), which is exactly what happens during install (booted
+ * from the ISO via GRUB). Used to gate show_boot_logo() below - the
+ * framebuffer-test logo should only run on a real TRBL boot, not
+ * during install. */
+static int g_booted_via_trbl = 0;
+
 static void parse_multiboot(uint32_t mb_info_phys) {
     if (!mb_info_phys) { early_print("[MEM] No multiboot info pointer\n"); return; }
 
@@ -202,6 +212,13 @@ static void parse_multiboot(uint32_t mb_info_phys) {
             early_print("[BOOT] Command line: ");
             early_print(s);
             early_print("\n");
+        } else if (tag->type == MB2_TAG_BOOT_LOADER_NAME) {
+            const char *s = (const char *)(ptr + 8);
+            const uint8_t *limit = ptr + tag->size;
+            if ((const uint8_t *)s + 4 <= limit &&
+                s[0]=='T' && s[1]=='R' && s[2]=='B' && s[3]=='L') {
+                g_booted_via_trbl = 1;
+            }
         } else if (tag->type == MB2_TAG_MMAP) {
             mb2_tag_mmap_t *mt = (mb2_tag_mmap_t *)ptr;
             uint32_t es = mt->entry_size;
@@ -516,7 +533,9 @@ static void kernel_init(uint32_t mb_info_phys) {
             kprint("[2/8] Graphical terminal unavailable - staying on VGA text mode\n");
         }
 
-        show_boot_logo();
+        if (g_booted_via_trbl) {
+            show_boot_logo();
+        }
     } else {
 
         kprint("[2/8] FATAL: no usable linear framebuffer from bootloader\n");

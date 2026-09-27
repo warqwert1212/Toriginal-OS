@@ -45,8 +45,30 @@
 .set PHDR_P_MEMSZ,  40
 .set PT_LOAD, 1
 
+/* pm_serial_putc/pm_serial_puts live in stage2.s (same .code32 flat
+ * binary, linked together) - that's the whole diagnostic system: one
+ * putc for a single byte, one puts for a fixed string. Safe to use
+ * freely in here even though esi is a live loop register below -
+ * every checkpoint sits at a point where esi is about to be
+ * recomputed anyway (see the "ESI is no longer the ELF base..."
+ * comment further down), so pm_serial_puts clobbering it costs
+ * nothing. */
+.extern pm_serial_putc
+.extern pm_serial_puts
+
+msg_s0: .asciz "S0: elf_load_segments entered\n"
+msg_sd: .asciz "SD: elf_load_segments done, segments="
+
 elf_load_segments:
     pushal
+
+    movl    $msg_s0, %esi
+    call    pm_serial_puts
+    movb    $0, seg_counter            /* segments processed so far, in
+                                         * memory (not a register) since
+                                         * every general register below
+                                         * is already spoken for by the
+                                         * segment-copy logic itself */
 
     /* ESI = ELF file base (real mode staged it here). */
     movl    $ELF_STAGE_ADDR, %esi
@@ -107,6 +129,8 @@ zero_tail_done:
     popl    %ecx                       /* restore remaining count */
     popl    %ebx                       /* restore phentsize */
 
+    incb    seg_counter                /* one more PT_LOAD segment done */
+
     /* ESI is no longer the ELF base after the copy above - restore it
      * from EDI (still a valid phdr pointer) is wrong too, so instead
      * recompute it the same way it was first set: ELF base is a fixed
@@ -119,14 +143,24 @@ phdr_skip:
     jmp     phdr_loop
 
 elf_load_done:
+    movl    $msg_sd, %esi
+    call    pm_serial_puts
+    movzbl  seg_counter, %eax
+    addb    $'0', %al
+    call    pm_serial_putc
+    movb    $'\n', %al
+    call    pm_serial_putc
     popal
     ret
+
+seg_counter: .byte 0
 
 /* ── multiboot2 info block builder ─────────────────────────────────────────
  * Layout (matches kernel.c's mb2_tag_t/mb2_tag_fb_t exactly):
  *   [0]  total_size (u32)   - filled in last, once the real size is known
  *   [4]  reserved (u32)     = 0
- *   [8]  framebuffer tag (only emitted if fb_found != 0):
+ *   [8]  boot loader name tag: type=2 size=16, "TRBL\0\0\0\0"
+ *   [..] framebuffer tag (only emitted if fb_found != 0):
  *          type=8 size=32 (padded from 27 to the next 8-byte boundary)
  *          framebuffer_addr (u64), pitch (u32), width (u32),
  *          height (u32), bpp (u8), fb_type=1 (u8), reserved (u8),
@@ -138,6 +172,24 @@ build_multiboot2_info:
 
     movl    $MB2_INFO_ADDR, %edi
     addl    $8, %edi                   /* leave room for total_size+reserved */
+
+    /* Boot-loader-name tag (type=2) - "TRBL", NUL-padded to the next
+     * 8-byte boundary. GRUB never sets this to "TRBL" (it identifies
+     * itself, e.g. "GRUB 2.06"), so the kernel can tell a direct TRBL
+     * boot apart from booting via the install ISO's GRUB - see
+     * kernel.c's show_boot_logo() gating, which should only run the
+     * framebuffer-test logo on a real TRBL boot, not during install. */
+    movl    $2, (%edi)                 /* type = MB2_TAG_BOOT_LOADER_NAME */
+    movl    $16, 4(%edi)               /* size = 16 (8 hdr + 5 str + 3 pad) */
+    movb    $'T', 8(%edi)
+    movb    $'R', 9(%edi)
+    movb    $'B', 10(%edi)
+    movb    $'L', 11(%edi)
+    movb    $0, 12(%edi)
+    movb    $0, 13(%edi)
+    movb    $0, 14(%edi)
+    movb    $0, 15(%edi)
+    addl    $16, %edi
 
     cmpb    $0, fb_found + STAGE2_LINEAR_BASE
     je      no_fb_tag

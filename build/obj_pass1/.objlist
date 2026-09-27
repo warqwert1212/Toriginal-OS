@@ -1,68 +1,69 @@
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/boot/boot64.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/boot/interrupts_asm.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/boot/keyboard_isr.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/boot/asset_blob.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/boot/trbl_logo_blob.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/acpi.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/apic.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/arp.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/ata.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/cursor.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/deflate.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/desktop.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/desktop_menu.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/dns.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/font8x16.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/gfx_terminal.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/graphics_2d.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/graphics_3d.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/graphics_core.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/gui_asset.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/heap.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/http.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/icmp.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/installer.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/interrupts.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/io.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/ip.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/kernel.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/keyboard.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/keyboard_wire.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/loader_enhanced.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/memory.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/mouse.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/mouse_wire.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/net.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/ntfs.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/panic.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/pci.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/pit.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/pmm.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/png.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/process.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/ps2.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/rtc.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/rtl8139.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/runtime_stubs.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/serial.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/sha256.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/shell.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/startmenu.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/string.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/stubs.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/syscall.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/syscfg.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/tcp.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/trbl_settings.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/trpfs.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/trploader.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/trp_manifest.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/udp.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/uhci.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/usb.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/usb_hid.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/vbe_dispi.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/vga.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/wallpaper.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/wm.o
-/home/anonymous/local dev repo toriginal os/Toriginal_OS-main/build/obj_pass1/sys_shell/shell.o
+/workspaces/Toriginal_OS/build/obj_pass1/boot/boot64.o
+/workspaces/Toriginal_OS/build/obj_pass1/boot/interrupts_asm.o
+/workspaces/Toriginal_OS/build/obj_pass1/boot/keyboard_isr.o
+/workspaces/Toriginal_OS/build/obj_pass1/boot/asset_blob.o
+/workspaces/Toriginal_OS/build/obj_pass1/boot/trbl_logo_blob.o
+/workspaces/Toriginal_OS/build/obj_pass1/acpi.o
+/workspaces/Toriginal_OS/build/obj_pass1/apic.o
+/workspaces/Toriginal_OS/build/obj_pass1/arp.o
+/workspaces/Toriginal_OS/build/obj_pass1/ata.o
+/workspaces/Toriginal_OS/build/obj_pass1/cpu.o
+/workspaces/Toriginal_OS/build/obj_pass1/cursor.o
+/workspaces/Toriginal_OS/build/obj_pass1/deflate.o
+/workspaces/Toriginal_OS/build/obj_pass1/desktop.o
+/workspaces/Toriginal_OS/build/obj_pass1/desktop_menu.o
+/workspaces/Toriginal_OS/build/obj_pass1/dns.o
+/workspaces/Toriginal_OS/build/obj_pass1/font8x16.o
+/workspaces/Toriginal_OS/build/obj_pass1/gfx_terminal.o
+/workspaces/Toriginal_OS/build/obj_pass1/graphics_2d.o
+/workspaces/Toriginal_OS/build/obj_pass1/graphics_3d.o
+/workspaces/Toriginal_OS/build/obj_pass1/graphics_core.o
+/workspaces/Toriginal_OS/build/obj_pass1/gui_asset.o
+/workspaces/Toriginal_OS/build/obj_pass1/heap.o
+/workspaces/Toriginal_OS/build/obj_pass1/http.o
+/workspaces/Toriginal_OS/build/obj_pass1/icmp.o
+/workspaces/Toriginal_OS/build/obj_pass1/installer.o
+/workspaces/Toriginal_OS/build/obj_pass1/interrupts.o
+/workspaces/Toriginal_OS/build/obj_pass1/io.o
+/workspaces/Toriginal_OS/build/obj_pass1/ip.o
+/workspaces/Toriginal_OS/build/obj_pass1/kernel.o
+/workspaces/Toriginal_OS/build/obj_pass1/keyboard.o
+/workspaces/Toriginal_OS/build/obj_pass1/keyboard_wire.o
+/workspaces/Toriginal_OS/build/obj_pass1/loader_enhanced.o
+/workspaces/Toriginal_OS/build/obj_pass1/memory.o
+/workspaces/Toriginal_OS/build/obj_pass1/mouse.o
+/workspaces/Toriginal_OS/build/obj_pass1/mouse_wire.o
+/workspaces/Toriginal_OS/build/obj_pass1/net.o
+/workspaces/Toriginal_OS/build/obj_pass1/ntfs.o
+/workspaces/Toriginal_OS/build/obj_pass1/panic.o
+/workspaces/Toriginal_OS/build/obj_pass1/pci.o
+/workspaces/Toriginal_OS/build/obj_pass1/pit.o
+/workspaces/Toriginal_OS/build/obj_pass1/pmm.o
+/workspaces/Toriginal_OS/build/obj_pass1/png.o
+/workspaces/Toriginal_OS/build/obj_pass1/process.o
+/workspaces/Toriginal_OS/build/obj_pass1/ps2.o
+/workspaces/Toriginal_OS/build/obj_pass1/rtc.o
+/workspaces/Toriginal_OS/build/obj_pass1/rtl8139.o
+/workspaces/Toriginal_OS/build/obj_pass1/runtime_stubs.o
+/workspaces/Toriginal_OS/build/obj_pass1/serial.o
+/workspaces/Toriginal_OS/build/obj_pass1/sha256.o
+/workspaces/Toriginal_OS/build/obj_pass1/shell.o
+/workspaces/Toriginal_OS/build/obj_pass1/startmenu.o
+/workspaces/Toriginal_OS/build/obj_pass1/string.o
+/workspaces/Toriginal_OS/build/obj_pass1/stubs.o
+/workspaces/Toriginal_OS/build/obj_pass1/syscall.o
+/workspaces/Toriginal_OS/build/obj_pass1/syscfg.o
+/workspaces/Toriginal_OS/build/obj_pass1/tcp.o
+/workspaces/Toriginal_OS/build/obj_pass1/trbl_settings.o
+/workspaces/Toriginal_OS/build/obj_pass1/trp_manifest.o
+/workspaces/Toriginal_OS/build/obj_pass1/trpfs.o
+/workspaces/Toriginal_OS/build/obj_pass1/trploader.o
+/workspaces/Toriginal_OS/build/obj_pass1/udp.o
+/workspaces/Toriginal_OS/build/obj_pass1/uhci.o
+/workspaces/Toriginal_OS/build/obj_pass1/usb.o
+/workspaces/Toriginal_OS/build/obj_pass1/usb_hid.o
+/workspaces/Toriginal_OS/build/obj_pass1/vbe_dispi.o
+/workspaces/Toriginal_OS/build/obj_pass1/vga.o
+/workspaces/Toriginal_OS/build/obj_pass1/wallpaper.o
+/workspaces/Toriginal_OS/build/obj_pass1/wm.o
+/workspaces/Toriginal_OS/build/obj_pass1/sys_shell/shell.o

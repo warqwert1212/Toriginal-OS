@@ -54,7 +54,7 @@ OBJS_PASS1 := $(OBJS_COMMON) $(OBJ)/installer_pass1.o
 # actually ships as bin/kernel.elf / the ISO.
 OBJS := $(OBJS_COMMON) $(OBJ)/installer.o
 
-.PHONY: all iso run clean tools esp run-uefi
+.PHONY: all iso run clean tools esp run-uefi run-headless install-disk run-disk reinstall-disk
 
 all: iso
 
@@ -291,6 +291,36 @@ run: iso
 
 run-headless: iso
 	qemu-system-x86_64 -cdrom toriginal_OS.iso -m 256M -serial stdio -display none -no-reboot
+
+# FIX/ADDED: `run`/`run-headless` above boot the ISO via GRUB, which
+# never touches stage1/stage2 at all - that code only runs booting
+# from a real installed hard disk. These two targets are the only way
+# to actually exercise it end-to-end with QEMU:
+#   1. `make install-disk` - creates disk.img if it doesn't exist yet,
+#      boots the ISO with that disk attached, and installer.c's
+#      unattended staging (installer_try_automount(), which runs
+#      automatically whenever the attached disk has no filesystem
+#      yet) installs stage1/stage2/the kernel onto it. Ctrl-A X exits
+#      QEMU once you see "Please REMOVE the install disc/ISO now".
+#   2. `make run-disk` - boots disk.img directly, no CD-ROM attached,
+#      so BIOS boots straight into stage1/stage2 for real.
+# `-serial stdio` on both means every stage1/stage2 print_string call
+# (now mirrored to COM1 - see stage1.s's _start comment) shows up as
+# plain text right here in the terminal - reliable and copy-pasteable,
+# unlike a VM window screenshot that a VBE mode switch can blank out
+# moments after real output happened.
+disk.img:
+	qemu-img create -f raw disk.img 2G
+
+install-disk: iso disk.img
+	qemu-system-x86_64 -cdrom toriginal_OS.iso -hda disk.img -m 256M -serial stdio -no-reboot -boot d
+
+run-disk: disk.img
+	qemu-system-x86_64 -hda disk.img -m 256M -serial stdio -no-reboot -boot c
+
+reinstall-disk: iso
+	rm -f disk.img
+	$(MAKE) install-disk
 
 tools:
 	sudo apt update && sudo apt install -y \

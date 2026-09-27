@@ -566,13 +566,31 @@ static uint64_t sys_thread_self(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t 
 
 static void __attribute__((naked)) syscall_entry_stub(void) {
     __asm__ volatile(
-        /* FIX: switch onto a dedicated kernel stack before touching
+        /* Switch onto a dedicated kernel stack before touching
          * anything. swapgs brings KERNEL_GS_BASE (our percpu struct,
          * programmed in syscall_init) into active GS; g_syscall_kstack's
-         * top is 16-byte aligned, and the 9 pushes below (72 bytes) plus
-         * 6 pops (48 bytes) leave RSP at exactly the mod-16-== 8
-         * alignment the SysV ABI requires right before `call` - same as
-         * this code always relied on, just now on a stack we control. */
+         * top is 16-byte aligned (the array itself is aligned(16) and
+         * its size, 16384, is itself a multiple of 16 - so base+size
+         * is 16-aligned too).
+         *
+         * FIX: the 9 pushes below (72 bytes) followed by 6 pops (48
+         * bytes) net to -24 bytes - leaving RSP at (16-aligned - 24),
+         * i.e. RSP % 16 == 8, at the point of `call syscall_dispatch`
+         * below. The SysV ABI requires RSP % 16 == 0 immediately
+         * BEFORE a call (that's what makes RSP % 16 == 8 correct at
+         * the *callee's entry*, one instruction later, after call's
+         * own 8-byte return-address push - the previous version of
+         * this comment had those two the wrong way round). Net
+         * result: syscall_dispatch used to be called 8 bytes short of
+         * proper alignment, on every single syscall - invisible right
+         * up until something reachable from it needs a genuinely
+         * 16-byte-aligned stack (e.g. an aligned SSE spill; see
+         * kernel/interrupts.c's isr_trampoline for the same bug class
+         * and why graphics_3d.c specifically makes that concrete in
+         * this codebase). The extra sub/add pair below closes the
+         * 8-byte gap without touching anything else - the existing
+         * cleanup sequence after the call is unchanged, just shifted
+         * to account for it. */
         "swapgs\n"
         "mov %rsp, %gs:8\n"
         "mov %gs:0, %rsp\n"
@@ -595,8 +613,10 @@ static void __attribute__((naked)) syscall_entry_stub(void) {
         "pop %r8\n"
         "pop %r9\n"
 
+        "sub $8, %rsp\n"             /* close the 8-byte alignment gap */
         "call syscall_dispatch\n"
-        "add $8, %rsp\n"
+        "add $16, %rsp\n"            /* undo the sub above, plus the original
+                                       * discard of the leftover r9-slot value */
 
         "pop %r11\n"
         "pop %rcx\n"

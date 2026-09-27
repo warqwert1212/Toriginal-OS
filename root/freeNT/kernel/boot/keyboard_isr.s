@@ -1,15 +1,25 @@
 /* =============================================================================
  * KEYBOARD_ISR.S - IRQ1 Interrupt Service Routine Stub
  *
- * Rewritten from scratch. Saves all general-purpose registers, calls the
- * C handler with a correctly 16-byte-aligned stack at the call site,
- * restores everything, and returns via iretq.
+ * NOTE: not currently wired into the live IDT - interrupts.c's
+ * isr_trampoline (kernel/interrupts.c) is what every vector actually
+ * points at today. This file is kept as a documented, ready-to-wire
+ * fallback, same status as interrupts.s's isrN/irqN stubs.
  *
- * Alignment math: on entry to this stub, the CPU has already pushed
- * RFLAGS, CS, RIP (24 bytes) for a same-privilege interrupt with no error
- * code. The 15 pushes below add 15*8 = 120 bytes. 24 + 120 = 144, which
- * is already a multiple of 16 — so RSP is correctly aligned for `call`
- * with no extra adjustment needed.
+ * Saves all general-purpose registers, calls the C handler with a
+ * correctly 16-byte-aligned stack at the call site, restores
+ * everything, and returns via iretq.
+ *
+ * Explicit alignment before `call`: a same-privilege interrupt (the
+ * normal case for a hardware IRQ firing while the kernel is already
+ * running) does NOT get automatic stack realignment from the CPU -
+ * RSP on entry is whatever the interrupted code happened to have,
+ * not guaranteed 16-aligned. See kernel/interrupts.c's isr_trampoline
+ * comment for the full reasoning (same fix, same file this stub would
+ * mirror if it's ever wired up) - capture RSP into %rbx (free to
+ * reuse: its real value is already safely pushed below and gets
+ * restored from there) before aligning, so it can be undone exactly
+ * before the pops below unwind.
  * ============================================================================== */
 
 .section .text
@@ -33,7 +43,10 @@ keyboard_isr_stub:
     push %r14
     push %r15
 
+    mov %rsp, %rbx
+    and $-16, %rsp
     call keyboard_irq_handler
+    mov %rbx, %rsp
 
     pop %r15
     pop %r14

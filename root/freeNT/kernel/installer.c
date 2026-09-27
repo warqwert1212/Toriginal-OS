@@ -24,7 +24,19 @@
 #include "heap.h"
 #include "trbl_settings.h"
 
-#define INSTALLER_DISK_BYTES   (4ULL * 1024ULL * 1024ULL)  /* 4 MiB TRPFS volume */
+/* FIX: was 4 MiB. seed_embedded_assets_to_fs() (called from
+ * installer_stage_files(), right before finalize_install() writes
+ * config.ini) copies the embedded wallpaper/startmenu/cursor asset
+ * blob into this same volume - and that blob alone is ~4.2 MB (see
+ * build_asset_blob.py's own build-time output), already bigger than
+ * the entire old 4 MiB volume before config.ini ever got a chance to
+ * write. TRPFS ran out of space partway through staging, and
+ * config.ini's write was just the first casualty once it did - not a
+ * config.ini-specific bug. 64 MiB leaves real headroom over the ~4.2
+ * MB of assets plus the install_seed payload plus inode/directory
+ * overhead; the real underlying disk (a multi-GB VHD in testing) has
+ * far more room than this to spare either way. */
+#define INSTALLER_DISK_BYTES   (64ULL * 1024ULL * 1024ULL)  /* 64 MiB TRPFS volume */
 #define INSTALLER_MAX_ERRORS   16
 #define INSTALLER_ERROR_LEN    160
 
