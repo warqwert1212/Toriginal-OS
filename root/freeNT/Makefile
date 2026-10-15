@@ -4,7 +4,7 @@ AS      := x86_64-linux-gnu-as
 MKISO   := grub-mkrescue
 
 SRC     := kernel
-SYS     := ../sys/shell
+SYS     := ../ToriginalOS/shell
 BOOT    := kernel/boot
 OBJ     := obj
 BIN     := bin
@@ -16,7 +16,14 @@ GCC_FREESTANDING_INCLUDE := $(shell $(CC) -print-file-name=include)
 CFLAGS  := -ffreestanding -nostdlib -nostdinc -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -O2 -Wall -Wextra -Iinclude -Ikernel -I$(GCC_FREESTANDING_INCLUDE)
 LDFLAGS := -T kernel/boot/kernel64.ld --no-undefined -z noexecstack
 
-C_SRCS  := $(wildcard $(SRC)/*.c)
+# A source that lives in a subdirectory (kernel/trpfs/, kernel/graphics/) wins
+# over a same-named file left behind directly in kernel/ from before the
+# move. Unzipping a newer tree over an older one never deletes the old flat
+# copies, and compiling both gives "multiple definition" link errors (and,
+# for graphics_3d.c, a -mno-sse compile error), so just skip the stale ones.
+C_SRCS_ALL := $(wildcard $(SRC)/*.c) $(wildcard $(SRC)/trpfs/*.c) $(wildcard $(SRC)/graphics/*.c)
+C_SRCS_MOVED := $(addprefix $(SRC)/,$(notdir $(wildcard $(SRC)/trpfs/*.c $(SRC)/graphics/*.c)))
+C_SRCS  := $(filter-out $(C_SRCS_MOVED),$(C_SRCS_ALL))
 # bootloader_blobs.s is deliberately excluded from S_SRCS/S_OBJS/OBJS -
 # it needs its own rule (real cpp preprocessing + absolute -D paths,
 # see its dedicated rule below) and is only linked into the PASS 2
@@ -72,6 +79,13 @@ $(OBJ)/installer_pass1.o: $(SRC)/installer.c | $(OBJ)/boot
 	$(CC) $(CFLAGS) -DPASS1_BUILD -c $< -o $@
 
 
+$(OBJ)/graphics/graphics_3d.o: $(SRC)/graphics/graphics_3d.c | $(OBJ)/boot
+	mkdir -p $(dir $@)
+	$(CC) $(filter-out -mno-sse -mno-sse2,$(CFLAGS)) -msse -msse2 -mfpmath=sse -c $< -o $@
+
+# Same SSE exception when graphics_3d.c sits directly in kernel/ instead of
+# kernel/graphics/ (the float-returning vec3/vec4 helpers need SSE; the
+# rest of the kernel is built -mno-sse). Harmless if the file isn't there.
 $(OBJ)/graphics_3d.o: $(SRC)/graphics_3d.c | $(OBJ)/boot
 	mkdir -p $(dir $@)
 	$(CC) $(filter-out -mno-sse -mno-sse2,$(CFLAGS)) -msse -msse2 -mfpmath=sse -c $< -o $@
@@ -214,7 +228,24 @@ $(ISO_DIR)/boot/assets/cursor/%: $(ASSET_CURSOR_SRC)/% | $(ISO_DIR)/boot/grub
 
 
 
-$(ISO_DIR)/boot/grub/grub.cfg: | $(ISO_DIR)/boot/grub
+# ── install-time TRP programs (partition manager + OOBE) ─────────────────
+# Built by tools/trp/build.sh, shipped on the ISO as GRUB modules and
+# copied onto the installed disk under /system/trp/. NOT linked into the
+# kernel.
+TRP_NAMES := partitionmanager teroobe
+TRP_BIN   := $(addprefix $(BIN)/trp/,$(addsuffix .trp,$(TRP_NAMES)))
+TRP_ISO   := $(addprefix $(ISO_DIR)/boot/trp/,$(addsuffix .trp,$(TRP_NAMES)))
+
+$(BIN)/trp/%.trp: tools/trp/%.c tools/trp/%.manifest tools/trp/trp_rt.h tools/trp/trp.ld tools/trp/build.sh include/install_abi.h | $(BIN)
+	sh tools/trp/build.sh $(BIN)/trp
+
+$(ISO_DIR)/boot/trp/%.trp: $(BIN)/trp/%.trp | $(ISO_DIR)/boot/grub
+	mkdir -p $(dir $@)
+	cp $< $@
+
+trp: $(TRP_BIN)
+
+$(ISO_DIR)/boot/grub/grub.cfg: Makefile | $(ISO_DIR)/boot/grub
 	@{ \
 	  echo 'set timeout=5'; \
 	  echo 'set default=0'; \
@@ -242,6 +273,9 @@ $(ISO_DIR)/boot/grub/grub.cfg: | $(ISO_DIR)/boot/grub
 	    done; \
 	    for f in $(ASSET_CURSOR_NAMES); do \
 	      echo "  module2 /boot/assets/cursor/$$f /sys/gui/assets/$$f"; \
+	    done; \
+	    for f in $(TRP_NAMES); do \
+	      echo "  module2 /boot/trp/$$f.trp /system/trp/$$f.trp"; \
 	    done; \
 	    echo "  boot"; \
 	    echo "}"; \
@@ -274,7 +308,7 @@ $(ISO_DIR)/boot/kernel.elf: $(BIN)/kernel.elf | $(ISO_DIR)/boot/grub
 # own -boot_image/-append_partition option list (confirmed real via
 # `xorriso -help` on the actual target machine), not confirmed
 # end-to-end here.
-toriginal_OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg \
+toriginal_OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg $(TRP_ISO) \
                    $(ASSET_WALLPAPERS_ISO) $(ASSET_STARTMENU_ISO) $(ASSET_CURSOR_ISO) \
                    $(BIN)/esp.img
 	$(MKISO) -o $@ $(ISO_DIR) -d /usr/lib/grub/i386-pc -- \

@@ -155,6 +155,22 @@ typedef struct process {
     int      proc_fd[PROCESS_MAX_FDS];
     uint32_t fd_count;   /* number of currently-open (non -1) slots */
 
+    /* GUI windows this process owns (via SYS_WM_CREATE_WINDOW -
+     * kernel/syscall.c) - a small, fixed-size table, same convention
+     * as proc_fd[] above, since a typical GUI program owns one or a
+     * handful of windows, not an unbounded number. 0 means an empty
+     * slot (matches wm.h's own "window ID never 0" convention, so 0
+     * is never a real window ID this could be confused with).
+     * Ownership exists so SYS_WM_POLL_EVENT/SYS_WM_DESTROY_WINDOW can
+     * refuse to act on a window ID that belongs to some OTHER
+     * process - without this, any process could poll or destroy any
+     * other process's window just by guessing or incrementing window
+     * IDs, which would be a real, serious isolation hole given this
+     * OS's whole per-process paging/ring-3 effort was specifically
+     * about NOT letting one process reach into another's resources. */
+    #define PROCESS_MAX_OWNED_WINDOWS 8
+    uint32_t owned_windows[PROCESS_MAX_OWNED_WINDOWS];
+
     /* Working directory, process-local (POSIX chdir()/getcwd()) —
      * previously only the shell had a notion of cwd (g_cwd in
      * sys/shell/shell.c); a real process-level chdir needs its own
@@ -197,6 +213,10 @@ pid_t process_fork(void);
 int process_exec(pid_t pid, const char *filename, const char **argv);
 int process_wait(pid_t pid, int *status);
 void process_exit(int status);
+void process_set_exit_hook(void (*fn)(int status));
+int  process_exit_hook_armed(void);
+void process_set_exit_context(int in_syscall);
+int  process_exit_context(void);
 void process_kill(pid_t pid);
 process_t* process_get_current(void);
 process_t* process_get_by_pid(pid_t pid);

@@ -56,12 +56,28 @@
 #define SYS_SIGRAISE    42  /* raise a signal on self (== kill(getpid())) */
 
 /* ── Threads (50s) ─────────────────────────────────────────────────── */
+/* GUI syscalls - added so a USERSPACE TRP program can create and draw
+ * into a real window, which was not previously possible at all (the
+ * window manager/compositor - kernel/wm.c, kernel/desktop.c - only
+ * ever drew the kernel's OWN internal desktop/taskbar/cursor; there
+ * was no syscall surface exposing any of it to user programs before
+ * this). See kernel/wm.c's wm_create_window_userbacked() and
+ * kernel/pmm.c's pmm_alloc_contiguous_frames() for the real, new
+ * kernel-side mechanics these syscalls are thin wrappers over. */
+#define SYS_WM_CREATE_WINDOW  60
+#define SYS_WM_DESTROY_WINDOW 61
+#define SYS_WM_POLL_EVENT     62
+#define SYS_WM_PRESENT        63  /* no-op today - see sys_wm_present()'s
+                                    * own comment on why */
+
 #define SYS_THREAD_CREATE 50
 #define SYS_THREAD_EXIT   51
 #define SYS_THREAD_JOIN   52
 #define SYS_THREAD_SELF   53
 
-#define NUM_SYSCALLS    64
+#define NUM_SYSCALLS    80
+
+#include "install_abi.h"   /* SYS_DISK_INFO .. SYS_SYSINFO (70-76) */
 
 /* ── ioctl request codes ──────────────────────────────────────────────
  * Small, deliberately generic set covering what a framebuffer-blitting

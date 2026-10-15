@@ -23,6 +23,10 @@
 #include "net.h"
 #include "heap.h"
 #include "trbl_settings.h"
+#include "mbr.h"
+#include "process.h"
+#include "vga.h"
+#include "install_abi.h"
 
 /* FIX: was 4 MiB. seed_embedded_assets_to_fs() (called from
  * installer_stage_files(), right before finalize_install() writes
@@ -66,6 +70,7 @@ void seed_embedded_assets_to_fs(void);
  * across reboots) and falls back to a RAM disk if no ATA hardware is
  * present (e.g. a VM with no HDD attached). g_using_disk reflects which
  * one ended up active, and is checked at boot by installer_try_automount(). */
+int install_session_selected(void);
 static trpfs_blkdev_t *g_disk = NULL;
 static int g_using_real_disk = 0;
 
@@ -98,27 +103,37 @@ static void err_print_all(const installer_errors_t *e) {
 
 /* ── Small line-editing input helper ─────────────────────────────────────── */
 
-static char installer_getc(void) {
-    /* Was only checking legacy PS/2 (keyboard_getc_nb) and raw serial
-     * - missing the usb_hid_poll()/usb_hid_getc_nb() pair that
-     * kernel/shell.c's normal shell loop already does. Any USB
-     * keyboard (VirtualBox's default emulated HID keyboard, not
-     * legacy PS/2) produced no input here at all - the OOBE prompts
-     * would print but every keypress went nowhere. */
+/* Non-blocking "any console input" poll shared by the installer's own
+ * prompts and by sys_read(fd 0) for TRP programs: legacy PS/2, then USB
+ * HID (VirtualBox's default keyboard), then raw COM1 (serial console /
+ * automated tests). Returns 0 when nothing is pending. */
+int console_getc_nb(void) {
     char c = keyboard_getc_nb();
-    if (c) return c;
+    if (c) return (unsigned char)c;
 
     usb_hid_poll();
     c = usb_hid_getc_nb();
-    if (c) return c;
+    if (c) return (unsigned char)c;
 
     uint8_t lsr;
     __asm__ volatile("inb %%dx, %0" : "=a"(lsr) : "d"((uint16_t)0x3FD));
-    if (lsr & 0x01) {
-        uint8_t s;
-        __asm__ volatile("inb %%dx, %0" : "=a"(s) : "d"((uint16_t)0x3F8));
-        return (char)s;
+    /* A machine with no COM1 at all (VirtualBox's default) reads 0xFF from
+     * every unclaimed port: that has "data ready" set, so it used to look
+     * like an endless stream of 0xFF keypresses. A real UART's line-status
+     * register never has all 8 bits set (bit 7 = FIFO error only appears
+     * with bit 0.. combos that don't read as 0xFF), so 0xFF == "no UART". */
+    if (lsr != 0xFF && (lsr & 0x01)) {
+        uint8_t sb;
+        __asm__ volatile("inb %%dx, %0" : "=a"(sb) : "d"((uint16_t)0x3F8));
+        if (sb == 0xFF || sb == 0x00) return 0;   /* line noise */
+        return sb;
     }
+    return 0;
+}
+
+static char installer_getc(void) {
+    int c = console_getc_nb();
+    if (c) return (char)c;
     __asm__ volatile("pause");
     return 0;
 }
@@ -625,6 +640,36 @@ static int write_bootloader_to_disk(installer_errors_t *errs) {
     uint8_t sector_buf[512];
     memset(sector_buf, 0, sizeof(sector_buf));
     memcpy(sector_buf, g_stage1_blob, (size_t)g_stage1_blob_size);
+
+    /* Keep the partition table the partition manager wrote: stage1's own
+     * table is just a placeholder entry (see stage1.s). Only a table with
+     * at least one real partition at/after the boot-region boundary
+     * counts - an old install's whole-disk placeholder (start LBA 0) does
+     * not. The system partition is flagged active so BIOS boots it. */
+    {
+        uint8_t cur[512];
+        if (ata_raw_read_sector(0, cur) == 0 && cur[510] == 0x55 && cur[511] == 0xAA) {
+            mbr_t *cm = (mbr_t *)cur;
+            int have_real = 0;
+            for (int i = 0; i < 4; i++)
+                if (cm->partitions[i].sector_count &&
+                    cm->partitions[i].start_lba >= INSTALL_PART_ALIGN_LBA) have_real = 1;
+            if (have_real) {
+                memcpy(sector_buf + 446, cur + 446, 64);
+                mbr_t *nm = (mbr_t *)sector_buf;
+                int active = install_session_selected();
+                for (int i = 0; i < 4; i++) {
+                    nm->partitions[i].boot_indicator = (active == i) ? 0x80 : 0x00;
+                }
+                if (active < 0) {
+                    for (int i = 0; i < 4; i++)
+                        if (nm->partitions[i].partition_type == 0x83 &&
+                            nm->partitions[i].sector_count) { nm->partitions[i].boot_indicator = 0x80; break; }
+                }
+                sector_buf[510] = 0x55; sector_buf[511] = 0xAA;
+            }
+        }
+    }
     if (ata_raw_write_sector(0, sector_buf) != 0) {
         err_add(errs, "Failed to write stage1 to disk sector 0");
         return -1;
@@ -867,6 +912,507 @@ static void halt_for_reboot(const char *msg) {
     for (;;) { __asm__ volatile("hlt"); }
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  TRP-driven install + OOBE
+ *
+ *  Boot 1 (live CD):   partitionmanager.trp  ->  kernel installs onto the
+ *                      partition it picked  ->  "remove disc, restart".
+ *  Boot 2 (from disk): teroobe.trp (username/password/terminal look/
+ *                      network/...)  ->  kernel applies the settings  ->
+ *                      "restart".
+ *  Boot 3:             normal boot.
+ *
+ *  Both programs are ordinary ring-3 .trp files (tools/trp/), delivered
+ *  to the live session as GRUB modules and copied onto the installed
+ *  disk under /system/trp/ - nothing about them is baked into the kernel.
+ *
+ *  The kernel's main thread can't be resumed after a user process runs
+ *  (the scheduler only saves contexts of processes), so each stage is
+ *  driven by the previous program's exit: process_set_exit_hook().
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+#define TRP_PARTMAN_PATH "/system/trp/partitionmanager.trp"
+#define TRP_OOBE_PATH    "/system/trp/teroobe.trp"
+#define SESS_LIVE_RAM_BYTES (16ULL * 1024ULL * 1024ULL)
+#define SYSTEM_PART_MIN_SECTORS (128u * 2048u)      /* 128 MiB */
+/* TRPFS keeps one allocation bit per 4 KiB block in the kernel heap
+ * (48 MiB of virtual space), so cap the usable volume at 64 GiB
+ * (a 2 MiB bitmap). A bigger partition is allowed; only its first 64 GiB
+ * is used. The same cap is used when formatting and when mounting. */
+#define SYSTEM_VOLUME_MAX_BYTES (64ULL * 1024ULL * 1024ULL * 1024ULL)
+static uint64_t system_volume_bytes(uint32_t sectors) {
+    uint64_t b = (uint64_t)sectors * 512ULL;
+    return b > SYSTEM_VOLUME_MAX_BYTES ? SYSTEM_VOLUME_MAX_BYTES : b;
+}
+
+int seed_boot_modules_matching(const char *prefix);
+
+typedef struct {
+    int      active;          /* install-session flag (partition manager)   */
+    int      target_slot;     /* MBR slot chosen for Toriginal OS, or -1    */
+    uint64_t total_sectors;
+    mbr_t    mbr;             /* last table committed via SYS_PART_WRITE    */
+    int      mbr_valid;
+    char     oobe[2048];
+    uint32_t oobe_len;
+    int      oobe_pending_apply;
+    int      oobe_mode_session;   /* teroobe launched by the installer hook */
+} sess_t;
+
+static sess_t g_sess = { .active = 0, .target_slot = -1 };
+static trpfs_blkdev_t g_live_dev;
+
+int install_session_active(void)   { return g_sess.active; }
+int install_session_selected(void) { return g_sess.target_slot; }
+
+/* Validate a candidate partition table. Returns 0 if acceptable. */
+static int part_validate(const mbr_t *m, uint64_t total, const char **why) {
+    for (int i = 0; i < 4; i++) {
+        const partition_entry_t *a = &m->partitions[i];
+        if (a->sector_count == 0) continue;
+        if (a->partition_type != 0x83 && a->partition_type != 0x07 &&
+            a->partition_type != 0x0C) { *why = "unsupported partition type"; return -1; }
+        if (a->start_lba < INSTALL_PART_ALIGN_LBA) { *why = "overlaps the boot region"; return -1; }
+        if ((uint64_t)a->start_lba + a->sector_count > total) { *why = "extends past end of disk"; return -1; }
+        for (int j = i + 1; j < 4; j++) {
+            const partition_entry_t *b = &m->partitions[j];
+            if (b->sector_count == 0) continue;
+            uint64_t ae = (uint64_t)a->start_lba + a->sector_count;
+            uint64_t be = (uint64_t)b->start_lba + b->sector_count;
+            if (a->start_lba < be && b->start_lba < ae) { *why = "partitions overlap"; return -1; }
+        }
+    }
+    return 0;
+}
+
+static void sess_load_disk_size(void) {
+    uint64_t sec = 0;
+    if (ata_drive_info(0, &sec, NULL, 0) == 0) g_sess.total_sectors = sec;
+}
+
+/* SYS_PART_WRITE backend. Keeps the existing bootstrap code in bytes
+ * 0..445 (zeros on a blank disk - the bootloader install fills them in
+ * later), replaces only the 4 table entries, forces the 0x55AA signature. */
+int install_part_commit(const uint8_t *user_mbr) {
+    if (!g_sess.active) return -1;
+    if (!g_sess.total_sectors) sess_load_disk_size();
+    if (!g_sess.total_sectors) return -1;
+
+    mbr_t cand;
+    memcpy(&cand, user_mbr, sizeof(cand));
+    const char *why = "";
+    if (part_validate(&cand, g_sess.total_sectors, &why) != 0) {
+        serial_puts("[INSTALL] Rejected partition table: "); serial_puts(why); serial_puts("\n");
+        return -1;
+    }
+    uint8_t sec[512];
+    if (ata_raw_read_sector(0, sec) != 0) memset(sec, 0, sizeof(sec));
+    mbr_t *out = (mbr_t *)sec;
+    for (int i = 0; i < 4; i++) {
+        out->partitions[i] = cand.partitions[i];
+        out->partitions[i].boot_indicator = 0;
+        out->partitions[i].start_chs[0] = 0xFE; out->partitions[i].start_chs[1] = 0xFF; out->partitions[i].start_chs[2] = 0xFF;
+        out->partitions[i].end_chs[0]   = 0xFE; out->partitions[i].end_chs[1]   = 0xFF; out->partitions[i].end_chs[2]   = 0xFF;
+    }
+    out->boot_signature = 0xAA55;
+    if (ata_raw_write_sector(0, sec) != 0) return -1;
+
+    memcpy(&g_sess.mbr, out, sizeof(mbr_t));
+    g_sess.mbr_valid = 1;
+    if (g_sess.target_slot >= 0 && g_sess.mbr.partitions[g_sess.target_slot].sector_count == 0)
+        g_sess.target_slot = -1;
+    serial_puts("[INSTALL] Partition table written.\n");
+    return 0;
+}
+
+int install_session_select(int slot) {
+    if (!g_sess.active || !g_sess.mbr_valid) return -1;
+    if (slot < 0 || slot > 3) return -1;
+    const partition_entry_t *p = &g_sess.mbr.partitions[slot];
+    if (p->sector_count < SYSTEM_PART_MIN_SECTORS) return -1;
+    if (p->partition_type != 0x83) return -1;
+    g_sess.target_slot = slot;
+    return 0;
+}
+
+/* ── key=value OOBE submission ──────────────────────────────────────────── */
+
+static int kv_next(const char **cur, const char *end, char *k, int kn, char *v, int vn) {
+    const char *p = *cur;
+    while (p < end) {
+        const char *ls = p;
+        while (p < end && *p != '\n') p++;
+        const char *le = p;
+        if (p < end) p++;
+        const char *eq = ls;
+        while (eq < le && *eq != '=') eq++;
+        if (eq == le || eq == ls) continue;
+        int kl = (int)(eq - ls), vl = (int)(le - eq - 1);
+        if (kl >= kn) kl = kn - 1;
+        if (vl >= vn) vl = vn - 1;
+        if (vl < 0) vl = 0;
+        memcpy(k, ls, (size_t)kl); k[kl] = '\0';
+        memcpy(v, eq + 1, (size_t)vl); v[vl] = '\0';
+        while (vl > 0 && (v[vl - 1] == '\r' || v[vl - 1] == ' ')) v[--vl] = '\0';
+        *cur = p;
+        return 1;
+    }
+    *cur = p;
+    return 0;
+}
+
+static int parse_u(const char *s, uint32_t *out) {
+    if (!*s) return 0;
+    uint32_t v = 0;
+    while (*s) { if (*s < '0' || *s > '9') return 0; v = v * 10 + (uint32_t)(*s - '0'); s++; }
+    *out = v; return 1;
+}
+
+static int parse_ip4(const char *s, uint8_t out[4]) {
+    for (int i = 0; i < 4; i++) {
+        uint32_t v = 0; int digits = 0;
+        while (*s >= '0' && *s <= '9') { v = v * 10 + (uint32_t)(*s - '0'); s++; digits++; if (v > 255) return 0; }
+        if (!digits) return 0;
+        out[i] = (uint8_t)v;
+        if (i < 3) { if (*s != '.') return 0; s++; }
+    }
+    return *s == '\0';
+}
+
+static void ip4_str(const uint8_t ip[4], char *out) {
+    int o = 0;
+    for (int q = 0; q < 4; q++) {
+        uint8_t x = ip[q];
+        if (x >= 100) out[o++] = (char)('0' + x / 100);
+        if (x >= 10)  out[o++] = (char)('0' + (x / 10) % 10);
+        out[o++] = (char)('0' + x % 10);
+        if (q < 3) out[o++] = '.';
+    }
+    out[o] = '\0';
+}
+
+static int name_ok(const char *s) {
+    int n = 0;
+    for (; *s; s++, n++) {
+        char c = *s;
+        if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-')) return 0;
+    }
+    return n >= 1 && n <= 31;
+}
+
+/* Apply a submitted OOBE key=value blob: account + terminal look +
+ * network + boot behaviour. Persists to config.ini (syscfg) and the TRBL
+ * settings sector so everything takes effect from the next boot on. */
+static int oobe_apply(const char *buf, uint32_t len) {
+    installer_account_t acct;
+    memset(&acct, 0, sizeof(acct));
+    memcpy(acct.username, "user", 5);
+    memcpy(acct.timezone, "UTC", 4);
+
+    uint8_t net_ip[4] = {0}, net_mask[4] = {0}, net_gw[4] = {0}, net_dns[4] = {0};
+    int net_mode = -1, have_ip = 0, have_mask = 0, have_gw = 0, have_dns = 0;
+    int res_w = 0, res_h = 0;
+    int mem_mode = -1; uint32_t ram_kb = 0;
+    int flag_verbose = -1, flag_safe = -1;
+    char text_c[8] = "", bg_c[8] = "", sb_c[8] = "", hostname[32] = "";
+
+    const char *cur = buf, *end = buf + len;
+    char k[32], v[96];
+    while (kv_next(&cur, end, k, sizeof(k), v, sizeof(v))) {
+        uint32_t n;
+        if (!strcmp(k, "username"))      { if (name_ok(v)) { strncpy(acct.username, v, 31); acct.username[31] = 0; } }
+        else if (!strcmp(k, "password")) { strncpy(acct.password, v, 31); acct.password[31] = 0; }
+        else if (!strcmp(k, "timezone")) { strncpy(acct.timezone, v, 15); acct.timezone[15] = 0; }
+        else if (!strcmp(k, "hostname")) { if (name_ok(v)) { strncpy(hostname, v, 31); hostname[31] = 0; } }
+        else if (!strcmp(k, "text_color") && parse_u(v, &n) && n < 16) strncpy(text_c, v, 7);
+        else if (!strcmp(k, "bg_color") && parse_u(v, &n) && n < 16)   strncpy(bg_c, v, 7);
+        else if (!strcmp(k, "statusbar_color") && parse_u(v, &n) && n < 16) strncpy(sb_c, v, 7);
+        else if (!strcmp(k, "resolution")) {
+            uint32_t w = 0, h = 0; const char *x = strchr(v, 'x');
+            if (x) { char a[8]; int al = (int)(x - v); if (al > 0 && al < 8) { memcpy(a, v, (size_t)al); a[al] = 0;
+                     if (parse_u(a, &w) && parse_u(x + 1, &h) && w >= 640 && w <= 1920 && h >= 480 && h <= 1080) { res_w = (int)w; res_h = (int)h; } } }
+        }
+        else if (!strcmp(k, "net_mode")) {
+            if (!strcmp(v, "off")) net_mode = TRBL_NET_OFF;
+            else if (!strcmp(v, "dhcp")) net_mode = TRBL_NET_DHCP;
+            else if (!strcmp(v, "static")) net_mode = TRBL_NET_STATIC;
+        }
+        else if (!strcmp(k, "net_ip"))   have_ip   = parse_ip4(v, net_ip);
+        else if (!strcmp(k, "net_mask")) have_mask = parse_ip4(v, net_mask);
+        else if (!strcmp(k, "net_gw"))   have_gw   = parse_ip4(v, net_gw);
+        else if (!strcmp(k, "net_dns"))  have_dns  = parse_ip4(v, net_dns);
+        else if (!strcmp(k, "mem_mode")) {
+            if (!strcmp(v, "max")) mem_mode = TRBL_MEM_MODE_MAX;
+            else if (!strcmp(v, "custom")) mem_mode = TRBL_MEM_MODE_CUSTOM;
+            else if (!strcmp(v, "least")) mem_mode = TRBL_MEM_MODE_LEAST;
+        }
+        else if (!strcmp(k, "ram_kb") && parse_u(v, &n)) ram_kb = n;
+        else if (!strcmp(k, "boot_verbose") && parse_u(v, &n)) flag_verbose = n ? 1 : 0;
+        else if (!strcmp(k, "boot_safe") && parse_u(v, &n)) flag_safe = n ? 1 : 0;
+    }
+
+    installer_errors_t errs; memset(&errs, 0, sizeof(errs));
+    int static_ok = (net_mode == TRBL_NET_STATIC && have_ip && have_mask && have_gw);
+    if (static_ok) {
+        ip4_str(net_ip, acct.ip);
+        ip4_str(net_mask, acct.netmask);
+        ip4_str(net_gw, acct.gateway);
+        if (have_dns) ip4_str(net_dns, acct.dns);
+        acct.network_configured = 1;
+    }
+
+    finalize_install(&acct, &errs);
+
+    if (text_c[0]) syscfg_set("text_color", text_c);
+    if (bg_c[0])   syscfg_set("bg_color", bg_c);
+    if (sb_c[0])   syscfg_set("statusbar_color", sb_c);
+    if (hostname[0]) syscfg_set("hostname", hostname);
+    if (net_mode == TRBL_NET_OFF)  syscfg_set("net_mode", "off");
+    if (net_mode == TRBL_NET_DHCP) syscfg_set("net_mode", "dhcp");
+    if (net_mode == TRBL_NET_STATIC) syscfg_set("net_mode", "static");
+    if (res_w) {
+        char rs[16]; int o = 0; char t[8]; int tl;
+        uint32_t vals[2] = { (uint32_t)res_w, (uint32_t)res_h };
+        for (int q = 0; q < 2; q++) {
+            tl = 0; uint32_t x = vals[q]; char r[8]; int rl = 0;
+            while (x) { r[rl++] = (char)('0' + x % 10); x /= 10; }
+            while (rl) t[tl++] = r[--rl];
+            for (int z = 0; z < tl; z++) rs[o++] = t[z];
+            if (q == 0) rs[o++] = 'x';
+        }
+        rs[o] = 0;
+        syscfg_set("resolution", rs);
+        trbl_settings_set_resolution((uint16_t)res_w, (uint16_t)res_h);
+    }
+    if (net_mode == TRBL_NET_OFF)  trbl_settings_set_network(TRBL_NET_OFF, 0, 0, 0, 0);
+    if (net_mode == TRBL_NET_DHCP) trbl_settings_set_network(TRBL_NET_DHCP, 0, 0, 0, 0);
+    if (static_ok) trbl_settings_set_network(TRBL_NET_STATIC, net_ip, net_mask, net_gw, have_dns ? net_dns : net_ip);
+    if (mem_mode >= 0) trbl_settings_set_memory((uint8_t)mem_mode, mem_mode == TRBL_MEM_MODE_CUSTOM ? ram_kb : 0);
+    if (flag_verbose >= 0 || flag_safe >= 0) {
+        trbl_settings_t ts;
+        if (trbl_settings_read(&ts) == 0) {
+            if (flag_verbose >= 0) { if (flag_verbose) ts.boot_flags |= TRBL_FLAG_VERBOSE; else ts.boot_flags &= ~TRBL_FLAG_VERBOSE; }
+            if (flag_safe >= 0)    { if (flag_safe) ts.boot_flags |= TRBL_FLAG_SAFE_MODE; else ts.boot_flags &= ~TRBL_FLAG_SAFE_MODE; }
+            trbl_settings_write(&ts);
+        }
+    }
+    if (errs.count != 0) {
+        /* The account could not be created: leave oobe_pending=1 so the
+         * setup runs again instead of booting an OS nobody can log in to. */
+        serial_puts("[OOBE] Applying settings failed - setup will run again.\n");
+        trpfs_sync();
+        return -1;
+    }
+    syscfg_set("oobe_pending", "0");
+    trpfs_sync();
+    serial_puts("[OOBE] Settings applied.\n");
+    return 0;
+}
+
+int install_session_oobe_submit(const char *text, uint32_t len) {
+    if (len == 0 || len >= sizeof(g_sess.oobe)) return -1;
+    if (!g_sess.oobe_mode_session) return -1;
+    memcpy(g_sess.oobe, text, len);
+    g_sess.oobe[len] = '\0';
+    g_sess.oobe_len = len;
+    /* Only the installer-launched setup (boot 2) may submit: any other
+     * program calling this would be able to create accounts / change
+     * boot settings with no authentication. */
+    if (!g_sess.oobe_mode_session) return -1;
+    g_sess.oobe_pending_apply = 1;
+    return 0;
+}
+
+/* ── stage plumbing ─────────────────────────────────────────────────────── */
+
+static void sess_park(int from_syscall) __attribute__((noreturn));
+static void sess_park(int from_syscall) {
+    /* 1 = reached via the SYS_EXIT stub (undo its swapgs), 2 = reached from
+     * the previous program's exit by whichever path it took. */
+    if (from_syscall == 2) from_syscall = process_exit_context();
+    /* Entered from a syscall (the previous program's exit): the syscall
+     * stub already did swapgs, so undo that before letting the timer
+     * scheduler iretq into the next ring-3 program. */
+    if (from_syscall) __asm__ volatile("swapgs");
+    __asm__ volatile("sti");
+    for (;;) __asm__ volatile("hlt");
+}
+
+static void sess_restart_prompt(const char *msg) __attribute__((noreturn));
+static void sess_restart_prompt(const char *msg) {
+    __asm__ volatile("sti");
+    io_put_string("\n==================================================\n");
+    io_put_string(msg);
+    io_put_string("  Press ENTER to restart.\n");
+    io_put_string("==================================================\n");
+    serial_puts("[INSTALL] Waiting for ENTER to restart.\n");
+    for (;;) {
+        int c = console_getc_nb();
+        if (c == '\n' || c == '\r') break;
+        __asm__ volatile("hlt");
+    }
+    io_put_string("Restarting...\n");
+    __asm__ volatile("cli");
+    for (volatile int i = 0; i < 200000; i++) { }
+    __asm__ volatile("outb %%al, $0x64" :: "a"((uint8_t)0xFE));
+    for (;;) __asm__ volatile("hlt");
+}
+
+void scheduler_init(void);
+void syscall_init(void);
+
+static int sess_launch(const char *path, void (*hook)(int)) {
+    /* The installer runs inside kernel_init() step [7/8], BEFORE the
+     * process/scheduler/syscall subsystems are brought up (they come
+     * right after the filesystem step). A ring-3 program needs all
+     * three - without EFER.SCE set its very first `syscall` raised #UD -
+     * so bring them up now; the session never returns to kernel_init. */
+    static int subsystems_up = 0;
+    if (!subsystems_up) {
+        process_init();
+        scheduler_init();
+        syscall_init();
+        subsystems_up = 1;
+    }
+    process_t *p = process_create(path, 1);
+    if (!p) return -1;
+    process_set_exit_hook(hook);
+    if (process_exec(p->pid, path, NULL) != 0) { process_set_exit_hook(NULL); return -1; }
+    return 0;
+}
+
+/* Boot 2 stage 2: teroobe.trp exited. */
+static void sess_oobe_done(int status) {
+    (void)status;
+    if (g_sess.oobe_pending_apply) {
+        g_sess.oobe_pending_apply = 0;
+        if (oobe_apply(g_sess.oobe, g_sess.oobe_len) == 0)
+            sess_restart_prompt("  Setup complete. Toriginal OS is ready.\n");
+        io_put_string("\nCould not create the account - starting setup again...\n");
+    }
+    /* The program quit without submitting anything: run it again - the
+     * account has to exist before the OS can be used. */
+    io_put_string("\nSetup was not completed - starting it again...\n");
+    if (sess_launch(TRP_OOBE_PATH, sess_oobe_done) == 0) sess_park(2);
+    sess_restart_prompt("  Could not restart setup.\n");
+}
+
+/* Boot 2: disk is mounted and flagged oobe_pending. */
+static int sess_run_oobe(void) {
+    static inode_t st;
+    if (fs_stat(TRP_OOBE_PATH, &st) != 0) return -1;
+    g_sess.oobe_mode_session = 1;
+    io_clear_screen();
+    if (sess_launch(TRP_OOBE_PATH, sess_oobe_done) != 0) return -1;
+    sess_park(0);
+}
+
+/* Boot 1 stage 2: partitionmanager.trp exited -> install. */
+static void sess_partman_done(int status);
+
+static void sess_do_install(void) {
+    installer_errors_t errs; memset(&errs, 0, sizeof(errs));
+    const partition_entry_t *p = &g_sess.mbr.partitions[g_sess.target_slot];
+
+    io_clear_screen();
+    io_put_string("==================================================\n");
+    io_put_string("   TORIGINAL OS - INSTALLING\n");
+    io_put_string("==================================================\n\n");
+
+    uint64_t bytes = system_volume_bytes(p->sector_count);
+    io_put_string("[1/4] Preparing the system partition...\n");
+    trpfs_blkdev_t *dev = ata_init_blkdev_partition(0, p->start_lba, bytes);
+    if (!dev) { io_put_string("      No ATA disk.\n"); sess_restart_prompt("  Install failed: no disk.\n"); }
+    g_disk = dev; g_using_real_disk = 1;
+
+    io_put_string("[2/4] Formatting TRPFS volume \"TORIGINALOS\" (can take a minute on big disks)...\n");
+    if (build_filesystem(&errs) != 0) {
+        err_print_all(&errs); sess_restart_prompt("  Install failed while formatting.\n");
+    }
+    io_put_string("[3/4] Copying system files...\n");
+    seed_install_payload(&errs);
+    seed_boot_modules_to_fs();
+    seed_embedded_assets_to_fs();
+
+    installer_account_t acct; memset(&acct, 0, sizeof(acct));
+    memcpy(acct.username, "user", 5); memcpy(acct.timezone, "UTC", 4);
+    finalize_install(&acct, &errs);
+    syscfg_set("oobe_pending", "1");
+
+    io_put_string("[4/4] Installing the bootloader...\n");
+    write_bootloader_to_disk(&errs);
+    trpfs_sync();
+
+    err_print_all(&errs);
+    if (errs.count) sess_restart_prompt("  Install finished with errors (see above).\n");
+    sess_restart_prompt("  Installation complete.\n"
+                        "  Remove the install disc first. On the next start\n"
+                        "  Toriginal OS asks for your username and password.\n");
+}
+
+static void sess_partman_done(int status) {
+    if (status == 1) {
+        g_sess.active = 0;
+        sess_restart_prompt("  Installation cancelled. Nothing was installed.\n");
+    }
+    if (status != 0 || g_sess.target_slot < 0 || !g_sess.mbr_valid) {
+        io_put_string("\nNo install target was chosen - starting the partition manager again...\n");
+        if (sess_launch(TRP_PARTMAN_PATH, sess_partman_done) == 0) sess_park(2);
+        sess_restart_prompt("  Could not restart the partition manager.\n");
+    }
+    g_sess.active = 0;       /* no more raw partition writes from here on */
+    sess_do_install();
+    for (;;) __asm__ volatile("hlt");
+}
+
+/* Boot 1 entry: blank disk + live CD. Returns -1 (so the caller falls
+ * back to the old unattended stager) if the TRP programs aren't there. */
+static int sess_begin_install(void) {
+    sess_load_disk_size();
+    if (!g_sess.total_sectors) return -1;
+
+    if (trpfs_ramdisk_init(&g_live_dev, SESS_LIVE_RAM_BYTES) != 0) return -1;
+    if (trpfs_format(&g_live_dev, "LIVE") != 0 || trpfs_mount(&g_live_dev) != 0) return -1;
+    if (seed_boot_modules_matching("/system/trp/") < 2) {
+        serial_puts("[INSTALL] install-time TRP programs missing from the disc - using the unattended installer.\n");
+        return -1;
+    }
+    static inode_t st;
+    if (fs_stat(TRP_PARTMAN_PATH, &st) != 0) return -1;
+
+    g_sess.active = 1; g_sess.target_slot = -1; g_sess.mbr_valid = 0;
+    {   /* Start from whatever table is on the disk (if any). */
+        uint8_t sec[512];
+        if (ata_raw_read_sector(0, sec) == 0 && sec[510] == 0x55 && sec[511] == 0xAA) {
+            memcpy(&g_sess.mbr, sec, 512);
+            const char *why;
+            if (part_validate(&g_sess.mbr, g_sess.total_sectors, &why) == 0) g_sess.mbr_valid = 1;
+        }
+    }
+    io_clear_screen();
+    serial_puts("[INSTALL] Live installer: launching partitionmanager.trp\n");
+    if (sess_launch(TRP_PARTMAN_PATH, sess_partman_done) != 0) { g_sess.active = 0; return -1; }
+    sess_park(0);
+}
+
+/* Find the system partition from the on-disk MBR: active, type 0x83,
+ * starting at/after the boot region. Fills slot/start/sectors. */
+static int find_system_partition(uint32_t *start, uint32_t *sectors) {
+    uint8_t sec[512];
+    if (ata_raw_read_sector(0, sec) != 0) return -1;
+    if (sec[510] != 0x55 || sec[511] != 0xAA) return -1;
+    const mbr_t *m = (const mbr_t *)sec;
+    for (int i = 0; i < 4; i++) {
+        const partition_entry_t *p = &m->partitions[i];
+        if (p->partition_type == 0x83 && p->boot_indicator == 0x80 &&
+            p->start_lba >= INSTALL_PART_ALIGN_LBA && p->sector_count >= 64) {
+            *start = p->start_lba; *sectors = p->sector_count; return 0;
+        }
+    }
+    return -1;
+}
+
 /* ── Boot-time auto-mount ─────────────────────────────────────────────────
  * Called once from kernel_init(), before the shell starts.
  *
@@ -883,7 +1429,13 @@ static void halt_for_reboot(const char *msg) {
  *   3. Valid volume, oobe_pending=0 (or unset, for installs made before
  *      this flow existed) -> ordinary boot, just mount and go. */
 int installer_try_automount(void) {
-    trpfs_blkdev_t *ata = ata_init_blkdev(INSTALLER_DISK_BYTES);
+    trpfs_blkdev_t *ata = NULL;
+    uint32_t pstart = 0, psectors = 0;
+    if (find_system_partition(&pstart, &psectors) == 0) {
+        ata = ata_init_blkdev_partition(0, pstart, system_volume_bytes(psectors));
+        serial_puts("[INSTALL] System partition found in the MBR.\n");
+    }
+    if (!ata) ata = ata_init_blkdev(INSTALLER_DISK_BYTES);   /* pre-partition-manager installs */
     if (!ata) {
         serial_puts("[INSTALL] No ATA disk detected - install requires a "
                      "real ATA/IDE disk for persistence.\n");
@@ -898,7 +1450,9 @@ int installer_try_automount(void) {
         syscfg_get_or("oobe_pending", pending, sizeof(pending), "0");
         if (strcmp(pending, "1") == 0) {
             serial_puts("[INSTALL] Existing filesystem found, OOBE pending - "
-                        "running interactive setup.\n");
+                        "running teroobe.trp.\n");
+            if (sess_run_oobe() == 0) return 0;     /* never returns on success */
+            serial_puts("[INSTALL] teroobe.trp missing - falling back to the built-in OOBE.\n");
             installer_errors_t errs;
             memset(&errs, 0, sizeof(errs));
             installer_run_oobe(&errs);
@@ -909,7 +1463,14 @@ int installer_try_automount(void) {
     }
 
     serial_puts("[INSTALL] ATA disk present but no valid filesystem found - "
-                "starting first-boot staging.\n");
+                "starting the live installer.\n");
+
+    /* Boot 1: partition manager TRP, then install (never returns). */
+    sess_begin_install();
+
+    /* TRP programs unavailable: old unattended path. */
+    serial_puts("[INSTALL] Falling back to the unattended installer.\n");
+    g_disk = ata_init_blkdev(INSTALLER_DISK_BYTES);
     installer_run_unattended();
 
     if (trpfs_mount(g_disk) == 0) {
@@ -918,7 +1479,6 @@ int installer_try_automount(void) {
             "  Initial setup complete.\n"
             "  Please REMOVE the install disc/ISO now, then reboot.\n"
             "  Toriginal OS will finish setup (OOBE) on the next boot.\n");
-        /* unreachable - halt_for_reboot() never returns */
     }
 
     serial_puts("[INSTALL] First-boot staging did not leave a valid filesystem "

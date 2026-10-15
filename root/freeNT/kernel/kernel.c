@@ -1,5 +1,6 @@
 
 #include "kernel.h"
+#include "paging.h"
 #include "types.h"
 #include "vga.h"
 #include "serial.h"
@@ -31,6 +32,7 @@
 #include "png.h"
 #include "graphics_2d.h"
 #include "heap.h"
+#include "tss.h"
 
 void interrupts_init(void);
 void syscall_init(void);
@@ -112,7 +114,7 @@ typedef struct { uint32_t type; uint32_t size;
  * from kernel_init) writes each module's raw bytes straight to that
  * path, so wallpaper.c/cursor.c never need to know modules exist at
  * all - they just find real files already sitting on TRPFS. */
-#define MB2_MAX_MODULES 16
+#define MB2_MAX_MODULES 32
 typedef struct {
     uint32_t phys_start;
     uint32_t phys_end;
@@ -370,6 +372,24 @@ static void write_bytes_to_fs_path(const char *dest_path, const uint8_t *src, si
     }
 }
 
+/* Install-session helper: seed only the boot modules whose destination
+ * path starts with `prefix` (e.g. "/system/trp/") - used to stage the
+ * install-time .trp programs into the live RAM filesystem without also
+ * copying every wallpaper into it. Returns how many were written. */
+int seed_boot_modules_matching(const char *prefix) {
+    int n = 0;
+    size_t pl = strlen(prefix);
+    for (int i = 0; i < g_mb_module_count; i++) {
+        mb2_module_entry_t *m = &g_mb_modules[i];
+        if (m->phys_end <= m->phys_start) continue;
+        if (strncmp(m->dest_path, prefix, pl) != 0) continue;
+        write_bytes_to_fs_path(m->dest_path, (const uint8_t *)(uintptr_t)m->phys_start,
+                                (size_t)(m->phys_end - m->phys_start));
+        n++;
+    }
+    return n;
+}
+
 void seed_boot_modules_to_fs(void) {
     for (int i = 0; i < g_mb_module_count; i++) {
         mb2_module_entry_t *m = &g_mb_modules[i];
@@ -548,6 +568,15 @@ static void kernel_init(uint32_t mb_info_phys) {
     idt_init();
     kprint("[3/8] IDT OK\n");
 
+    /* Must come before anything can ever drop into ring 3 (the first
+     * TRP process launch, later in boot) - without a loaded TSS, the
+     * CPU has no defined %rsp0 to switch to on a ring-3 -> ring-0
+     * transition (a syscall, or a hardware interrupt firing while
+     * user code is running). See tss.c's tss_init() comment. */
+    kprint("[3/8] TSS init...\n");
+    tss_init();
+    kprint("[3/8] TSS OK\n");
+
     acpi_init(g_mb_rsdp_old_phys, g_mb_rsdp_new_phys);
     apic_init();
     if (apic_available()) {
@@ -655,6 +684,7 @@ static void kernel_init(uint32_t mb_info_phys) {
 }
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
+    mm_record_boot_cr3();
     serial_init();
     vga_init();
     vga_set_color(VGA_WHITE, VGA_BLACK);

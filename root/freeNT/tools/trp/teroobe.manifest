@@ -1,0 +1,7 @@
+Execute at/: teroobe.bin
+Window name/: Toriginal OS Setup
+Language/: bin
+Version/: 1.0
+Description/: Terminal out-of-box setup: account, terminal look, network, boot options
+Appstat/: terminal
+mark executable/

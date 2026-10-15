@@ -18,6 +18,20 @@
 void pmm_init(uint64_t multiboot_ptr);
 void* pmm_alloc_frame(void);
 void pmm_free_frame(void* phys_addr);
+
+/* Allocates `count` PHYSICALLY CONTIGUOUS frames (count==1 is just
+ * pmm_alloc_frame() under the hood) - see this function's own comment
+ * in pmm.c for why contiguity matters (a GUI window's pixel buffer
+ * must be one flat array the compositor can read with simple
+ * pointer+offset arithmetic). Returns the first frame's physical
+ * address, or NULL if no run that long is currently free (can fail
+ * even under light memory pressure if free frames are fragmented -
+ * a real, inherent tradeoff of requiring contiguity). Individual
+ * frames from the returned run are freed one at a time with the
+ * ordinary pmm_free_frame(), same as any other frame - there is no
+ * separate "free a contiguous run" call, since freeing doesn't need
+ * to know they were ever contiguous in the first place. */
+void* pmm_alloc_contiguous_frames(uint32_t count);
 uint32_t pmm_get_free_ram(void);
 
 /* Total physical RAM the firmware/bootloader actually reported as

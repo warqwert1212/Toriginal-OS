@@ -408,6 +408,27 @@ halt64:
  * the STAR value above expects. Index 4 = ring-3 data, index 5 = ring-3
  * 64-bit code (same encoding as kernel code/data, DPL bits changed from
  * 00 to 11: access byte 0x92→0xF2, 0x9A→0xFA). */
+/* FIX 7 – TSS descriptor slot (index 6, selector 0x30). A 64-bit TSS
+ * descriptor is a SYSTEM descriptor - 16 bytes (two GDT slots wide),
+ * not the usual 8 - because the upper 8 bytes hold bits 63:32 of the
+ * TSS's base address (a code/data descriptor's corresponding bytes
+ * are just reserved/must-be-zero, which is why every entry above this
+ * one is a plain single .quad). Left zeroed here at link time - a
+ * descriptor needs the TSS's actual runtime address, which isn't
+ * known until tss_init() (kernel/tss.c) allocates the TSS struct at
+ * boot - tss_init() patches these 16 bytes in place afterward, then
+ * loads the selector with `ltr`. Without this, ANY ring-3-to-ring-0
+ * transition (a syscall from user code, or - critically - a hardware
+ * interrupt like the timer firing WHILE a user-mode process is
+ * running) has no defined %rsp0 to switch to: the CPU's interrupt/
+ * trap gate mechanism on a privilege-level change always loads %rsp
+ * from the current TSS's RSP0 field before pushing anything - with no
+ * valid TSS loaded, that's undefined, and ltr itself would #GP fault
+ * pointing at a zeroed system descriptor with P=0. This is exactly
+ * why ring-3 user processes couldn't exist before: it's not just
+ * "cs/ss were never set to the ring-3 selectors" (process.c's
+ * context_to_frame() comment), it's that there was nowhere safe for
+ * the CPU to land the kernel-mode stack pointer even if they had been. */
 .align 16
 gdt64:
     .quad 0x0000000000000000    /* 0x00 – null              */
@@ -416,8 +437,11 @@ gdt64:
     .quad 0x0000000000000000    /* 0x18 – unused (SYSRET arithmetic placeholder, never loaded) */
     .quad 0x00CFF2000000FFFF    /* 0x20 – ring-3 data (DPL=3) */
     .quad 0x00AFFA000000FFFF    /* 0x28 – ring-3 64-bit code (DPL=3) */
+    .quad 0x0000000000000000    /* 0x30 – TSS descriptor low 8 bytes (patched by tss_init()) */
+    .quad 0x0000000000000000    /* 0x38 – TSS descriptor high 8 bytes (patched by tss_init()) */
 gdt64_end:
 
+.global gdt64
 gdt64_pointer:
     .word gdt64_end - gdt64 - 1
     .quad gdt64
@@ -454,7 +478,7 @@ pd_table3:
 
 .align 16
 stack_bottom:
-    .skip 16384
+    .skip 65536   /* was 16384: installer call chains overflowed it down into pd_table3 */
 stack_top:
 
 /* ── Data (saved multiboot registers) ───────────────────────────────── */

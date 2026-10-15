@@ -35,13 +35,15 @@ typedef struct {
     uint16_t ctrl_base;
     int      slave;
     int      present;
+    uint64_t total_sectors;   /* from IDENTIFY words 60-61 / 100-103 */
+    char     model[41];       /* IDENTIFY words 27-46, trimmed */
 } ata_channel_t;
 
 static ata_channel_t g_channels[4] = {
-    { ATA_PRIMARY_BASE,   ATA_PRIMARY_CTRL,   0, 0 },
-    { ATA_PRIMARY_BASE,   ATA_PRIMARY_CTRL,   1, 0 },
-    { ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, 0, 0 },
-    { ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, 1, 0 },
+    { ATA_PRIMARY_BASE,   ATA_PRIMARY_CTRL,   0, 0, 0, {0} },
+    { ATA_PRIMARY_BASE,   ATA_PRIMARY_CTRL,   1, 0, 0, {0} },
+    { ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, 0, 0, 0, {0} },
+    { ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, 1, 0, 0, {0} },
 };
 
 static inline uint8_t inb(uint16_t port) {
@@ -95,7 +97,26 @@ static int ata_detect_channel(int index) {
 
     if (ata_wait_drq(ch->io_base) != 0) { ch->present = 0; return 0; }
 
-    for (int i = 0; i < 256; i++) (void)inw(ch->io_base + ATA_REG_DATA);
+    {
+        uint16_t id[256];
+        for (int i = 0; i < 256; i++) id[i] = inw(ch->io_base + ATA_REG_DATA);
+
+        uint64_t sectors = ((uint64_t)id[61] << 16) | id[60];
+        if (id[83] & (1u << 10)) { /* LBA48 supported */
+            uint64_t s48 = ((uint64_t)id[103] << 48) | ((uint64_t)id[102] << 32) |
+                           ((uint64_t)id[101] << 16) | id[100];
+            if (s48) sectors = s48;
+        }
+        ch->total_sectors = sectors;
+
+        for (int i = 0; i < 20; i++) {
+            ch->model[i * 2]     = (char)(id[27 + i] >> 8);
+            ch->model[i * 2 + 1] = (char)(id[27 + i] & 0xFF);
+        }
+        ch->model[40] = '\0';
+        for (int i = 39; i >= 0 && (ch->model[i] == ' ' || ch->model[i] == '\0'); i--)
+            ch->model[i] = '\0';
+    }
 
     ch->present = 1;
     return 1;
@@ -163,6 +184,7 @@ static int ata_write_sector(ata_channel_t *ch, uint32_t lba, const void *buf) {
 
 typedef struct {
     ata_channel_t *channel;
+    uint32_t       base_lba;   /* first absolute sector of the TRPFS volume */
 } ata_blkdev_ctx_t;
 
 static ata_blkdev_ctx_t g_blkdev_ctx[4];
@@ -176,7 +198,7 @@ static ata_blkdev_ctx_t g_blkdev_ctx[4];
 static int ata_blk_read(trpfs_blkdev_t *dev, uint64_t lba, void *buf) {
     ata_blkdev_ctx_t *ctx = (ata_blkdev_ctx_t *)dev->ctx;
     ata_channel_t *ch = ctx->channel;
-    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ATA_BOOT_RESERVED_SECTORS;
+    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ctx->base_lba;
     uint8_t *out = (uint8_t *)buf;
     for (uint32_t i = 0; i < SECTORS_PER_BLOCK; i++) {
         if (ata_read_sector(ch, base + i, out + i * ATA_SECTOR_SIZE) != 0) return -1;
@@ -187,7 +209,7 @@ static int ata_blk_read(trpfs_blkdev_t *dev, uint64_t lba, void *buf) {
 static int ata_blk_write(trpfs_blkdev_t *dev, uint64_t lba, const void *buf) {
     ata_blkdev_ctx_t *ctx = (ata_blkdev_ctx_t *)dev->ctx;
     ata_channel_t *ch = ctx->channel;
-    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ATA_BOOT_RESERVED_SECTORS;
+    uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ctx->base_lba;
     const uint8_t *in = (const uint8_t *)buf;
     for (uint32_t i = 0; i < SECTORS_PER_BLOCK; i++) {
         if (ata_write_sector(ch, base + i, in + i * ATA_SECTOR_SIZE) != 0) return -1;
@@ -206,7 +228,8 @@ trpfs_blkdev_t *ata_init_blkdev_drive(int drive_index, uint64_t total_bytes) {
     }
 
     uint64_t blocks = total_bytes / TRPFS_BLOCK_SIZE;
-    g_blkdev_ctx[drive_index].channel = &g_channels[drive_index];
+    g_blkdev_ctx[drive_index].channel  = &g_channels[drive_index];
+    g_blkdev_ctx[drive_index].base_lba = ATA_BOOT_RESERVED_SECTORS;
 
     g_ata_devs[drive_index].read_block   = ata_blk_read;
     g_ata_devs[drive_index].write_block  = ata_blk_write;
@@ -239,3 +262,34 @@ int ata_raw_write_sector(uint32_t lba, const void *buf) {
     return ata_write_sector(&g_channels[0], lba, buf);
 }
 
+
+
+/* Capacity/model of a detected drive, for the install-time partition
+ * manager (SYS_DISK_INFO). Returns 0 and fills the out-params if the
+ * drive exists, -1 otherwise. */
+int ata_drive_info(int drive_index, uint64_t *total_sectors, char *model, int model_len)
+{
+    if (drive_index < 0 || drive_index >= 4) return -1;
+    if (!g_channels[drive_index].present && !ata_detect_channel(drive_index)) return -1;
+    if (total_sectors) *total_sectors = g_channels[drive_index].total_sectors;
+    if (model && model_len > 0) {
+        int i = 0;
+        while (i < model_len - 1 && g_channels[drive_index].model[i]) {
+            model[i] = g_channels[drive_index].model[i]; i++;
+        }
+        model[i] = '\0';
+    }
+    return 0;
+}
+
+/* TRPFS volume living in an MBR partition: same device object as
+ * ata_init_blkdev_drive() (one TRPFS volume per drive), but with the
+ * volume starting at the partition's own first sector instead of the
+ * fixed ATA_BOOT_RESERVED_SECTORS offset. */
+trpfs_blkdev_t *ata_init_blkdev_partition(int drive_index, uint32_t start_lba, uint64_t total_bytes)
+{
+    trpfs_blkdev_t *d = ata_init_blkdev_drive(drive_index, total_bytes);
+    if (!d) return NULL;
+    g_blkdev_ctx[drive_index].base_lba = start_lba;
+    return d;
+}

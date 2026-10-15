@@ -1,4 +1,5 @@
 #include "interrupts.h"
+#include "process.h"
 #include "idt.h"
 #include "string.h"
 #include "pit.h"
@@ -70,6 +71,21 @@ void idt_set_gate(uint8_t num, uint64_t handler, uint16_t sel, uint8_t flags)
 
 static void handle_exception(interrupt_frame_t *f)
 {
+    /* A ring-3 program faulted while the installer is waiting on it
+     * (install-time partition manager / OOBE): don't take the whole
+     * machine down - report it, end the process, and let the installer's
+     * exit hook start the program again. Anywhere else a CPU exception is
+     * still fatal exactly as before. */
+    if ((f->cs & 3) == 3 && process_exit_hook_armed()) {
+        serial_puts("\n[proc] user program crashed (exception #");
+        char b[4]; b[0] = (char)('0' + f->interrupt_number / 10); b[1] = (char)('0' + f->interrupt_number % 10);
+        b[2] = ')'; b[3] = '\0';
+        serial_puts(b);
+        serial_puts(") - restarting it.\n");
+        process_set_exit_context(0);
+        process_exit(-1);              /* runs the hook; it does not return */
+    }
+
     vga_set_color(VGA_WHITE, VGA_RED);
     vga_write("\n!!! KERNEL PANIC: CPU EXCEPTION #");
     vga_write_dec(f->interrupt_number);

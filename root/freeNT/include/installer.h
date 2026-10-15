@@ -15,4 +15,12 @@ void installer_print_status(void);
  * disk is present or no filesystem was found. */
 int installer_try_automount(void);
 
+/* TRP install-session hooks used by the syscall layer (syscall.c) */
+int install_session_active(void);
+int install_session_selected(void);
+int install_part_commit(const unsigned char *mbr512);
+int install_session_select(int slot);
+int install_session_oobe_submit(const char *text, unsigned int len);
+int console_getc_nb(void);
+
 #endif /* _INSTALLER_H */

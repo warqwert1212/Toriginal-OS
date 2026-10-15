@@ -51,6 +51,10 @@
 .set KERNEL_CHUNK_MAX_SECTORS, 127  /* matches the conservative INT13h
                                       * extensions transfer-size limit already
                                       * used below */
+.set E820_BUF,          0x1D000     /* BIOS memory map handed to the kernel: dword count @+0,
+                                      * then 24-byte entries from +8 (max 32). Between the
+                                      * settings sector buffer (0x1B000) and the kernel
+                                      * chunk buffer (0x20000). */
 .set MB2_INFO_ADDR,    0x30000     /* scratch buffer for the synthesized
                                      * multiboot2 info block, built in step 6 */
 .set MB2_MAGIC,        0x36D76289
@@ -137,6 +141,7 @@ a20_done:
      * could no longer show it. That's what "shows text for a second
      * then black" actually was. Kernel loading now happens first,
      * while we can still see if it goes wrong. */
+    call    collect_e820
     call    load_kernel_elf
     jc      fatal_disk_error
 
@@ -508,7 +513,16 @@ enter_unreal:
     orl     $1, %eax
     movl    %eax, %cr0
     movw    $0x10, %ax              /* gdt32's flat 4 GiB data descriptor */
-    movw    %ax, %ds
+    /* FIX: only ES goes flat now. DS used to get the flat (base-0)
+     * descriptor too, which silently broke every variable access
+     * (dap_count, fb_found, fb_pitch...) made while "inside" unreal
+     * mode - they were read from linear address <offset>, not
+     * <stage2 base>+<offset>. That made load_kernel_elf's sector
+     * accounting read a garbage dap_count, so the remaining-sector
+     * counter never reached 0 and the loop kept reading right past
+     * the end of the disk (KERNEL DISK READ ERROR, AH=0x0C, LBA
+     * 0x3FFFC0). DS stays = CS; every flat-memory access in an
+     * unreal-mode bracket must use an explicit %es: override. */
     movw    %ax, %es
     movl    %cr0, %eax
     andl    $0xFFFFFFFE, %eax
@@ -565,13 +579,13 @@ draw_logo:
     addl    fb_addr, %eax
     movl    %eax, %edi
 
-    movl    $LOGO_DATA, %esi
+    movl    $(LOGO_DATA + STAGE2_LINEAR_BASE), %esi   /* linear, not offset */
     movl    $LOGO_HEIGHT, %ecx
 draw_logo_row:
     pushl   %ecx
     movl    $LOGO_WIDTH, %ecx
     cld
-    rep movsl                          /* copies LOGO_WIDTH dwords, src->dst */
+    rep movsl %es:(%esi), %es:(%edi)   /* copies LOGO_WIDTH dwords, src->dst */
     popl    %ecx
     movl    fb_pitch, %eax
     subl    $(LOGO_WIDTH*4), %eax      /* %edi already advanced LOGO_WIDTH*4
@@ -634,7 +648,7 @@ draw_bar_row:
     je      bar_fill_done
     movl    $0x00CC7A29, %eax          /* BGRX: filled portion (accent) */
 bar_fill_loop:
-    movl    %eax, (%edi)
+    movl    %eax, %es:(%edi)
     addl    $4, %edi
     decl    %ecx
     jnz     bar_fill_loop
@@ -645,7 +659,7 @@ bar_fill_done:
     je      bar_row_done
     movl    $0x00303030, %eax          /* BGRX: unfilled track */
 bar_track_loop:
-    movl    %eax, (%edi)
+    movl    %eax, %es:(%edi)
     addl    $4, %edi
     decl    %ecx
     jnz     bar_track_loop
@@ -668,6 +682,47 @@ draw_bar_done:
 LOGO_DATA:
 .incbin "trbl_logo_boot.bin"
 LOGO_DATA_END:
+
+
+/* ── BIOS E820 memory map ──────────────────────────────────────────────
+ * Stage2 used to hand the kernel NO memory-map tag, so on every TRBL boot
+ * the PMM logged "No mmap tag found - fallback" and capped usable RAM at
+ * ~124 MB regardless of the machine. Collect the real map here (real mode
+ * only: INT 15h/E820) so build_multiboot2_info can emit a type-6 tag. */
+collect_e820:
+    pushal
+    pushw   %es
+    movw    $(E820_BUF >> 4), %ax      /* ES:DI addressing: 0x1D000 = 0x1D00:0x0000 */
+    movw    %ax, %es
+    movw    $8, %di
+    xorl    %ebx, %ebx
+    xorl    %ebp, %ebp
+e820_loop:
+    movl    $1, %es:20(%di)         /* ask for the ACPI 3.0 attribute dword */
+    movl    $0x534D4150, %edx       /* 'SMAP' */
+    movl    $0xE820, %eax
+    movl    $24, %ecx
+    int     $0x15
+    jc      e820_done
+    cmpl    $0x534D4150, %eax
+    jne     e820_done
+    movl    $0, %es:20(%di)         /* MB2 'reserved' field must be 0 */
+    movl    %es:8(%di), %eax        /* skip empty (length == 0) entries */
+    orl     %es:12(%di), %eax
+    jz      e820_next
+    incl    %ebp
+    addw    $24, %di
+    cmpl    $32, %ebp
+    jae     e820_done
+e820_next:
+    testl   %ebx, %ebx
+    jnz     e820_loop
+e820_done:
+    xorw    %di, %di
+    movl    %ebp, %es:(%di)
+    popw    %es
+    popal
+    ret
 
 load_kernel_elf:
     pusha
@@ -737,7 +792,7 @@ load_chunk_size_ok:
     shrl    $2, %ecx
     movl    $KERNEL_CHUNK_BUF_ADDR, %esi
     cld
-    rep movsl                       /* DS:ESI -> ES:EDI, flat, 32-bit */
+    rep movsl %es:(%esi), %es:(%edi) /* flat ES -> flat ES, 32-bit */
     popl    %ecx
     movzwl  dap_count, %eax
     subl    %eax, %ecx              /* ecx = sectors still remaining, updated */
@@ -773,7 +828,11 @@ load_chunk_size_ok:
 
     movzwl  dap_count, %eax
     addl    %eax, %ebx
-    addl    %ebp, %edi
+    /* FIX: no 'addl %ebp, %edi' here - the 'rep movsl' above already
+     * advanced EDI by exactly this chunk's byte count. Adding it again
+     * skipped one chunk of zeros between every pair of chunks, so the
+     * staged ELF was valid only for its first 127 sectors (~63 KiB) and
+     * the kernel text beyond that loaded as zeros. */
 
     jmp     load_loop
 
@@ -884,6 +943,9 @@ gdt32_pointer:
  * IN (pm_serial_putc): %al  = byte to send.
  * IN (pm_serial_puts): %esi = pointer to a NUL-terminated string.
  * Both fully preserve every register they use. ---- */
+.code32   /* FIX: these are called from protected mode but sat inside the
+          * preceding .code16 region, so they assembled as 16-bit code
+          * (push %si / push %ax) and derailed the CPU on first use. */
 .global pm_serial_putc
 pm_serial_putc:
     pushl   %edx
@@ -935,17 +997,17 @@ protected_mode_entry:
                                        * ELF staging buffer (0x20000+) and
                                        * everything below it */
 
-    movl    $msg_p1, %esi
+    movl    $(msg_p1 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
 
     call    elf_load_segments
 
-    movl    $msg_p2, %esi
+    movl    $(msg_p2 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
 
     call    build_multiboot2_info
 
-    movl    $msg_p3, %esi
+    movl    $(msg_p3 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
 
     movl    $MB2_MAGIC, %eax
@@ -953,7 +1015,7 @@ protected_mode_entry:
 
     pushl   %eax
     pushl   %ebx
-    movl    $msg_p4, %esi
+    movl    $(msg_p4 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
     popl    %ebx
     popl    %eax

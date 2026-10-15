@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include "serial.h"
 #include "io.h"
+#include "installer.h"
+#include "kernel.h"
 #include "syscall.h"
 #include "process.h"
 #include "fs.h"
@@ -9,6 +11,15 @@
 #include "graphics_core.h"  /* g_framebuffer - IOCTL_FB_GET_INFO */
 #include "gfx_terminal.h"   /* gterm_is_active/gterm_get_grid_size - IOCTL_TTY_GET_WINSIZE */
 #include "keyboard.h"       /* keyboard_has_input/keyboard_getc_nb - stdin (fd 0) */
+#include "paging.h"         /* paging_user_range_ok() - real per-process
+                              * pointer validation for syscall_ptr_ok()/
+                              * syscall_buf_ok(), see their updated comment */
+#include "wm.h"             /* wm_create_window_userbacked/wm_poll_event/
+                              * wm_destroy_window - the GUI syscalls */
+#include "pmm.h"            /* pmm_free_frame - releasing a destroyed
+                              * window's pixel-buffer frames */
+#include "string.h"         /* memcpy - copying the GUI syscalls' result
+                              * structs out to user memory */
 
 #define MSR_EFER          0xC0000080
 #define MSR_STAR          0xC0000081
@@ -65,18 +76,38 @@ static syscall_handler_t g_handlers[NUM_SYSCALLS];
  * boundary. */
 #define SYSCALL_GUARD_PAGE 0x1000ULL
 
+/* CHANGED: these three used to only check "is the pointer value
+ * numerically above the first 4 KiB" - a NULL-pointer-style sanity
+ * check, not real validation, and it was ALL that was possible before
+ * real per-process address spaces existed (see paging.c's top
+ * comment) - every process shared the kernel's own tables, so there
+ * was no separate "is this actually mapped for THIS process, as
+ * user-accessible memory" question to ask yet. Now that there is
+ * (paging.c's mm_create_address_space()/per-process PML4s), these
+ * gate the same way any real OS's copy_from_user/copy_to_user does:
+ * walk the CALLING process's own page tables (paging_user_range_ok())
+ * and confirm the pages are actually present and marked PAGE_USER,
+ * not just "some address bigger than 0x1000". A pointer that's
+ * unmapped, kernel-only, or wanders outside what this process ever
+ * had mapped now correctly fails here instead of either page-faulting
+ * the kernel or - worse - the kernel touching memory on the process's
+ * behalf that the process itself never had rights to. */
 static int syscall_ptr_ok(uint64_t ptr) {
-    return ptr >= SYSCALL_GUARD_PAGE;
+    if (ptr < SYSCALL_GUARD_PAGE) return 0;
+    return paging_user_range_ok(ptr, 1);
 }
 
 static int syscall_ptr_ok_or_null(uint64_t ptr) {
-    return ptr == 0 || ptr >= SYSCALL_GUARD_PAGE;
+    if (ptr == 0) return 1;
+    if (ptr < SYSCALL_GUARD_PAGE) return 0;
+    return paging_user_range_ok(ptr, 1);
 }
 
 static int syscall_buf_ok(uint64_t ptr, uint64_t len) {
     if (ptr < SYSCALL_GUARD_PAGE) return 0;
     if (len > 0 && ptr + len < ptr) return 0; /* overflow */
-    return 1;
+    if (len == 0) return 1;
+    return paging_user_range_ok(ptr, len);
 }
 
 void syscall_register_handler(uint32_t syscall_num, syscall_handler_t handler) {
@@ -111,7 +142,9 @@ static uint64_t sys_write(uint64_t fd, uint64_t buf, uint64_t len, uint64_t a4, 
 
 static uint64_t sys_exit(uint64_t status, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_set_exit_context(1);
     process_exit((int)status);
+    process_set_exit_context(0);
 
     return 0;
 }
@@ -231,8 +264,10 @@ static uint64_t sys_read(uint64_t fd, uint64_t buf, uint64_t count, uint64_t a4,
     if (fd == 0) {
         char *dst = (char *)(uintptr_t)buf;
         uint64_t n = 0;
-        while (n < count && keyboard_has_input()) {
-            dst[n++] = keyboard_getc_nb();
+        while (n < count) {
+            int c = console_getc_nb();      /* PS/2 + USB HID + COM1 */
+            if (!c) break;
+            dst[n++] = (char)c;
         }
         return n;
     }
@@ -513,6 +548,222 @@ static uint64_t sys_sigraise(uint64_t signum, uint64_t a2, uint64_t a3, uint64_t
     return 0;
 }
 
+/* ── GUI syscalls ─────────────────────────────────────────────────────────
+ * See kernel/wm.c's wm_create_window_userbacked()/wm_push_event()/
+ * wm_poll_event() and kernel/pmm.c's pmm_alloc_contiguous_frames() for
+ * the real underlying mechanics these wrap. This is the FIRST syscall
+ * surface exposing any GUI capability to a userspace TRP program at
+ * all (confirmed earlier: zero GUI-related syscalls existed before
+ * this - the compositor/wm were kernel-internal only). */
+
+/* Mirrors what trplibc's own trp_gui.h declares byte-for-byte (same
+ * discipline as every other kernel<->trplibc struct-sharing syscall
+ * this engagement has built - sys_stat()'s inode_t translation,
+ * sys_gettimeofday()'s syscall_timeval_t, etc.) - a mismatch here
+ * would silently corrupt every field past the point they diverge. */
+typedef struct {
+    uint32_t window_id;
+    uint64_t pixels_vaddr;   /* where the window's pixel buffer was
+                               * mapped in the CALLING process's own
+                               * address space - see mm_map_page_in()
+                               * call below */
+    int32_t  pitch;
+    int32_t  client_w;
+    int32_t  client_h;
+} syscall_wm_create_result_t;
+
+#define SYS_WM_PIXELS_VADDR_BASE 0x600000000ULL /* far above the fixed
+    * 0x500000 TRP code load window (kernel64.ld) and the 0x7FFFFFFF000
+    * default stack top (process.c) - a window's pixel buffer lives in
+    * its own, separate, fixed region of the process's virtual address
+    * space so it can never collide with either. Windows are mapped
+    * one after another starting here, each window_index slots spaced
+    * generously apart (see the multiplication below) so even a large
+    * window's buffer can't run into the next slot. */
+
+static uint64_t sys_wm_create_window(uint64_t x, uint64_t y, uint64_t w, uint64_t h,
+                                      uint64_t title_ptr, uint64_t out_result_ptr) {
+    if (!syscall_ptr_ok_or_null(title_ptr)) return (uint64_t)-1;
+    if (!syscall_buf_ok(out_result_ptr, sizeof(syscall_wm_create_result_t))) return (uint64_t)-1;
+
+    process_t *cur = process_get_current();
+    int slot = -1;
+    for (int i = 0; i < PROCESS_MAX_OWNED_WINDOWS; i++) {
+        if (cur->owned_windows[i] == 0) { slot = i; break; }
+    }
+    if (slot < 0) return (uint64_t)-1; /* process already owns the max
+        * number of windows this table tracks - see process.h's
+        * PROCESS_MAX_OWNED_WINDOWS comment */
+
+    /* Compute the frame count the SAME way wm_create_window_userbacked()
+     * internally will, so the caller-supplied array is sized correctly
+     * - duplicated here deliberately rather than having wm.c report it
+     * back after the fact, since the physical-frames array needs to
+     * exist (sized correctly) BEFORE calling into wm.c at all. A
+     * generous fixed cap (64 frames = 256 KiB window) bounds this
+     * array's stack usage to something reasonable rather than sizing
+     * it from an unbounded, syscall-caller-controlled w/h. */
+    #define SYS_WM_MAX_WINDOW_FRAMES 64
+    if (w == 0 || h == 0 || w > 4096 || h > 4096) return (uint64_t)-1; /* reject
+        * absurd/zero dimensions before any allocation is attempted -
+        * matches wm_create_window_userbacked()'s own internal minimum
+        * clamp (100x100) existing anyway, this just fails fast for
+        * something that would obviously never fit SYS_WM_MAX_WINDOW_FRAMES */
+
+    uint64_t phys_frames[SYS_WM_MAX_WINDOW_FRAMES];
+    uint32_t frame_count = 0;
+
+    char title_buf[64];
+    const char *title_arg = 0;
+    if (title_ptr) {
+        if (!syscall_buf_ok(title_ptr, 1)) return (uint64_t)-1;
+        /* Bounded copy from user memory - never trust a user pointer's
+         * NUL-termination blindly (same reasoning fs_open()'s own
+         * path-string handling already applies elsewhere in this
+         * file). */
+        const char *src = (const char *)(uintptr_t)title_ptr;
+        size_t i = 0;
+        for (; i < sizeof(title_buf) - 1; i++) {
+            if (!syscall_ptr_ok(title_ptr + i)) break;
+            title_buf[i] = src[i];
+            if (src[i] == '\0') break;
+        }
+        title_buf[i] = '\0';
+        title_arg = title_buf;
+    }
+
+    uint32_t window_id = wm_create_window_userbacked(
+        (int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h, title_arg,
+        phys_frames, &frame_count);
+    if (window_id == 0) return (uint64_t)-1;
+    if (frame_count > SYS_WM_MAX_WINDOW_FRAMES) {
+        /* Should be unreachable given the w/h cap above, but if it
+         * ever did happen, leaking the already-created window would
+         * be worse than failing loudly - destroy what was just
+         * created rather than return success with a result the
+         * caller's fixed-size array can't actually hold. */
+        wm_destroy_window(window_id);
+        return (uint64_t)-1;
+    }
+
+    wm_window_t *win = wm_get_window(window_id);
+    if (!win) { wm_destroy_window(window_id); return (uint64_t)-1; }
+
+    /* Map every physical frame into the CALLING process's own address
+     * space, contiguously, starting at this window's reserved virtual
+     * slot - see SYS_WM_PIXELS_VADDR_BASE's comment. PAGING_WRITE so
+     * the process can actually draw into it; PAGING_USER so ring-3
+     * code (which is ALL TRP code, as of this OS's per-process
+     * paging/ring-3 milestone) can touch it at all. */
+    uint64_t vaddr_base = SYS_WM_PIXELS_VADDR_BASE + (uint64_t)slot * 0x10000000ULL;
+    for (uint32_t i = 0; i < frame_count; i++) {
+        mm_map_page_in(cur->page_table_root, vaddr_base + (uint64_t)i * 4096,
+                        phys_frames[i], PAGING_WRITE | PAGING_USER);
+    }
+    if ((paddr_t)cur->page_table_root == paging_current()) {
+        for (uint32_t i = 0; i < frame_count; i++) {
+            paging_invalidate_current(vaddr_base + (uint64_t)i * 4096);
+        }
+    }
+
+    cur->owned_windows[slot] = window_id;
+
+    syscall_wm_create_result_t result;
+    result.window_id = window_id;
+    result.pixels_vaddr = vaddr_base;
+    result.pitch = win->pitch;
+    result.client_w = win->client_w;
+    result.client_h = win->client_h;
+    memcpy((void *)(uintptr_t)out_result_ptr, &result, sizeof(result));
+
+    return 0;
+}
+
+/* Finds which owned_windows[] slot (if any) holds window_id for the
+ * CURRENT process - returns the slot index, or -1 if this process
+ * doesn't own that window. Shared by destroy/poll below so both
+ * enforce the same ownership check the same way (see
+ * process.h's owned_windows comment on why this check exists at all -
+ * without it, any process could act on any other process's window). */
+static int sys_wm_find_owned_slot(process_t *cur, uint32_t window_id) {
+    for (int i = 0; i < PROCESS_MAX_OWNED_WINDOWS; i++) {
+        if (cur->owned_windows[i] == window_id) return i;
+    }
+    return -1;
+}
+
+static uint64_t sys_wm_destroy_window(uint64_t window_id, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    int slot = sys_wm_find_owned_slot(cur, (uint32_t)window_id);
+    if (slot < 0) return (uint64_t)-1; /* not this process's window -
+        * refuse, don't silently no-op (a silent no-op could mask a
+        * real caller bug - a loud, consistent failure is more useful
+        * to debug against) */
+
+    /* FIX: originally this destroyed the window and freed its PMM
+     * frames (via wm_destroy_window()) but never unmapped the
+     * corresponding pages from the CALLING process's own page table -
+     * flagged as a real use-after-free risk while writing it (a
+     * process writing to its old, now-dangling vaddr after this call
+     * would corrupt whatever the PMM has since handed those freed
+     * frames to), then fixed properly here rather than left as a
+     * known gap: unmap every page this window's buffer occupied in
+     * the owning process's OWN address space BEFORE wm_destroy_window()
+     * frees the underlying frames, using the exact frame count
+     * wm_get_window() can still report (must read it before
+     * destroying, not after). */
+    wm_window_t *win = wm_get_window((uint32_t)window_id);
+    uint32_t frame_count = win ? win->userbacked_frame_count : 0;
+    uint64_t vaddr_base = SYS_WM_PIXELS_VADDR_BASE + (uint64_t)slot * 0x10000000ULL;
+
+    wm_destroy_window((uint32_t)window_id);
+    cur->owned_windows[slot] = 0;
+
+    int is_current = ((paddr_t)cur->page_table_root == paging_current());
+    for (uint32_t i = 0; i < frame_count; i++) {
+        mm_unmap_page_in(cur->page_table_root, vaddr_base + (uint64_t)i * 4096);
+        if (is_current) paging_invalidate_current(vaddr_base + (uint64_t)i * 4096);
+    }
+    return 0;
+}
+
+static uint64_t sys_wm_poll_event(uint64_t window_id, uint64_t out_event_ptr, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    if (sys_wm_find_owned_slot(cur, (uint32_t)window_id) < 0) return (uint64_t)-1;
+    if (!syscall_buf_ok(out_event_ptr, sizeof(wm_event_t))) return (uint64_t)-1;
+
+    wm_event_t ev;
+    if (!wm_poll_event((uint32_t)window_id, &ev)) return 0; /* no event
+        * available - 0 return means "no event", NOT "error"; matches
+        * wm_poll_event()'s own 0/1 (not found/found) contract rather
+        * than inventing a different convention at the syscall layer */
+
+    memcpy((void *)(uintptr_t)out_event_ptr, &ev, sizeof(ev));
+    return 1;
+}
+
+/* SYS_WM_PRESENT: a no-op today, kept as a real, registered syscall
+ * (not omitted) so trplibc's trp_gui_present() has something real to
+ * call rather than being a pure client-side stub - a future version
+ * of this kernel with explicit double-buffering (drawing into an
+ * off-screen buffer, then "presenting" it to the compositor on
+ * request, rather than every pixel write being immediately visible)
+ * would give this a real body without needing trplibc or any
+ * existing caller to change at all. Today, a USERBACKED window's
+ * pixel buffer IS the same memory the compositor reads directly
+ * (confirmed: wm_create_window_userbacked() backs win->pixels with
+ * the exact frames mapped into the process) - so every write is
+ * already immediately visible next frame the compositor draws,
+ * with nothing to "present". */
+static uint64_t sys_wm_present(uint64_t window_id, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *cur = process_get_current();
+    if (sys_wm_find_owned_slot(cur, (uint32_t)window_id) < 0) return (uint64_t)-1;
+    return 0;
+}
+
 static uint64_t sys_thread_create(uint64_t entry, uint64_t arg, uint64_t stack_size, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
     if (!syscall_ptr_ok(entry)) return (uint64_t)-1;
@@ -627,6 +878,87 @@ static void __attribute__((naked)) syscall_entry_stub(void) {
     );
 }
 
+
+/* ── Install-time program support (partition manager / OOBE) ──────────────
+ * ABI in include/install_abi.h. Raw disk access is deliberately NOT
+ * exposed: the partition manager works on a validated 4-entry MBR via
+ * SYS_PART_READ/WRITE, and SYS_PART_WRITE only works while the live
+ * installer is running it. */
+#include "install_abi.h"
+#include "installer.h"
+#include "ata.h"
+#include "pmm.h"
+#include "vga.h"
+
+static uint64_t sys_disk_info(uint64_t buf, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_buf_ok(buf, sizeof(disk_info_t))) return (uint64_t)-1;
+    disk_info_t *out = (disk_info_t *)(uintptr_t)buf;
+    memset(out, 0, sizeof(*out));
+    uint64_t sec = 0; char model[48];
+    out->boot_reserved = INSTALL_PART_ALIGN_LBA;
+    out->sector_size   = 512;
+    out->install_session = (unsigned)install_session_active();
+    if (ata_drive_info(0, &sec, model, sizeof(model)) == 0) {
+        out->present = 1;
+        out->total_sectors = sec;
+        for (int i = 0; i < 47 && model[i]; i++) out->model[i] = model[i];
+    }
+    return 0;
+}
+
+static uint64_t sys_part_read(uint64_t buf, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_buf_ok(buf, 512)) return (uint64_t)-1;
+    uint8_t sec[512];
+    if (ata_raw_read_sector(0, sec) != 0) return (uint64_t)-1;
+    memcpy((void *)(uintptr_t)buf, sec, 512);
+    return 0;
+}
+
+static uint64_t sys_part_write(uint64_t buf, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_buf_ok(buf, 512)) return (uint64_t)-1;
+    return (uint64_t)(int64_t)install_part_commit((const unsigned char *)(uintptr_t)buf);
+}
+
+static uint64_t sys_install_ctl(uint64_t cmd, uint64_t arg, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    switch (cmd) {
+    case INSTALL_CTL_SELECT_TARGET: return (uint64_t)(int64_t)install_session_select((int)arg);
+    case INSTALL_CTL_GET_TARGET:    return (uint64_t)(int64_t)install_session_selected();
+    default: return (uint64_t)-1;
+    }
+}
+
+static uint64_t sys_oobe_submit(uint64_t buf, uint64_t len, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (len == 0 || len > 2000 || !syscall_buf_ok(buf, len)) return (uint64_t)-1;
+    return (uint64_t)(int64_t)install_session_oobe_submit((const char *)(uintptr_t)buf, (unsigned)len);
+}
+
+static uint64_t sys_console_ctl(uint64_t cmd, uint64_t a, uint64_t b, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a4; (void)a5; (void)a6;
+    if (cmd == CONSOLE_CTL_CLEAR) { io_clear_screen(); return 0; }
+    if (cmd == CONSOLE_CTL_SETCOLOR) {
+        if (a > 15 || b > 15) return (uint64_t)-1;
+        vga_set_color((vga_color_t)a, (vga_color_t)b);
+        return 0;
+    }
+    return (uint64_t)-1;
+}
+
+static uint64_t sys_sysinfo(uint64_t buf, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+    (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!syscall_buf_ok(buf, sizeof(sysinfo_t))) return (uint64_t)-1;
+    sysinfo_t *o = (sysinfo_t *)(uintptr_t)buf;
+    memset(o, 0, sizeof(*o));
+    o->ram_kb    = pmm_get_total_ram_kb();
+    o->fb_width  = mb_fb_width();
+    o->fb_height = mb_fb_height();
+    return 0;
+}
+
 void syscall_init(void) {
     for (int i = 0; i < NUM_SYSCALLS; i++) g_handlers[i] = 0;
     syscall_register_handler(SYS_WRITE,   sys_write);
@@ -658,6 +990,13 @@ void syscall_init(void) {
     syscall_register_handler(SYS_DUP2,    sys_dup2);
     syscall_register_handler(SYS_IOCTL,   sys_ioctl);
     syscall_register_handler(SYS_POLL,    sys_poll);
+    syscall_register_handler(SYS_DISK_INFO,   sys_disk_info);
+    syscall_register_handler(SYS_PART_READ,   sys_part_read);
+    syscall_register_handler(SYS_PART_WRITE,  sys_part_write);
+    syscall_register_handler(SYS_INSTALL_CTL, sys_install_ctl);
+    syscall_register_handler(SYS_OOBE_SUBMIT, sys_oobe_submit);
+    syscall_register_handler(SYS_CONSOLE_CTL, sys_console_ctl);
+    syscall_register_handler(SYS_SYSINFO,     sys_sysinfo);
     syscall_register_handler(SYS_SIGACTION,   sys_sigaction);
     syscall_register_handler(SYS_SIGPROCMASK, sys_sigprocmask);
     syscall_register_handler(SYS_SIGRAISE,    sys_sigraise);
@@ -665,6 +1004,13 @@ void syscall_init(void) {
     syscall_register_handler(SYS_THREAD_EXIT,   sys_thread_exit);
     syscall_register_handler(SYS_THREAD_JOIN,   sys_thread_join);
     syscall_register_handler(SYS_THREAD_SELF,   sys_thread_self);
+
+    /* GUI syscalls - see their handlers' own top comment for what
+     * these actually expose and why none of this existed before. */
+    syscall_register_handler(SYS_WM_CREATE_WINDOW,  sys_wm_create_window);
+    syscall_register_handler(SYS_WM_DESTROY_WINDOW, sys_wm_destroy_window);
+    syscall_register_handler(SYS_WM_POLL_EVENT,     sys_wm_poll_event);
+    syscall_register_handler(SYS_WM_PRESENT,        sys_wm_present);
 
     uint64_t efer = rdmsr(MSR_EFER);
     wrmsr(MSR_EFER, efer | 1);

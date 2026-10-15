@@ -7,6 +7,12 @@
 #include "string.h"
 #include "process.h"
 #include "serial.h"
+#include "paging.h"  /* mm_map_page_in() - trp_exec_bin() now maps its
+                       * payload into the TARGET PROCESS's own address
+                       * space instead of memcpy-ing into one shared
+                       * physical region every process on the system
+                       * used to alias. See this function's own
+                       * comment below for what changed and why. */
 
 /* trploader.c - TRP package loader
  *
@@ -50,16 +56,94 @@ static void trp_log(const char *msg)
 #define TRP_CODE_LOAD_ADDR   ((uintptr_t)0x500000ULL)
 #define TRP_CODE_MAX_SIZE    ((uintptr_t)0x100000ULL) /* 1 MiB */
 
+/* CHANGED: this used to memcpy() straight into ONE fixed PHYSICAL
+ * address (0x500000) shared by the entire system - every process
+ * that ever ran a "bin" TRP was reading and writing the exact same
+ * underlying RAM at that address, just at different times (the
+ * previous process's code/data still sitting there, plus no
+ * isolation between whichever process happened to be "current" and
+ * that memory). That was fine, in the narrow sense of "didn't crash",
+ * ONLY because nothing before this milestone ever ran more than one
+ * TRP-loaded process truly concurrently with working memory
+ * isolation to violate - there was no isolation to violate yet.
+ *
+ * Now: TRP_CODE_LOAD_ADDR is still the fixed VIRTUAL address every
+ * flat binary is linked for (trpc's -Ttext, kernel64.ld's
+ * .trp_code_area comment - unchanged, still has to agree across all
+ * three), but the PHYSICAL frames backing that virtual address are
+ * now fresh, per-process, and mapped ONLY into the target process's
+ * own PML4 (proc->page_table_root, a real address space as of
+ * paging.c). Two processes can each be "running at 0x500000" at the
+ * same time now without touching each other's memory at all - same
+ * virtual address, different physical RAM, exactly the way every
+ * real OS lets every process link its main executable at the same
+ * conventional address.
+ *
+ * KNOWN LIMITATION, stated plainly rather than glossed over: a flat
+ * binary carries no segment/section info (no split between code and
+ * data/bss the way ELF has via PT_LOAD entries), so there's no way
+ * for this loader to know which bytes are instructions and which are
+ * data. The pages are mapped PAGING_WRITE (so a data/bss region
+ * embedded in the blob is actually writable) which ALSO makes the
+ * code pages writable, and there's no NX bit set on top of that
+ * either - so this is not W^X and a memory-corruption bug in a TRP
+ * binary could still overwrite its own code. This is a direct,
+ * inherent consequence of TRPC's current flat-binary output format,
+ * not something this loader change could fix by itself - the real
+ * fix is TRPC (or a future version of it) emitting real ELF with
+ * PT_LOAD segments carrying their own R/W/X flags per segment, which
+ * this loader would then honor per-segment instead of mapping one
+ * blob with one uniform permission set. Tracked, not silently
+ * ignored - what ring-3 + real paging DOES already buy you even
+ * without that: this code can no longer read or corrupt the KERNEL's
+ * memory, or another process's memory. It can still, in principle,
+ * corrupt itself. */
 static int trp_exec_bin(const uint8_t *payload, uint32_t plen, pid_t pid)
 {
     if (!plen) { trp_log("Empty binary payload."); return -1; }
     if (plen > TRP_CODE_MAX_SIZE) { trp_log("Binary payload too large for fixed load area."); return -1; }
 
-    uint8_t *mem = (uint8_t *)(uintptr_t)TRP_CODE_LOAD_ADDR;
-    memcpy(mem, payload, plen);
     process_t *proc = process_get_by_pid(pid);
-    if (proc) proc->context.rip = (uint64_t)(uintptr_t)mem;
-    trp_log("Binary payload loaded at fixed address.");
+    if (!proc || !proc->page_table_root) {
+        trp_log("No valid process/address space for this pid.");
+        return -1;
+    }
+
+    uint32_t num_pages = (plen + 0xFFF) / 0x1000;
+    for (uint32_t i = 0; i < num_pages; i++) {
+        paddr_t frame = (paddr_t)(uintptr_t)mm_alloc_pages(1);
+        if (!frame) { trp_log("OOM mapping TRP code pages."); return -1; }
+
+        uint64_t va = TRP_CODE_LOAD_ADDR + (uint64_t)i * 0x1000ULL;
+        /* Zero the frame first - the last page is very likely a
+         * partial page (plen isn't page-aligned in general), and an
+         * unzeroed physical frame fresh out of the allocator can
+         * contain a previous process's leftover memory. Leaving that
+         * tail unzeroed would leak whatever a PRIOR process (or the
+         * kernel itself, if this frame was ever kernel-owned) last
+         * had in that RAM into this process's bss-equivalent tail -
+         * an information-disclosure bug into a process that has every
+         * reason to expect fresh, zeroed memory there. */
+        memset((void *)(uintptr_t)frame, 0, 0x1000);
+
+        uint32_t copy_len = plen - i * 0x1000 < 0x1000 ? plen - i * 0x1000 : 0x1000;
+        memcpy((void *)(uintptr_t)frame, payload + (size_t)i * 0x1000, copy_len);
+
+        mm_map_page_in(proc->page_table_root, va, (uint64_t)frame,
+                        PAGING_WRITE | PAGING_USER);
+    }
+
+    proc->context.rip = TRP_CODE_LOAD_ADDR;
+    /* NOTE: does NOT flush/invalidate here even if this happens to be
+     * called while `proc` is the currently-running process (it never
+     * is, in every call site today - trp_load() runs during process
+     * SETUP, before the process is ever scheduled in) - see
+     * mm_map_page_in()'s own comment on why that's correct: the next
+     * paging_switch_to() for this process's PML4 (scheduler_yield(),
+     * on this process's very first run) flushes the entire TLB as an
+     * unconditional side effect of loading %cr3, which is a superset
+     * of what any number of per-page invlpg calls here would achieve. */
+    trp_log("Binary payload mapped into process address space.");
     return 0;
 }
 

@@ -36,11 +36,13 @@ int ata_drive_present(int drive_index);
  * goes through TRPFS and never needs raw sector access. Returns 0 on
  * success, -1 on failure (no drive 0 present, or the I/O itself
  * failed). */
+int ata_drive_info(int drive_index, uint64_t *total_sectors, char *model, int model_len);
 int ata_raw_read_sector(uint32_t lba, void *buf);
 int ata_raw_write_sector(uint32_t lba, const void *buf);
 
 trpfs_blkdev_t *ata_init_blkdev(uint64_t total_bytes);
 trpfs_blkdev_t *ata_init_blkdev_drive(int drive_index, uint64_t total_bytes);
+trpfs_blkdev_t *ata_init_blkdev_partition(int drive_index, uint32_t start_lba, uint64_t total_bytes);
 
 #endif
 

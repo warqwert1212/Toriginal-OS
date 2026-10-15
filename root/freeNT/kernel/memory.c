@@ -82,6 +82,18 @@ void mm_init_paging(void)
     memset(pml4, 0, PAGE_SIZE);
 }
 
+/* Exposes the boot-time PML4 to paging.c, which reads it (rather than
+ * re-deriving kernel mappings from scratch) when building each new
+ * process's shared kernel-range mapping - see paging.c's
+ * map_shared_kernel_range() comment. Kept as an accessor instead of
+ * making `pml4` non-static: this file remains the single owner of
+ * "what the kernel's own boot-time address space is", paging.c only
+ * ever reads it, never mutates it directly. */
+void *mm_get_boot_pml4(void)
+{
+    return (void *)pml4;
+}
+
 
 void mm_enable_paging(void)
 {

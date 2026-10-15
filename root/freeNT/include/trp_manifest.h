@@ -48,6 +48,30 @@ typedef struct {
     char signer[128];       /* Signer/: optional signed-by identity */
     char signature[256];    /* Signature/: detached repo attestation fingerprint */
 
+    /* Appstat/: terminal|gui - tells the OS (the shell/launcher and the
+     * desktop's own launch path - see desktop.c's launch_trp()) which
+     * kind of program this is, WITHOUT anything having to run the
+     * binary first to find out. Not a change to how the program is
+     * loaded or executed (trploader.c doesn't read this at all - a
+     * "gui" program is still just a normal TRP binary that happens to
+     * talk to the compositor/wm once it's running), purely a launch-
+     * time routing hint: e.g. so a terminal-only launcher can warn
+     * ("this needs the GUI, which isn't running") instead of silently
+     * starting a program that will hang waiting for a compositor
+     * connection that will never come, and so the desktop's own
+     * launcher/start-menu can show terminal apps in an actual
+     * terminal window rather than as a bare, silent process.
+     * appstat_is_gui is 1 only when Appstat/: gui was explicitly
+     * given; ANY other value (missing, "terminal", or an unrecognized
+     * typo) leaves it 0 - terminal is the safer default to fall back
+     * to, since a terminal-capable environment can still launch
+     * something that was merely MISLABELED as terminal, but launching
+     * something as "gui" when that was a typo, on a headless/serial-
+     * only boot with no compositor running at all, has no such safe
+     * fallback. */
+    char appstat[16];       /* Appstat/: raw value as written, lowercased */
+    int  appstat_is_gui;    /* 1 iff appstat is exactly "gui"; else 0 (terminal) */
+
     /* Error list */
     char errors[TRP_MANIFEST_MAX_ERRORS][TRP_MANIFEST_ERROR_LEN];
     int  error_count;

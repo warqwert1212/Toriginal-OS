@@ -9,6 +9,19 @@
                           * real save/restore context switch using the
                           * on-stack register frame the timer ISR hands it,
                           * instead of only rotating a queue pointer. */
+#include "paging.h"     /* mm_create_address_space()/paging_switch_to() -
+                          * real per-process page tables. See paging.c's
+                          * top-of-file comment for why this was missing
+                          * before and what it means that it wasn't. */
+
+/* Ring-3 GDT selectors - must match boot64.s's gdt64 layout exactly
+ * (0x20 = ring-3 data, 0x28 = ring-3 64-bit code). OR'd with 3 for the
+ * RPL (Requested Privilege Level) bits every real-mode-to-ring-3
+ * segment selector needs set - loading a selector with RPL=0 into a
+ * ring-3-bound cs/ss would silently keep the CPU at CPL 0 instead of
+ * actually dropping privilege, defeating the entire point. */
+#define USER_CODE_SEL   (0x28 | 3)
+#define USER_DATA_SEL   (0x20 | 3)
 
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
@@ -59,7 +72,16 @@ process_t *process_create(const char *name, uint8_t priority) {
     proc->state    = PROCESS_CREATED;
     proc->priority = priority;
 
-    proc->page_table_root = mm_alloc_pages(1);
+    /* Real, isolated address space - a fresh PML4 with only the
+     * shared kernel range mapped in (kernel-only, no PAGE_USER). This
+     * process's own code/heap/stack get mapped into THIS table by
+     * whatever loads it (trploader.c's trp_exec_bin(), process_brk(),
+     * process_mmap_anon()), not into the single old global `pml4`
+     * memory.c used to own alone. mm_alloc_pages(1) (the old value
+     * here) allocated one bare physical frame with NOTHING mapped
+     * into it at all - not usable as a real PML4, just a placeholder
+     * that happened to type-check. */
+    proc->page_table_root = mm_create_address_space();
 
     proc->stack_end   = 0x7FFFFFFF000ULL;
     proc->stack_start = proc->stack_end - 0x100000ULL;
@@ -181,24 +203,32 @@ int process_fd_close(process_t *proc, int proc_fd) {
 }
 
 // ---------------------------------------------------------------------------
-// brk / mmap — see the mmap_region_t / process_t comments in process.h
-// for why these look the way they do on a kernel without real per-
-// process page-table isolation.
+// brk / mmap
 // ---------------------------------------------------------------------------
+/* REWRITTEN: the comment that used to sit here said this was fine
+ * "on a kernel without real per-process page-table isolation" and
+ * that "under the flat identity map, a frame's physical address IS
+ * its usable virtual address, so no mm_map_page() call is needed" -
+ * both true statements about the kernel AS IT WAS, and both false
+ * now that paging.c gives every process its own real PML4. This
+ * function used to call pmm_alloc_frame() and then just memset() the
+ * FRAME'S OWN PHYSICAL ADDRESS directly, silently assuming that
+ * address was also a valid, correctly-backing virtual address in the
+ * CURRENT process's heap range - true only by the flat-identity-map
+ * coincidence that no longer holds. A physical frame the PMM hands
+ * out is not mapped ANYWHERE in a process's own PML4 until something
+ * explicitly maps it there - this was the exact same class of bug as
+ * the previously-unmapped user stack in process_exec() (see that
+ * function's comment), just in the heap-growth path instead. Left
+ * as-is, brk() would have handed back a heap_end whose backing pages
+ * were never actually present in the process's address space -
+ * fine right up until the process's own code tried to touch that
+ * memory and immediately page-faulted. */
 vaddr_t process_brk(process_t *proc, vaddr_t new_end) {
     if (!proc) return 0;
 
     if (new_end == 0) return proc->heap_end; /* brk(0) == query current break */
 
-    /* Growing: back the newly-claimed range with real, zeroed physical
-     * frames right now. This kernel has no page-fault-driven demand
-     * paging (no #PF handler wired to fault in mmap'd/brk'd pages
-     * lazily), so "reserve the address range, fault pages in later"
-     * isn't an option here - eager backing is the only correct choice
-     * given what's actually implemented. Under the flat identity map
-     * (see heap.c's heap_grow() comment), a frame's physical address
-     * IS its usable virtual address, so no mm_map_page() call is
-     * needed beyond what identity mapping already provides. */
     if (new_end > proc->heap_end) {
         if (new_end > proc->heap_max) return proc->heap_end; /* over budget, refuse */
 
@@ -208,22 +238,61 @@ vaddr_t process_brk(process_t *proc, vaddr_t new_end) {
         vaddr_t target_page = (new_end + PAGE_SIZE - 1) & ~(vaddr_t)(PAGE_SIZE - 1);
 
         for (vaddr_t va = page; va < target_page; va += PAGE_SIZE) {
-            void *frame = pmm_alloc_frame();
+            paddr_t frame = (paddr_t)(uintptr_t)pmm_alloc_frame();
             if (!frame) return proc->heap_end; /* out of physical memory, refuse growth */
             /* Zeroed: brk()'d memory is defined to read as zero before
              * the process writes it (matches sbrk/brk on every real
              * Unix - uninitialized-but-nonzero heap memory is a classic
              * source of "works on my machine" bugs for anything ported
-             * to this kernel, DOOM included). */
-            memset((void *)(uintptr_t)va, 0, PAGE_SIZE);
+             * to this kernel, DOOM included). Zeroed via the frame's
+             * OWN physical address - still valid for the kernel itself
+             * to touch directly, since the shared kernel range in
+             * every process's PML4 (paging.c) identity-maps all
+             * physical memory up to KERNEL_SHARED_TOP, which a heap
+             * frame from the PMM's general pool falls well within. */
+            memset((void *)(uintptr_t)frame, 0, PAGE_SIZE);
+
+            /* THE ACTUAL FIX: map this frame into THIS PROCESS's own
+             * address space at the heap's virtual address - not just
+             * touch it via its physical address and assume that's
+             * enough. PAGING_USER so the process's own code (running
+             * in ring 3 as of this milestone) can actually read/write
+             * its own heap, not just the kernel. */
+            mm_map_page_in(proc->page_table_root, va, (uint64_t)frame,
+                            PAGING_WRITE | PAGING_USER);
+
+            /* If this is the CURRENTLY running process growing its own
+             * heap (the overwhelmingly common case - a process calling
+             * brk()/malloc() on itself via syscall), the mapping needs
+             * to be visible immediately without waiting for some future
+             * cr3 reload, since the process resumes in the SAME address
+             * space right after this syscall returns. See
+             * mm_map_page_in()'s own comment on why it deliberately
+             * doesn't invalidate on its own. */
+            if ((paddr_t)proc->page_table_root == paging_current()) {
+                paging_invalidate_current(va);
+            }
         }
     } else if (new_end < proc->heap_end) {
-        /* Shrinking: free the frames being given back. */
+        /* Shrinking: unmap AND free the frames being given back -
+         * unmap first (paging_unmap_and_free_in below) so a stale,
+         * now-dangling PTE can't be walked again later (e.g. if the
+         * heap grows back over the same range: mm_map_page_in's
+         * walk_or_alloc would see the OLD, now-freed frame's physical
+         * address still sitting in that PTE from before, still marked
+         * present, and simply overwrite it with the new mapping -
+         * which happens to be harmless in that one specific case, but
+         * leaving a freed physical frame reachable via any present PTE
+         * for even one instant is the wrong invariant to rely on
+         * working out by coincidence next time this function changes). */
         vaddr_t target_page = (new_end + PAGE_SIZE - 1) & ~(vaddr_t)(PAGE_SIZE - 1);
         vaddr_t cur_top     = (proc->heap_end + PAGE_SIZE - 1) & ~(vaddr_t)(PAGE_SIZE - 1);
+        int is_current = ((paddr_t)proc->page_table_root == paging_current());
 
         for (vaddr_t va = target_page; va < cur_top; va += PAGE_SIZE) {
-            pmm_free_frame((void *)(uintptr_t)va);
+            paddr_t frame = mm_unmap_page_in(proc->page_table_root, va);
+            if (is_current) paging_invalidate_current(va);
+            if (frame) pmm_free_frame((void *)(uintptr_t)frame);
         }
     }
 
@@ -571,8 +640,44 @@ int process_exec(pid_t pid, const char *filename, const char **argv) {
         return -1;
     }
 
-    // Set up user stack pointer
-    proc->context.rsp = proc->stack_end ? proc->stack_end : 0x7FFFFFFF000ULL;
+    /* Actually back the user stack with real, mapped, user-accessible
+     * physical memory in THIS process's own address space, before
+     * ever pointing rsp at it. Previously this just set context.rsp
+     * to proc->stack_end (a bare virtual address, 0x7FFFFFFF000) with
+     * nothing mapped there at all - harmless while every process ran
+     * in ring 0 sharing the kernel's own flat-identity-mapped 0..4GiB
+     * (that whole range happened to already be backed by real RAM via
+     * boot64.s's huge pages, so the dangling pointer never actually
+     * faulted - not because it was correct, just because the kernel's
+     * own mapping covered it by coincidence). With a REAL per-process
+     * address space (paging.c) that coincidence is gone: an unmapped
+     * stack now means the very first push - or the CPU's own iretq
+     * into ring 3, which pushes ss/rsp/rflags/cs/rip onto exactly this
+     * stack before user code executes even one instruction - faults
+     * immediately. 64 KiB, mapped present+write+user, one page at a
+     * time (mm_map_page_in doesn't require contiguous physical
+     * frames, matching how process_mmap_anon() already treats
+     * physical contiguity as unguaranteed - see mmap_frame_node_t's
+     * comment in process.h). */
+    {
+        const uint64_t STACK_BYTES = 0x10000ULL; /* 64 KiB */
+        uint64_t stack_top = proc->stack_end ? proc->stack_end : 0x7FFFFFFF000ULL;
+        uint64_t stack_bot = stack_top - STACK_BYTES;
+
+        int stack_ok = 1;
+        for (uint64_t va = stack_bot; va < stack_top; va += 0x1000ULL) {
+            paddr_t frame = (paddr_t)(uintptr_t)mm_alloc_pages(1);
+            if (!frame) { stack_ok = 0; break; }
+            mm_map_page_in(proc->page_table_root, va, (uint64_t)frame,
+                            PAGING_WRITE | PAGING_USER);
+        }
+        if (!stack_ok) {
+            serial_puts("[proc] exec: OOM mapping user stack\n");
+            return -1;
+        }
+
+        proc->context.rsp = stack_top;
+    }
     proc->state       = PROCESS_RUNNABLE;
 
     // Enqueue
@@ -632,11 +737,43 @@ int process_wait(pid_t pid, int *status) {
     return 0;
 }
 
+/* Remove a process from the run queue. process_exit()/process_kill()
+ * never did this - a TERMINATED process stayed queued and the timer
+ * scheduler kept switching back into it forever. */
+static void process_unlink_runqueue(process_t *p) {
+    if (!p) return;
+    process_t *it = run_queue_head;
+    while (it && it != p) it = it->next;
+    if (!it) return;
+    if (p->prev) p->prev->next = p->next; else run_queue_head = p->next;
+    if (p->next) p->next->prev = p->prev; else run_queue_tail = p->prev;
+    p->next = p->prev = NULL;
+}
+
+static void (*g_exit_hook)(int status) = NULL;
+static int   g_exit_in_syscall = 0;
+void process_set_exit_hook(void (*fn)(int status)) { g_exit_hook = fn; }
+int  process_exit_hook_armed(void)   { return g_exit_hook != NULL; }
+/* The exit hook may have to undo a syscall-entry swapgs before parking
+ * (SYS_EXIT path) or must not (CPU-exception path). */
+void process_set_exit_context(int in_syscall) { g_exit_in_syscall = in_syscall; }
+int  process_exit_context(void)               { return g_exit_in_syscall; }
+
 void process_exit(int status) {
     if (!current_process) return;
     current_process->exit_code = status;
     current_process->state     = PROCESS_TERMINATED;
     process_free_memory(current_process);
+    process_unlink_runqueue(current_process);
+
+    /* One-shot continuation for the installer session: it launches the
+     * next install-stage program from here (see installer.c). The hook
+     * may never return. */
+    if (g_exit_hook) {
+        void (*fn)(int) = g_exit_hook;
+        g_exit_hook = NULL;
+        fn(status);
+    }
 }
 
 void process_kill(pid_t pid) {
@@ -645,6 +782,7 @@ void process_kill(pid_t pid) {
     proc->state    = PROCESS_TERMINATED;
     proc->exit_code = -1;
     process_free_memory(proc);
+    process_unlink_runqueue(proc);
 }
 
 // ---------------------------------------------------------------------------
@@ -712,12 +850,13 @@ static void frame_to_context(const interrupt_frame_t *f, cpu_context_t *c) {
     c->rip     = f->rip;
     c->rflags  = f->rflags;
     c->rsp     = f->rsp;
-    /* cr3 is deliberately NOT copied from the frame - the CPU never
-     * pushes cr3 as part of an interrupt frame, and process_create()
-     * is the sole owner of what a process's page_table_root/cr3
-     * should be. Overwriting it here from a frame that never carried
-     * a valid value would silently corrupt the process's address
-     * space on the very next switch back in. */
+    /* cr3 is deliberately NOT copied from the frame here - the CPU
+     * never pushes cr3 as part of an interrupt frame. It's saved
+     * separately, explicitly, in scheduler_yield() below via
+     * paging_current() right before this call - process_create() (via
+     * mm_create_address_space()) is what actually DECIDES a process's
+     * cr3 in the first place; this function just isn't the place that
+     * value flows through. */
 }
 
 static void context_to_frame(const cpu_context_t *c, interrupt_frame_t *f) {
@@ -728,11 +867,23 @@ static void context_to_frame(const cpu_context_t *c, interrupt_frame_t *f) {
     f->rip    = c->rip;
     f->rflags = c->rflags;
     f->rsp    = c->rsp;
-    /* f->cs/ss/error_code/interrupt_number are left untouched - they
-     * describe the interrupt gate/segment the CPU used to get *into*
-     * the trampoline, which is the same for every process in this
-     * single-privilege-level kernel today, so the incoming process
-     * resumes through the exact same iretq path the outgoing one used. */
+    /* f->error_code/interrupt_number are left untouched - diagnostic
+     * fields describing what got the trampoline INTO this frame in
+     * the first place (which vector fired), irrelevant to what we're
+     * resuming OUT to.
+     *
+     * f->cs/ss ARE now set explicitly by the two call sites below
+     * (the never_run ring-3-entry path and the normal resume path),
+     * NOT left untouched as the old comment here claimed - that was
+     * accurate when every process ran at the same privilege level as
+     * the kernel (cs/ss genuinely didn't matter, because they were
+     * always going to be the same value either way), but is exactly
+     * the gap that made ring-3 impossible: with two different
+     * privilege levels now real, resuming process A's saved context
+     * through the cs/ss some OTHER process's interrupt happened to
+     * enter through would either fault (mismatched RPL vs the
+     * descriptor's DPL) or, worse, silently leave a ring-3 process
+     * running at CPL 0. */
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +926,7 @@ static void context_to_frame(const cpu_context_t *c, interrupt_frame_t *f) {
 void scheduler_yield(struct interrupt_frame *frame) {
     if (current_process) {
         frame_to_context(frame, &current_process->context);
+        current_process->context.cr3 = (uint64_t)paging_current();
         fxsave_state(&current_process->context);
         current_process->context.never_run = 0;
     }
@@ -789,6 +941,19 @@ void scheduler_yield(struct interrupt_frame *frame) {
 
     current_process = next;
 
+    /* Real address-space switch. Every process's page_table_root is a
+     * genuine standalone PML4 now (mm_create_address_space(), called
+     * from process_create()) with only the shared kernel range mapped
+     * in besides whatever this process's own loader/exec mapped for
+     * it - so this MUST happen before frame->rip/rsp below are
+     * trusted to mean anything, since they're only valid addresses in
+     * the address space we're about to make current. Loading %cr3
+     * flushes the entire TLB as a side effect (no global pages used
+     * anywhere in this kernel), which is exactly what guarantees the
+     * outgoing process's stale mappings can't be accidentally used by
+     * the incoming one. */
+    paging_switch_to((paddr_t)next->page_table_root);
+
     if (next->context.never_run) {
         /* First-ever switch-in for this process: synthesize a frame
          * from its entry point/stack rather than trusting a
@@ -797,6 +962,20 @@ void scheduler_yield(struct interrupt_frame *frame) {
         frame->rip    = next->context.rip;
         frame->rsp    = next->context.rsp;
         frame->rflags = 0x202; /* IF=1 - see comment above */
+
+        /* Ring-3 entry: cs/ss must be the ring-3 selectors (RPL=3 -
+         * see USER_CODE_SEL/USER_DATA_SEL above), not whatever
+         * happened to be in the frame from however THIS interrupt got
+         * triggered. Getting this wrong is exactly the gap
+         * context_to_frame()'s old comment used to describe as "the
+         * same for every process" - true only because nothing had
+         * ever run anywhere but ring 0 before. This is the line that
+         * actually makes trp_exec_bin()-loaded code run unprivileged
+         * instead of with full kernel access - the entire point of
+         * this milestone. */
+        frame->cs = USER_CODE_SEL;
+        frame->ss = USER_DATA_SEL;
+
         next->context.never_run = 0;
         /* Fresh process: no meaningful FPU state to restore yet.
          * fxrstor of a zeroed area is well-defined (loads the FPU's
@@ -805,6 +984,23 @@ void scheduler_yield(struct interrupt_frame *frame) {
         fxrstor_state(&next->context);
     } else {
         context_to_frame(&next->context, frame);
+        /* Resuming a process that has run before: it was ALREADY at
+         * whatever privilege level it belongs at when it was last
+         * interrupted (ring 3 for a real user process - this kernel
+         * has no ring-0 process type today, every process_t is a
+         * ring-3 user process once it actually executes code), and
+         * frame->cs/ss from THAT process's own last frame_to_context()
+         * save already reflect that correctly... except cs/ss are
+         * deliberately NOT saved into cpu_context_t at all (it has no
+         * such fields - see the field list in process.h) precisely
+         * because they're always the same fixed pair for every ring-3
+         * process in this kernel (no per-process privilege
+         * customization exists), so setting them explicitly here on
+         * every resume - not just the never_run path - is simpler and
+         * exactly as correct as threading two more fields through
+         * cpu_context_t just to save/restore a constant. */
+        frame->cs = USER_CODE_SEL;
+        frame->ss = USER_DATA_SEL;
         fxrstor_state(&next->context);
     }
 

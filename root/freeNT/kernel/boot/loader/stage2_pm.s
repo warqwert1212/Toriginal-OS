@@ -62,9 +62,9 @@ msg_sd: .asciz "SD: elf_load_segments done, segments="
 elf_load_segments:
     pushal
 
-    movl    $msg_s0, %esi
+    movl    $(msg_s0 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
-    movb    $0, seg_counter            /* segments processed so far, in
+    movb    $0, (seg_counter + STAGE2_LINEAR_BASE)            /* segments processed so far, in
                                          * memory (not a register) since
                                          * every general register below
                                          * is already spoken for by the
@@ -129,7 +129,7 @@ zero_tail_done:
     popl    %ecx                       /* restore remaining count */
     popl    %ebx                       /* restore phentsize */
 
-    incb    seg_counter                /* one more PT_LOAD segment done */
+    incb    (seg_counter + STAGE2_LINEAR_BASE)                /* one more PT_LOAD segment done */
 
     /* ESI is no longer the ELF base after the copy above - restore it
      * from EDI (still a valid phdr pointer) is wrong too, so instead
@@ -143,9 +143,9 @@ phdr_skip:
     jmp     phdr_loop
 
 elf_load_done:
-    movl    $msg_sd, %esi
+    movl    $(msg_sd + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
-    movzbl  seg_counter, %eax
+    movzbl  (seg_counter + STAGE2_LINEAR_BASE), %eax
     addb    $'0', %al
     call    pm_serial_putc
     movb    $'\n', %al
@@ -213,6 +213,32 @@ build_multiboot2_info:
     addl    $32, %edi
 
 no_fb_tag:
+    /* Memory-map tag (type 6) from the BIOS E820 map collected by
+     * stage2.s (real mode, 0x1D000): dword count, then 24-byte entries
+     * { base64, len64, type32, reserved32 } - already the multiboot2
+     * entry layout, so it is a straight copy. */
+    movl    $0x1D000, %ecx
+    movl    (%ecx), %ecx
+    testl   %ecx, %ecx
+    jz      no_mmap_tag
+    cmpl    $32, %ecx
+    jbe     mmap_count_ok
+    movl    $32, %ecx
+mmap_count_ok:
+    leal    (%ecx,%ecx,2), %eax        /* 3n */
+    shll    $3, %eax                   /* 24n */
+    addl    $16, %eax                  /* + tag header */
+    movl    $6, (%edi)                 /* type = MB2_TAG_MMAP */
+    movl    %eax, 4(%edi)              /* size */
+    movl    $24, 8(%edi)               /* entry_size */
+    movl    $0, 12(%edi)               /* entry_version */
+    addl    $16, %edi
+    movl    $(0x1D000 + 8), %esi
+    leal    (%ecx,%ecx,2), %ecx        /* 3n */
+    shll    $1, %ecx                   /* 6n dwords */
+    cld
+    rep movsl
+no_mmap_tag:
     /* End tag: type=0, size=8 */
     movl    $0, (%edi)
     movl    $8, 4(%edi)

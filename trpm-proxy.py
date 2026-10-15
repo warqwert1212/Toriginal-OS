@@ -1,31 +1,4 @@
-#!/usr/bin/env python3
-"""
-trpm-proxy — bridges Toriginal OS (plain HTTP only, no TLS) to the real
-HTTPS-only GitHub package repo.
 
-Run this on a machine with real internet access (your dev machine, a
-VPS, whatever). Toriginal OS's `trpm repo <this machine's IP>` points
-at it; `trpm install <name>` then reaches your real GitHub repo through
-this proxy.
-
-What it does, for real:
-  1. Listens on plain HTTP (default 0.0.0.0:8080 — reachable from your
-     VM's network, e.g. VirtualBox NAT gateway 10.0.2.2 pointing back
-     at your host, or a host-only adapter IP).
-  2. On GET /<name>.trp, fetches the real file over HTTPS from
-     https://raw.githubusercontent.com/warqwert1212/Toriginal-OS-pakage-repo/<branch>/<name>.trp
-     using Python's real TLS (urllib + the system cert store — this is
-     genuine HTTPS, not a workaround around it).
-  3. Caches every successful fetch to ~/trpm-proxy-cache/<name>.trp —
-     so repeated installs of the same package don't re-hit GitHub, and
-     you have a visible local copy of everything that's been fetched.
-  4. Serves the bytes back over plain HTTP with a correct
-     Content-Length — exactly what Toriginal OS's http.c expects.
-
-Usage:
-  python3 trpm-proxy.py [--port 8080] [--branch main]
-                        [--repo warqwert1212/Toriginal-OS-pakage-repo]
-"""
 import argparse
 import hashlib
 import hmac
@@ -38,11 +11,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CACHE_DIR = os.path.expanduser("~/trpm-proxy-cache")
 
-# Must match TRP_HMAC_SECRET in root/freeNT/include/config.h on the OS
-# side - the kernel refuses to install any package whose HMAC tag it
-# can't verify against this same string. CHANGE THE DEFAULT before
-# relying on this for anything; anyone who has this value can forge a
-# valid tag for arbitrary package contents.
 DEFAULT_SECRET = "CHANGE-ME-toriginal-trpm-shared-secret"
 
 
@@ -52,9 +20,6 @@ def make_handler(upstream_base: str, secret: bytes):
             sys.stderr.write(f"[trpm-proxy] {self.address_string()} - {fmt % args}\n")
 
         def do_GET(self):
-            # FIX: decode percent-encoding *before* checking for "/" and
-            # "..", so an encoded traversal sequence (e.g. "%2e%2e%2f")
-            # can't slide past the literal-character checks below.
             raw_path = self.path.lstrip("/")
             path = urllib.parse.unquote(raw_path)
             if not path or "/" in path or ".." in path or "\\" in path:

@@ -92,6 +92,55 @@ void *pmm_alloc_frame(void) {
     return NULL;
 }
 
+/* FIX: added for wm_create_window_userbacked() (kernel/wm.c) - a
+ * userspace GUI window's pixel buffer needs to be ONE contiguous run
+ * of physical memory, not N independently-allocated single frames the
+ * way pmm_alloc_frame() in a loop would give (frames allocated one at
+ * a time are NOT guaranteed physically adjacent to each other - a
+ * real gap found and flagged while building that feature, not assumed
+ * away). The kernel's own compositor reads a window's pixel buffer as
+ * one flat `pixels + row*pitch` array (confirmed by reading wm.c's
+ * draw_window() directly), which only works if the backing memory
+ * really is contiguous.
+ *
+ * Simple linear scan for `count` consecutive free, uncapped frames -
+ * not a sophisticated allocator (no best-fit, no defragmentation),
+ * matching this file's existing pmm_alloc_frame()'s own equally
+ * simple first-fit approach. Returns the physical address of the
+ * FIRST frame in the run, or NULL if no run of that length exists
+ * currently (the caller must handle fragmentation causing this to
+ * fail even when `count` separate individual frames would have been
+ * available - a real, inherent tradeoff of requiring contiguity, not
+ * a bug in this function). */
+void *pmm_alloc_contiguous_frames(uint32_t count) {
+    if (count == 0) return NULL;
+    if (count == 1) return pmm_alloc_frame(); /* same fast path, no
+                                                 * need for the run-
+                                                 * scan machinery below
+                                                 * for the common case */
+
+    uint32_t run_start = 0;
+    uint32_t run_len = 0;
+    for (uint32_t i = 0; i < total_frames; i++) {
+        if (!bitmap_test(i) && !capped_test(i)) {
+            if (run_len == 0) run_start = i;
+            run_len++;
+            if (run_len == count) {
+                for (uint32_t j = run_start; j < run_start + count; j++) {
+                    bitmap_set(j);
+                }
+                used_frames += count;
+                last_free_frame = run_start + count;
+                return (void *)(uintptr_t)((uint64_t)run_start * PMM_FRAME_SIZE);
+            }
+        } else {
+            run_len = 0;
+        }
+    }
+    serial_puts("[PMM] No contiguous run of requested length available.\n");
+    return NULL;
+}
+
 uint32_t pmm_get_free_ram(void) {
     uint32_t free_frames = total_frames - used_frames - capped_frame_count;
     return free_frames * (PMM_FRAME_SIZE / 1024);

@@ -32,7 +32,7 @@ void main_oobe_setup(void) {
     
     // --- SIMPLE SETUP ---
     sys_shell_print("[STEP 1: SIMPLE USER ACCOUNT CREATION]\n");
-    sys_shell_print("Enter New Username (Replaces useraccount1): ");
+    sys_shell_print("Enter New Username");
     read_clean_input(temp_user, 32);
     
     if (temp_user[0] != '\0') {

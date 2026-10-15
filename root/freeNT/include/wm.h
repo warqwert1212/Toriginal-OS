@@ -1,7 +1,7 @@
 /* wm.h - Bare-metal window manager: window create/destroy/z-order/
  * focus/drag/resize, plus hit-testing for mouse input.
  *
- * Ported from root/sys/gui/wm/wm.c (the SDL-hosted desktop prototype)
+ * Ported from root/ToriginalOS/gui/wm/wm.c (the SDL-hosted desktop prototype)
  * with zero logic changes beyond swapping malloc/free for kmalloc/
  * kfree (see wm.c) - the prototype's WM was already written against
  * plain <string.h>/<stdlib.h> with no SDL calls anywhere in it, so
@@ -28,8 +28,49 @@
 #define WM_WIN_DECORATED  0x04  /* has title bar and borders */
 #define WM_WIN_MINIMIZED  0x08  /* hidden from compositing, still exists/tracked */
 #define WM_WIN_MAXIMIZED  0x10  /* filling the maximize area wm_init() was told about */
+#define WM_WIN_USERBACKED 0x20  /* pixel buffer is page-aligned physical
+                                  * frames (pmm_alloc_frame), not kmalloc -
+                                  * see wm_create_window_userbacked()'s own
+                                  * comment. Sets which allocator
+                                  * wm_destroy_window()/resize must free
+                                  * through - freeing a USERBACKED window's
+                                  * pixels via kfree() (or vice versa) would
+                                  * corrupt whichever allocator's internal
+                                  * bookkeeping didn't actually own that
+                                  * memory. */
 
 /* - Window struct - */
+
+/* Input event delivered to a USERBACKED window's own queue - see
+ * wm_window_t's event_queue field and wm_push_event()/wm_poll_event()
+ * in wm.c. A single tagged-union-style struct (type + the fields
+ * relevant to that type) rather than separate mouse/key event
+ * structs - simpler for a userspace consumer to poll with one call
+ * and one switch on `type`, matching how most real windowing event
+ * loops are shaped (X11, Win32's MSG, etc. all use one event struct
+ * with a type tag, not a family of unrelated ones). */
+typedef enum {
+    WM_EVENT_NONE = 0,
+    WM_EVENT_MOUSE_MOVE,
+    WM_EVENT_MOUSE_DOWN,
+    WM_EVENT_MOUSE_UP,
+    WM_EVENT_KEY_DOWN,
+    WM_EVENT_KEY_UP,
+} wm_event_type_t;
+
+typedef struct {
+    wm_event_type_t type;
+    /* Mouse events: x/y are in the WINDOW'S OWN CLIENT-AREA coordinate
+     * space (already offset-adjusted - see wm_push_event()'s own
+     * comment), NOT screen coordinates - a userspace program should
+     * never need to know its own window's screen position just to
+     * interpret a click inside it. */
+    int32_t x, y;
+    int     button;    /* mouse events only: 0=left, 1=right */
+    int     keycode;   /* key events only */
+} wm_event_t;
+
+#define WM_EVENT_QUEUE_SIZE 32
 
 typedef struct {
     uint32_t  id;               /* unique window ID (never 0) */
@@ -53,6 +94,34 @@ typedef struct {
     uint32_t *pixels;           /* allocated by WM on create */
     int32_t   pitch;            /* bytes per row (usually client_w * 4) */
 
+    /* Per-window input event queue - see wm_event_t/WM_EVENT_QUEUE_SIZE
+     * below and wm_push_event()/wm_poll_event() in wm.c. FIX: this is
+     * what wm_handle_key()'s own old comment ("would pass to an event
+     * queue later") was waiting on - that queue didn't exist anywhere
+     * until now. Fixed-size ring buffer, not a dynamically-growable
+     * one: a GUI event queue that grows without bound under a
+     * misbehaving/slow consumer is a real denial-of-service risk
+     * (unbounded kernel memory growth driven by USER input event
+     * rate) - better to drop the oldest unconsumed event (see
+     * wm_push_event()'s overwrite-oldest behavior) than let the queue
+     * grow forever. */
+    wm_event_t event_queue[WM_EVENT_QUEUE_SIZE];
+    uint32_t    event_head;  /* next slot to WRITE */
+    uint32_t    event_tail;  /* next slot to READ */
+    uint32_t    event_count; /* current occupancy - tracked separately
+                                * rather than derived from head-tail so
+                                * "full" and "empty" (both head==tail)
+                                * are unambiguous */
+
+    /* Only meaningful when flags & WM_WIN_USERBACKED. A kmalloc'd
+     * buffer is one block, freed with one kfree() call - but
+     * pmm_alloc_frame() hands out one 4 KiB physical frame at a time,
+     * so a USERBACKED window's buffer is N separate frames, and
+     * wm_destroy_window() needs to know N to free every one of them,
+     * not just the first. Unused/zero for a normal (non-USERBACKED)
+     * window. */
+    uint32_t  userbacked_frame_count;
+
     char      title[64];
 
     /* Opaque app data (WM doesn't touch this) - reserved for a future
@@ -75,6 +144,29 @@ void wm_init(int32_t screen_w, int32_t screen_h);
 void wm_shutdown(void);
 
 /* Create a new window. Returns window ID (> 0) on success, 0 on failure. */
+/* Same as wm_create_window(), except the pixel buffer is allocated as
+ * page-aligned physical frames (pmm_alloc_frame) rather than kmalloc,
+ * and *out_phys_frames/*out_frame_count report those frames' physical
+ * addresses so a syscall layer (see syscall.c's sys_wm_create_window)
+ * can map them into a USER PROCESS's own address space via
+ * mm_map_page_in() - giving that process direct, zero-syscall-per-
+ * pixel write access to its own window's buffer. This is the real
+ * gate that makes a userspace GUI program possible at all: without
+ * frame-backed memory, there is nothing a syscall COULD map into
+ * another address space (kmalloc'd kernel heap memory has no fixed,
+ * page-granular physical backing a generic mapper can reason about
+ * the same way). Fixed-size only (no resize) for v1 - out_phys_frames
+ * must point at an array with room for at least
+ * (w times h times 4, rounded up to the next 4096) entries; the caller (sys_wm_create_window)
+ * computes that from the same w/h it's passing in. Returns 0 (same
+ * failure convention as wm_create_window()) on any allocation
+ * failure, having freed any frames it had already allocated for this
+ * call - never leaves a partial window half-registered. */
+uint32_t wm_create_window_userbacked(int32_t x, int32_t y, int32_t w, int32_t h,
+                                      const char *title,
+                                      uint64_t *out_phys_frames,
+                                      uint32_t *out_frame_count);
+
 uint32_t wm_create_window(int32_t x, int32_t y, int32_t w, int32_t h,
                           const char *title);
 
@@ -134,6 +226,28 @@ uint32_t wm_handle_mouse_up(int32_t x, int32_t y, int button);
 
 /* Keyboard event. Dispatched to focused window. */
 void wm_handle_key(int keycode, int is_press);
+
+/* Pushes one event onto window_id's own queue - called internally by
+ * wm_handle_mouse_move/down/up and wm_handle_key for whichever window
+ * currently has focus (or is under the cursor, for mouse events) -
+ * not meant to be called directly by anything outside wm.c itself,
+ * hence not documented further here. If the queue is already full,
+ * the OLDEST unconsumed event is silently dropped to make room (see
+ * wm_window_t's event_queue comment on why bounded-with-overwrite
+ * beats unbounded growth) - a slow/misbehaving consumer loses old
+ * input, never crashes or blocks the sender. */
+void wm_push_event(uint32_t window_id, const wm_event_t *ev);
+
+/* Pops the oldest queued event for window_id into *out. Returns 1 if
+ * an event was available, 0 if the queue was empty (in which case
+ * *out is left untouched) - a non-blocking poll, matching how
+ * SYS_WM_POLL_EVENT (syscall.c) exposes this to userspace: a program
+ * calls this every frame/loop iteration rather than being put to
+ * sleep waiting for input, same non-blocking philosophy
+ * syscall_ptr_ok() and this kernel's fd 0 keyboard read already use
+ * (see syscall.c's own comment on why - no process-parking/wake
+ * mechanism exists yet to block on correctly). */
+int wm_poll_event(uint32_t window_id, wm_event_t *out);
 
 /* - Utility: compute client area from decorated window bounds - */
 
