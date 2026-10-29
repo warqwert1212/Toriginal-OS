@@ -380,7 +380,7 @@ int trp_manifest_run_gate2(const char *text, uint32_t len,
 
     if (entry_out && entry_out_len > 0) safe_copy(entry_out, m.execute_at, entry_out_len);
 
-    serial_puts("[TRP v1.2] Manifest OK. Entry: "); serial_puts(m.execute_at); serial_puts("\n");
+    serial_puts("[TRP v1.3] Manifest OK. Entry: "); serial_puts(m.execute_at); serial_puts("\n");
     if (m.window_name[0])  { serial_puts("  Window     : "); serial_puts(m.window_name);  serial_puts("\n"); }
     if (m.icon[0])         { serial_puts("  Icon       : "); serial_puts(m.icon);         serial_puts("\n"); }
     if (m.language[0])     { serial_puts("  Language   : "); serial_puts(m.language);     serial_puts("\n"); }

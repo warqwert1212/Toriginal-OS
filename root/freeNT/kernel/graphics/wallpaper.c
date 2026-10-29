@@ -2,6 +2,7 @@
 #include "wallpaper.h"
 #include "fs.h"
 #include "png.h"
+#include "imgdec.h"
 #include "heap.h"
 #include "graphics_2d.h"
 #include "string.h"
@@ -83,9 +84,9 @@ int wallpaper_set_path(const char *path) {
     if (total != (size_t)st.size) { kfree(buf); return 0; }
 
     png_image_t decoded = {0};
-    png_result_t r = png_decode(buf, total, &decoded);
+    int dr = image_decode(buf, total, &decoded);
     kfree(buf);
-    if (r != PNG_OK || !decoded.pixels) return 0;
+    if (dr != 0 || !decoded.pixels) return 0;
 
     /* Decode succeeded - safe to replace the live wallpaper now. */
     free_decoded();
@@ -111,11 +112,22 @@ static void rescale_to(uint32_t w, uint32_t h) {
     uint32_t sh = g_decoded.height;
     uint8_t ch = g_decoded.channels;
 
+    uint64_t crop_w = sw, crop_h = sh;
+    if ((uint64_t)sw * h > (uint64_t)sh * w) {
+        crop_w = ((uint64_t)sh * w) / h;
+        if (crop_w == 0) crop_w = 1;
+    } else {
+        crop_h = ((uint64_t)sw * h) / w;
+        if (crop_h == 0) crop_h = 1;
+    }
+    uint32_t off_x = (uint32_t)((sw - crop_w) / 2);
+    uint32_t off_y = (uint32_t)((sh - crop_h) / 2);
+
     for (uint32_t y = 0; y < h; y++) {
-        uint32_t sy = (y * sh) / h;
+        uint32_t sy = off_y + (uint32_t)(((uint64_t)y * crop_h) / h);
         const uint8_t *row = g_decoded.pixels + (size_t)sy * sw * ch;
         for (uint32_t x = 0; x < w; x++) {
-            uint32_t sx = (x * sw) / w;
+            uint32_t sx = off_x + (uint32_t)(((uint64_t)x * crop_w) / w);
             const uint8_t *px = row + (size_t)sx * ch;
             buf[(size_t)y * w + x] = graphics_rgb(px[0], px[1], px[2]);
         }
@@ -158,17 +170,14 @@ typedef struct {
 } wp_listing_t;
 
 static int has_png_suffix(const char *name, uint8_t name_len) {
-    return name_len > 4 &&
-           name[name_len - 4] == '.' &&
-           (name[name_len - 3] == 'p' || name[name_len - 3] == 'P') &&
-           (name[name_len - 2] == 'n' || name[name_len - 2] == 'N') &&
-           (name[name_len - 1] == 'g' || name[name_len - 1] == 'G');
+    return image_has_supported_suffix(name, name_len);
 }
 
 static int collect_cb(const char *name, uint8_t name_len, uint8_t type, void *ctx) {
     wp_listing_t *l = (wp_listing_t *)ctx;
     if (type == FILE_TYPE_DIR) return 0;
     if (!has_png_suffix(name, name_len)) return 0;
+    if (name_len >= WP_MAX_NAME) return 0;
     if (l->count >= WP_MAX_ENTRIES) return 1; /* full - stop scanning */
 
     size_t n = name_len < WP_MAX_NAME - 1 ? name_len : WP_MAX_NAME - 1;

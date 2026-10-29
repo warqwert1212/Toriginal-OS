@@ -6,6 +6,7 @@
 #include "syscfg.h"
 #include "fs.h"
 #include "string.h"
+#include "trpfs.h"
 
 #define SYSCFG_PATH      "/toriginal_os/config.ini"
 /* config.ini today holds ~7 short keys (username/timezone/resolution/
@@ -130,5 +131,7 @@ int syscfg_set(const char *key, const char *value) {
     if (fd < 0) return -1;
     ssize_t written = fs_write(fd, rebuilt, out_i);
     fs_close(fd);
-    return (written == (ssize_t)out_i) ? 0 : -1;
+    if (written != (ssize_t)out_i) return -1;
+    trpfs_sync();
+    return 0;
 }

@@ -20,6 +20,8 @@ int gterm_is_active(void);
 void gterm_get_grid_size(uint32_t *out_cols, uint32_t *out_rows);
 
 
+void gterm_refresh(void);
+void gterm_set_theme(uint8_t fg_index, uint8_t bg_index);
 void gterm_putc(char c);
 void gterm_write(const char *str);
 void gterm_clear(void);

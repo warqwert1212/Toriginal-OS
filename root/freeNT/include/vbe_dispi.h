@@ -22,8 +22,10 @@
  * (LFB) base, since that varies by BAR assignment.
  * ========================================================================= */
 
-#define VBE_DISPI_MAX_WIDTH   1920
-#define VBE_DISPI_MAX_HEIGHT  1080
+#define VBE_DISPI_MIN_WIDTH   640
+#define VBE_DISPI_MIN_HEIGHT  400
+#define VBE_DISPI_MAX_WIDTH   4096
+#define VBE_DISPI_MAX_HEIGHT  2304
 #define VBE_DISPI_MAX_BPP     32
 
 /* Returns 1 if dispi I/O ports respond with the expected ID signature

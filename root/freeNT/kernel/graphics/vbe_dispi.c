@@ -6,6 +6,7 @@
 #include "vbe_dispi.h"
 #include "graphics_core.h"
 #include "gfx_terminal.h"
+#include "bootsplash.h"
 #include "pci.h"
 #include "port.h"
 #include "heap.h"
@@ -112,9 +113,13 @@ static void revert_to_previous_mode(void) {
 }
 
 int vbe_dispi_set_mode(uint32_t width, uint32_t height) {
-    if (width == 0 || height == 0) return -1;
+    width &= ~7u;
+    if (width < VBE_DISPI_MIN_WIDTH || height < VBE_DISPI_MIN_HEIGHT) {
+        serial_puts("[VBE] Rejected mode below the minimum size.\n");
+        return -1;
+    }
     if (width > VBE_DISPI_MAX_WIDTH || height > VBE_DISPI_MAX_HEIGHT) {
-        serial_puts("[VBE] Rejected mode above 1080p cap.\n");
+        serial_puts("[VBE] Rejected mode above the supported maximum.\n");
         return -1;
     }
 
@@ -216,6 +221,7 @@ int vbe_dispi_set_mode(uint32_t width, uint32_t height) {
      * gterm_init() time - re-run it so the grid (and its backing
      * kmalloc) matches the new geometry instead of the stale one. */
     gterm_init();
+    bootsplash_relayout();
 
     serial_puts("[VBE] Mode switch applied.\n");
     return 0;

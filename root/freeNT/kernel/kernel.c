@@ -1,6 +1,7 @@
 
 #include "kernel.h"
 #include "paging.h"
+#include "graphics_core.h"
 #include "types.h"
 #include "vga.h"
 #include "serial.h"
@@ -33,6 +34,9 @@
 #include "graphics_2d.h"
 #include "heap.h"
 #include "tss.h"
+#include "bootsplash.h"
+#include "vbe_dispi.h"
+#include "syscfg.h"
 
 void interrupts_init(void);
 void syscall_init(void);
@@ -46,6 +50,7 @@ static void early_print(const char *s) {
 
 static void kprint(const char *s) {
     serial_write(s);
+    if (bootsplash_active()) return;
     /* Route through the graphical terminal once it's up, not the
      * legacy VGA text buffer - by the time TRBL/GRUB hand off to the
      * kernel, the display is already in a VBE linear-framebuffer
@@ -394,6 +399,10 @@ void seed_boot_modules_to_fs(void) {
     for (int i = 0; i < g_mb_module_count; i++) {
         mb2_module_entry_t *m = &g_mb_modules[i];
         if (m->phys_end <= m->phys_start) continue;
+        {
+            inode_t st;
+            if (fs_stat(m->dest_path, &st) == 0 && st.size == (uint64_t)(m->phys_end - m->phys_start)) continue;
+        }
         write_bytes_to_fs_path(m->dest_path, (const uint8_t *)(uintptr_t)m->phys_start,
                                 (size_t)(m->phys_end - m->phys_start));
     }
@@ -448,6 +457,19 @@ void seed_embedded_assets_to_fs(void) {
     }
 
     const asset_blob_entry_t *table = (const asset_blob_entry_t *)(g_asset_blob + 8);
+
+    uint64_t h = 1469598103934665603ULL;
+    for (uint64_t b = 0; b < g_asset_blob_size; b++) {
+        h ^= g_asset_blob[b];
+        h *= 1099511628211ULL;
+    }
+    char stamp[24];
+    for (int d = 0; d < 16; d++) stamp[d] = g_hex_digits[(h >> (60 - d * 4)) & 0xF];
+    stamp[16] = '\0';
+    char have[24];
+    int up_to_date = syscfg_get("assets_stamp", have, sizeof(have)) && strcmp(have, stamp) == 0;
+
+    int wrote_any = 0;
     for (uint32_t i = 0; i < count; i++) {
         const asset_blob_entry_t *e = &table[i];
         if ((uint64_t)e->data_offset + e->data_len > g_asset_blob_size) {
@@ -461,8 +483,14 @@ void seed_embedded_assets_to_fs(void) {
         char path[129];
         memcpy(path, e->path, 128);
         path[128] = '\0';
+        if (up_to_date) {
+            inode_t st;
+            if (fs_stat(path, &st) == 0 && st.size == e->data_len) continue;
+        }
         write_bytes_to_fs_path(path, g_asset_blob + e->data_offset, e->data_len);
+        wrote_any = 1;
     }
+    if (!up_to_date || wrote_any) syscfg_set("assets_stamp", stamp);
 }
 
 /* ── Boot logo (kernel/boot/trbl_logo_blob.s) ───────────────────────────────
@@ -476,7 +504,7 @@ void seed_embedded_assets_to_fs(void) {
 extern const uint8_t g_trbl_logo_png[];
 extern const uint64_t g_trbl_logo_png_size;
 
-static void show_boot_logo(void) {
+__attribute__((unused)) static void show_boot_logo(void) {
     png_image_t decoded = {0};
     png_result_t r = png_decode(g_trbl_logo_png, (size_t)g_trbl_logo_png_size, &decoded);
     if (r != PNG_OK || !decoded.pixels) {
@@ -517,7 +545,7 @@ static void kernel_init(uint32_t mb_info_phys) {
 
     kprint("\n");
     kprint("  ================================================\n");
-    kprint("       Toriginal OS  -  freeNT v1.1\n");
+    kprint("       Toriginal OS  -  freeNT v1.3\n");
     kprint("       Made by warqwert\n");
     kprint("  ================================================\n\n");
 
@@ -553,9 +581,8 @@ static void kernel_init(uint32_t mb_info_phys) {
             kprint("[2/8] Graphical terminal unavailable - staying on VGA text mode\n");
         }
 
-        if (g_booted_via_trbl) {
-            show_boot_logo();
-        }
+        bootsplash_start();
+        bootsplash_progress(15);
     } else {
 
         kprint("[2/8] FATAL: no usable linear framebuffer from bootloader\n");
@@ -576,6 +603,7 @@ static void kernel_init(uint32_t mb_info_phys) {
     kprint("[3/8] TSS init...\n");
     tss_init();
     kprint("[3/8] TSS OK\n");
+    bootsplash_progress(22);
 
     acpi_init(g_mb_rsdp_old_phys, g_mb_rsdp_new_phys);
     apic_init();
@@ -592,18 +620,22 @@ static void kernel_init(uint32_t mb_info_phys) {
         kprint("[4/8] PIT IRQ0 routed via I/O APIC\n");
     }
     kprint("[4/8] PIT OK\n");
+    bootsplash_progress(32);
 
     kprint("[5/8] PS/2 controller init...\n");
     ps2_controller_init();
     kprint("[5/8] PS/2 controller OK\n");
+    bootsplash_progress(40);
 
     kprint("[5/8] Keyboard init...\n");
     keyboard_wire_idt();
     kprint("[5/8] Keyboard OK\n");
+    bootsplash_progress(46);
 
     kprint("[6/8] Mouse init...\n");
     mouse_wire_init();
     kprint("[6/8] Mouse OK\n");
+    bootsplash_progress(52);
 
     kprint("[7/8] Filesystem + process init...\n");
     fs_init();
@@ -614,6 +646,7 @@ static void kernel_init(uint32_t mb_info_phys) {
         seed_boot_modules_to_fs();
         seed_embedded_assets_to_fs();
 
+        bootsplash_progress(72);
         if (cursor_assets_init() == 0) {
             kprint("[7/8] Cursor assets loaded from /sys/gui/assets/\n");
         } else {
@@ -632,10 +665,34 @@ static void kernel_init(uint32_t mb_info_phys) {
      * would have nothing to read from yet. Until this line runs the
      * OS is simply uncapped (MAX), which is a safe default either way. */
     if (trbl_settings_read(&g_trbl_settings)) {
+        bootsplash_progress(80);
+        if (g_trbl_settings.boot_flags & TRBL_FLAG_VERBOSE) bootsplash_finish();
         if (pmm_apply_ram_config(g_trbl_settings.mem_mode, g_trbl_settings.ram_limit_kb) == 0) {
             kprint("[7/8] RAM allocation applied from saved settings ("); 
-            vga_write_dec(pmm_get_ram_limit_kb() / 1024);
-            kprint(" MB of "); vga_write_dec(pmm_get_total_ram_kb() / 1024); kprint(" MB detected)\n");
+            if (!bootsplash_active()) vga_write_dec(pmm_get_ram_limit_kb() / 1024);
+            kprint(" MB of "); if (!bootsplash_active()) vga_write_dec(pmm_get_total_ram_kb() / 1024); kprint(" MB detected)\n");
+        }
+
+        /* Apply the saved screen resolution. TRBL's stage2 can only pick
+         * modes the BIOS's VBE list contains (it falls back to 1024x768
+         * otherwise), so a resolution chosen in setup / `settings` that the
+         * VM's VBE doesn't list never took effect after a reboot. The
+         * runtime Bochs/VirtualBox "dispi" interface accepts any size, so
+         * switch to the saved one now if the boot mode differs. */
+        {
+            uint32_t sw = g_trbl_settings.width, sh = g_trbl_settings.height;
+            if (g_framebuffer.framebuffer && sw >= VBE_DISPI_MIN_WIDTH && sw <= VBE_DISPI_MAX_WIDTH && sh >= VBE_DISPI_MIN_HEIGHT && sh <= VBE_DISPI_MAX_HEIGHT &&
+                (g_framebuffer.width != sw || g_framebuffer.height != sh)) {
+                /* The Bochs/VirtualBox display needs a width divisible by 8
+                 * (e.g. 1366 -> 1360), so retry rounded down. */
+                if (graphics_set_mode(GRAPHICS_MODE_VESA_32BIT, sw, sh) == 0 ||
+                    ((sw & 7u) && graphics_set_mode(GRAPHICS_MODE_VESA_32BIT, sw & ~7u, sh) == 0)) {
+                    serial_write("[GFX] Applied saved resolution\n");
+                    kprint("[7/8] Applied saved resolution\n");
+                } else {
+                    serial_write("[GFX] Saved resolution not supported by this display - keeping boot mode\n");
+                }
+            }
         }
     }
 
@@ -643,6 +700,7 @@ static void kernel_init(uint32_t mb_info_phys) {
     scheduler_init();
     syscall_init();
     kprint("[7/8] Subsystems OK\n");
+    bootsplash_progress(88);
 
     kprint("[8/8] Network init...\n");
     net_init();
@@ -706,7 +764,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 
     uhci_init();
 
-    serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.1 READY ***\n");
+    serial_write("[boot] *** KERNEL FULLY BOOTED - freeNT v1.3 READY ***\n");
+    bootsplash_progress(100);
+    bootsplash_finish();
 
     if (kernel_boot_gui_requested()) {
         serial_write("[boot] GUI boot requested via GRUB - launching desktop\n");

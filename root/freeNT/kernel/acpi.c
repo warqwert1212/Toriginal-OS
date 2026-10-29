@@ -2,6 +2,7 @@
 #include "acpi.h"
 #include "serial.h"
 #include "string.h"
+#include "ps2.h"
 
 typedef struct {
     char     signature[8];
@@ -178,6 +179,9 @@ static int find_and_parse_madt(const acpi_sdt_header_t *root, int use_xsdt) {
     return 0;
 }
 
+static const acpi_sdt_header_t *g_root = 0;
+static int g_root_is_xsdt = 0;
+
 void acpi_init(uint32_t rsdp_old_phys, uint32_t rsdp_new_phys) {
     g_acpi_available = 0;
     g_ioapic_count    = 0;
@@ -198,6 +202,17 @@ void acpi_init(uint32_t rsdp_old_phys, uint32_t rsdp_new_phys) {
     if (!rsdp) {
         serial_puts("[ACPI] No valid RSDP from multiboot - APIC unavailable, using legacy PIC.\n");
         return;
+    }
+
+    g_root = 0; g_root_is_xsdt = 0;
+    {   /* remember the root table for acpi_reset_system() */
+        if (rsdp->revision >= 2 && rsdp->xsdt_address &&
+            sdt_header_valid((const acpi_sdt_header_t *)(uintptr_t)rsdp->xsdt_address, "XSDT")) {
+            g_root = (const acpi_sdt_header_t *)(uintptr_t)rsdp->xsdt_address; g_root_is_xsdt = 1;
+        } else if (rsdp->rsdt_address &&
+                   sdt_header_valid((const acpi_sdt_header_t *)(uintptr_t)rsdp->rsdt_address, "RSDT")) {
+            g_root = (const acpi_sdt_header_t *)(uintptr_t)rsdp->rsdt_address; g_root_is_xsdt = 0;
+        }
     }
 
     int found = 0;
@@ -246,3 +261,44 @@ uint32_t acpi_irq_to_gsi(uint8_t irq) {
     return irq;
 }
 
+
+/* Reset the whole machine through the FADT's ACPI reset register (the same
+ * thing Machine -> Reset does in VirtualBox, and what QEMU/real PCs expose).
+ * A keyboard-controller pulse (0x64 <- 0xFE) leaves VirtualBox's BIOS
+ * unable to talk to the keyboard on the next start ("FATAL: Keyboard
+ * error:995"), so prefer this. Returns -1 if no usable reset register
+ * exists; if the write works the machine resets and this never returns. */
+int acpi_reset_system(void) {
+    ps2_prepare_reset();
+    if (!g_root) return -1;
+    uint32_t entry_bytes = g_root_is_xsdt ? 8u : 4u;
+    uint32_t n = (g_root->length - (uint32_t)sizeof(acpi_sdt_header_t)) / entry_bytes;
+    const uint8_t *arr = (const uint8_t *)g_root + sizeof(acpi_sdt_header_t);
+
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t phys;
+        if (g_root_is_xsdt) { uint64_t v; __builtin_memcpy(&v, arr + i * 8, 8); phys = v; }
+        else                { uint32_t v; __builtin_memcpy(&v, arr + i * 4, 4); phys = v; }
+        if (!phys) continue;
+        const acpi_sdt_header_t *h = (const acpi_sdt_header_t *)(uintptr_t)phys;
+        if (!sdt_header_valid(h, "FACP")) continue;
+
+        const uint8_t *f = (const uint8_t *)h;
+        if (h->length < 129) return -1;
+        uint32_t flags; __builtin_memcpy(&flags, f + 112, 4);
+        if (!(flags & (1u << 10))) return -1;          /* RESET_REG_SUP */
+        uint8_t  space = f[116];
+        uint64_t addr; __builtin_memcpy(&addr, f + 120, 8);
+        uint8_t  val = f[128];
+        if (space == 1 && addr <= 0xFFFF) {            /* system I/O */
+            __asm__ volatile("outb %0, %1" :: "a"(val), "Nd"((uint16_t)addr));
+            return 0;
+        }
+        if (space == 0 && addr) {                      /* system memory */
+            *(volatile uint8_t *)(uintptr_t)addr = val;
+            return 0;
+        }
+        return -1;
+    }
+    return -1;
+}

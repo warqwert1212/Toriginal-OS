@@ -1,6 +1,7 @@
 /* gfx_terminal.c - Graphical framebuffer terminal implementation. */
 
 #include "gfx_terminal.h"
+#include "bootsplash.h"
 #include "graphics_core.h"
 #include "font8x16.h"
 #include "cursor.h"
@@ -173,6 +174,10 @@ static void redraw_all(void) {
     }
 }
 
+void gterm_refresh(void) {
+    redraw_all();
+}
+
 /* ── Scrolling ────────────────────────────────────────────────────── */
 
 static void scroll_up_one_line(void) {
@@ -216,43 +221,76 @@ int gterm_init(void) {
     uint64_t cell_count = (uint64_t)cols * rows;
     uint64_t bytes = cell_count * sizeof(gterm_cell_t);
 
-    /* Same defensive ceiling as the other kmalloc call sites in the
-     * graphics stack (gfx2d_surface_create, gfx3d_init) - reject
-     * rather than risk a wrapped size_t multiplication. At any
-     * realistic framebuffer resolution this grid is a few KB, so
-     * this ceiling is generous, not tight. */
     if (bytes > 0x1000000ULL) return -1;
 
-    void *mem = kmalloc((size_t)bytes);
-    if (!mem) return -1;
-
-    /* Free any previous grid before replacing it - gterm_init() used
-     * to only ever run once per boot, so this never mattered before,
-     * but a runtime resolution change (vbe_dispi.c) now calls this a
-     * second time with a different cols*rows, and without this the
-     * old grid's memory would just leak. */
-    if (g_grid) kfree(g_grid);
-
-    g_grid = (gterm_cell_t *)mem;
-    g_cols = cols;
-    g_rows = rows;
-    g_cursor_row = gterm_top_row();
-    g_cursor_col = 0;
-    g_cur_fg = VGA_LIGHT_GREY;
-    g_cur_bg = VGA_BLACK;
+    gterm_cell_t *fresh = (gterm_cell_t *)kmalloc((size_t)bytes);
+    if (!fresh) return -1;
 
     for (uint64_t i = 0; i < cell_count; i++) {
-        g_grid[i].ch = ' ';
-        g_grid[i].fg = g_cur_fg;
-        g_grid[i].bg = g_cur_bg;
+        fresh[i].ch = ' ';
+        fresh[i].fg = g_cur_fg;
+        fresh[i].bg = g_cur_bg;
     }
+
+    uint32_t top = gterm_top_row();
+    uint32_t new_cursor_row = top;
+    uint32_t new_cursor_col = 0;
+
+    if (g_grid && g_cols && g_rows) {
+        uint32_t used_end = g_cursor_row + 1;
+        if (used_end > g_rows) used_end = g_rows;
+        uint32_t used = used_end > top ? used_end - top : 0;
+        uint32_t new_text = rows > top ? rows - top : 0;
+        uint32_t keep = used < new_text ? used : new_text;
+        uint32_t src_start = used_end - keep;
+        uint32_t ccols = g_cols < cols ? g_cols : cols;
+
+        for (uint32_t r = 0; r < keep; r++) {
+            for (uint32_t c = 0; c < ccols; c++) {
+                fresh[(uint64_t)(top + r) * cols + c] = g_grid[(uint64_t)(src_start + r) * g_cols + c];
+            }
+        }
+        if (keep) new_cursor_row = top + keep - 1;
+        new_cursor_col = g_cursor_col < cols ? g_cursor_col : cols - 1;
+        kfree(g_grid);
+    }
+
+    g_grid = fresh;
+    g_cols = cols;
+    g_rows = rows;
+    g_cursor_row = new_cursor_row;
+    g_cursor_col = new_cursor_col;
+
+    g_selecting = 0;
+    g_has_selection = 0;
 
     mouse_set_bounds((int32_t)g_framebuffer.width, (int32_t)g_framebuffer.height);
 
     g_active = 1;
+    graphics_clear_screen(palette_color(g_cur_bg));
     redraw_all();
     if (g_statusbar_enabled) gterm_draw_statusbar_row();
+    graphics_present();
     return 0;
+}
+
+void gterm_set_theme(uint8_t fg_index, uint8_t bg_index) {
+    if (g_active && g_grid) {
+        uint64_t n = (uint64_t)g_cols * g_rows;
+        for (uint64_t i = 0; i < n; i++) {
+            if (g_grid[i].fg == g_cur_fg && g_grid[i].bg == g_cur_bg) {
+                g_grid[i].fg = fg_index;
+                g_grid[i].bg = bg_index;
+            }
+        }
+    }
+    g_cur_fg = fg_index;
+    g_cur_bg = bg_index;
+    if (g_active && !bootsplash_active()) {
+        redraw_all();
+        if (g_statusbar_enabled) gterm_draw_statusbar_row();
+        graphics_present();
+    }
 }
 
 int gterm_is_active(void) {
@@ -280,6 +318,7 @@ void gterm_set_cursor(uint16_t row, uint16_t col) {
 
 void gterm_clear(void) {
     if (!g_active) return;
+    if (bootsplash_active()) { bootsplash_finish(); return; }
     uint32_t top = gterm_top_row();
     for (uint32_t r = top; r < g_rows; r++) {
         for (uint32_t c = 0; c < g_cols; c++) {
@@ -297,6 +336,7 @@ void gterm_clear(void) {
 
 void gterm_putc(char c) {
     if (!g_active) return;
+    if (bootsplash_active()) bootsplash_finish();
 
     switch (c) {
     case '\n':
@@ -376,6 +416,7 @@ void gterm_set_statusbar_color(uint8_t fg_index, uint8_t bg_index) {
 
 static void gterm_draw_statusbar_row(void) {
     if (!g_active || g_cols == 0) return;
+    if (bootsplash_active()) return;
 
     uint8_t bar_fg = g_statusbar_fg;
     uint8_t bar_bg = g_statusbar_bg;

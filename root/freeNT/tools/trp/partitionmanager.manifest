@@ -1,7 +1,7 @@
 Execute at/: partitionmanager.bin
 Window name/: Partition Manager
 Language/: bin
-Version/: 1.0
+Version/: 1.3
 Description/: Toriginal OS install-time partition manager
 Appstat/: terminal
 mark executable/

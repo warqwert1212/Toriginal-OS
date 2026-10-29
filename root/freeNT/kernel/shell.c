@@ -260,7 +260,7 @@ void kernel_os_shell(void) {
         "  /_/  \\____/_/  /_/\\__, / /_/_/ /_/\\__,_/_/   \\____//____/  \n"
         "                   /____/                                    \n"
         "\n"
-        "Toriginal OS v1.2  |  freeNT kernel 1.5\n"
+        "Toriginal OS v1.3  |  freeNT kernel 1.3\n"
         "type 'help' for a list of commands\n"
         "\n",
         1

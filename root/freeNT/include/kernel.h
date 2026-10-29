@@ -4,7 +4,7 @@
 #include "types.h"
 
 #define KERNEL_NAME    "freeNT"
-#define KERNEL_VERSION "1.0"
+#define KERNEL_VERSION "1.3"
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info);
 void kernel_panic(const char* reason);

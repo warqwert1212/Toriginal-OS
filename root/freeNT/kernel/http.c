@@ -22,7 +22,7 @@ int http_get(uint32_t host_ip, uint16_t port, const char *host_header, const cha
     char request[512];
     int n = 0;
     const char *parts[] = { "GET ", path, " HTTP/1.1\r\nHost: ", host_header,
-                            "\r\nConnection: close\r\nUser-Agent: ToriginalOS-trpm/1.0\r\n\r\n" };
+                            "\r\nConnection: close\r\nUser-Agent: ToriginalOS-trpm/1.3\r\n\r\n" };
     for (int i = 0; i < 5; i++) {
         int l = (int)strlen(parts[i]);
         if (n + l >= (int)sizeof(request)) { serial_puts("[HTTP] request too long\n"); return 0; }

@@ -308,6 +308,18 @@ vbe_set_mode:
 
     /* Mode list pointer is a real-mode far pointer at offset 0x0E
      * into the returned VBE info block. */
+    /* Try the saved resolution first, then fall back (see vbe_next_target):
+     * the old code demanded an EXACT saved-resolution match and otherwise
+     * gave up with no framebuffer at all, so a resolution the VM's VBE BIOS
+     * doesn't list (e.g. 1280x720 or 1920x1080 on VirtualBox) left the
+     * kernel in text mode with "no usable linear framebuffer". */
+    movw    saved_width, %ax
+    movw    %ax, want_w
+    movw    saved_height, %ax
+    movw    %ax, want_h
+    movb    $0, vbe_try
+
+vbe_restart_scan:
     movw    vbe_info_block+0x0E, %si
     movw    vbe_info_block+0x10, %ax
     movw    %ax, %es                 /* ES:SI now -> mode list */
@@ -316,7 +328,7 @@ vbe_scan_loop:
     movw    %es:(%si), %cx
     addw    $2, %si
     cmpw    $0xFFFF, %cx
-    je      vbe_done_unavailable      /* end of list, nothing matched */
+    je      vbe_next_target           /* end of list: try the next fallback */
 
     pushw   %si
     pushw   %es
@@ -337,10 +349,10 @@ vbe_scan_loop:
     testw   $0x0080, %ax
     jz      vbe_scan_loop
     movw    vbe_mode_info+0x12, %ax   /* x_resolution */
-    cmpw    saved_width, %ax
+    cmpw    want_w, %ax
     jne     vbe_scan_loop
     movw    vbe_mode_info+0x14, %ax   /* y_resolution */
-    cmpw    saved_height, %ax
+    cmpw    want_h, %ax
     jne     vbe_scan_loop
     movb    vbe_mode_info+0x19, %al   /* bits_per_pixel */
     cmpb    $32, %al
@@ -377,6 +389,18 @@ vbe_scan_loop:
     call    print_string
     popa
     ret
+
+vbe_next_target:
+    movzbw  vbe_try, %bx
+    shlw    $2, %bx                   /* 4 bytes per {w,h} entry */
+    movw    vbe_fallbacks(%bx), %ax
+    testw   %ax, %ax
+    jz      vbe_done_unavailable      /* table exhausted: really no mode */
+    movw    %ax, want_w
+    movw    vbe_fallbacks+2(%bx), %ax
+    movw    %ax, want_h
+    incb    vbe_try
+    jmp     vbe_restart_scan
 
 vbe_done_unavailable:
     movw    $msg_vbe_fail, %si
@@ -549,8 +573,8 @@ leave_unreal:
  * boot-tested in an emulator (none was available while writing this),
  * same caveat as the rest of this file's unreal-mode code. */
 
-.set LOGO_WIDTH,  120
-.set LOGO_HEIGHT, 38
+.set LOGO_WIDTH,  80
+.set LOGO_HEIGHT, 80
 .set BAR_WIDTH,   300
 .set BAR_HEIGHT,  24
 
@@ -675,7 +699,7 @@ draw_bar_done:
     popa
     ret
 
-/* Raw BGRX32 pixel data, 120x38, pre-flattened onto a black background
+/* Raw BGRX32 pixel data, 80x80, pre-flattened onto a black background
  * and pre-converted from trbl_logo.png (see kernel/boot/assets/) to
  * exactly match graphics_rgb()'s in-memory byte layout - no per-pixel
  * channel shuffling needed at blit time, just a straight row copy. */
@@ -894,6 +918,10 @@ msg_settings_default:.asciz "TRBL stage2: no valid settings sector, using defaul
 .align 2
 saved_width:  .word 1024
 saved_height: .word 768
+want_w:       .word 0
+want_h:       .word 0
+vbe_try:      .byte 0
+vbe_fallbacks: .word 1024, 768, 800, 600, 640, 480, 0, 0
 
 .global fb_found
 .global fb_addr

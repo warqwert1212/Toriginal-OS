@@ -29,6 +29,14 @@ extern const uint8_t font8x16_data[FONT8X16_NUM_GLYPHS][FONT8X16_HEIGHT];
  * text on top of existing content) rather than drawn as bg. Goes
  * through graphics_core's graphics_draw_pixel(), so it's bounds-safe
  * and clips at the framebuffer edge automatically. */
+#define FONT_STYLE_DEFAULT 0
+#define FONT_STYLE_MONO    1
+
+void font_set_style(int style);
+int  font_get_style(void);
+
+extern const uint8_t font_mono8x16_data[95][16];
+
 void font_draw_glyph(uint32_t x, uint32_t y, char c, color_t fg, color_t bg,
                      int bg_transparent, uint32_t scale);
 

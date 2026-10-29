@@ -160,7 +160,7 @@ static int ata_read_sector(ata_channel_t *ch, uint32_t lba, void *buf) {
     return 0;
 }
 
-static int ata_write_sector(ata_channel_t *ch, uint32_t lba, const void *buf) {
+static int ata_write_sector(ata_channel_t *ch, uint32_t lba, const void *buf, int do_flush) {
     if (ata_wait_not_busy(ch->io_base) != 0) return -1;
 
     outb(ch->io_base + ATA_REG_DRIVE_HEAD, (uint8_t)(0xE0 | (ch->slave << 4) | ((lba >> 24) & 0x0F)));
@@ -177,8 +177,10 @@ static int ata_write_sector(ata_channel_t *ch, uint32_t lba, const void *buf) {
 
     if (ata_wait_not_busy(ch->io_base) != 0) return -1;
 
-    outb(ch->io_base + ATA_REG_COMMAND, ATA_CMD_FLUSH);
-    if (ata_wait_not_busy(ch->io_base) != 0) return -1;
+    if (do_flush) {
+        outb(ch->io_base + ATA_REG_COMMAND, ATA_CMD_FLUSH);
+        if (ata_wait_not_busy(ch->io_base) != 0) return -1;
+    }
     return 0;
 }
 
@@ -212,7 +214,7 @@ static int ata_blk_write(trpfs_blkdev_t *dev, uint64_t lba, const void *buf) {
     uint32_t base = (uint32_t)(lba * SECTORS_PER_BLOCK) + ctx->base_lba;
     const uint8_t *in = (const uint8_t *)buf;
     for (uint32_t i = 0; i < SECTORS_PER_BLOCK; i++) {
-        if (ata_write_sector(ch, base + i, in + i * ATA_SECTOR_SIZE) != 0) return -1;
+        if (ata_write_sector(ch, base + i, in + i * ATA_SECTOR_SIZE, i == SECTORS_PER_BLOCK - 1) != 0) return -1;
     }
     return 0;
 }
@@ -259,7 +261,7 @@ int ata_raw_read_sector(uint32_t lba, void *buf) {
 
 int ata_raw_write_sector(uint32_t lba, const void *buf) {
     if (!g_channels[0].present && !ata_detect_channel(0)) return -1;
-    return ata_write_sector(&g_channels[0], lba, buf);
+    return ata_write_sector(&g_channels[0], lba, buf, 1);
 }
 
 

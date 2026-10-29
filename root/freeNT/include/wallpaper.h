@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include "graphics_core.h"
 
-/* Directory scanned for candidate wallpapers (*.png) and the config
+/* Directory scanned for candidate wallpapers (png, bmp, jpg, jpeg) and the config
  * file that persists which one is active. Both are plain TRPFS paths -
  * nothing PNG-shaped exists at either until something (the installer,
  * a dev seeding step, or trpm) actually writes files there. */
@@ -36,7 +36,7 @@ void wallpaper_init(void);
  * in place on failure rather than cleared. */
 int wallpaper_set_path(const char *path);
 
-/* Scans WALLPAPER_DIR for *.png entries and advances to the next one
+/* Scans WALLPAPER_DIR for png/bmp/jpg/jpeg entries and advances to the next one
  * after whatever's currently active (wraps around; picks the first
  * entry if nothing is active yet). No-op if the directory doesn't
  * exist or has no .png files. */
@@ -46,7 +46,7 @@ void wallpaper_next(void);
  * fills the screen with `fallback_color` if no wallpaper is loaded. */
 void wallpaper_draw(uint32_t screen_w, uint32_t screen_h, color_t fallback_color);
 
-/* Scans WALLPAPER_DIR for *.png files and writes up to `max_entries`
+/* Scans WALLPAPER_DIR for png/bmp/jpg/jpeg files and writes up to `max_entries`
  * filenames (not full paths) into `out_names`. Returns the count
  * actually found (0 if the directory doesn't exist or has no PNGs).
  * This is what backs the right-click "Change Wallpaper" picker in

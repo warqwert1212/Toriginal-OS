@@ -23,4 +23,6 @@ int ps2_status_output_is_mouse(void);
 
 void ps2_flush_output(void);
 
+void ps2_prepare_reset(void);
+
 #endif

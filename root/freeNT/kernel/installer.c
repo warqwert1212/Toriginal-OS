@@ -24,9 +24,11 @@
 #include "heap.h"
 #include "trbl_settings.h"
 #include "mbr.h"
+#include "acpi.h"
 #include "process.h"
 #include "vga.h"
 #include "install_abi.h"
+#include "vbe_dispi.h"
 
 /* FIX: was 4 MiB. seed_embedded_assets_to_fs() (called from
  * installer_stage_files(), right before finalize_install() writes
@@ -309,7 +311,7 @@ static void scan_existing_os(installer_errors_t *errs) {
         io_put_string(")");
     }
     io_put_string(" ***\n");
-    io_put_string("      Toriginal OS v1.1 does not write to NTFS volumes, so\n");
+    io_put_string("      Toriginal OS v1.3 does not write to NTFS volumes, so\n");
     io_put_string("      this data is not at risk from this installer directly,\n");
     io_put_string("      but continuing will format THIS virtual disk for\n");
     io_put_string("      Toriginal OS. For a real dual-boot, install Toriginal\n");
@@ -1115,7 +1117,7 @@ static int oobe_apply(const char *buf, uint32_t len) {
     int res_w = 0, res_h = 0;
     int mem_mode = -1; uint32_t ram_kb = 0;
     int flag_verbose = -1, flag_safe = -1;
-    char text_c[8] = "", bg_c[8] = "", sb_c[8] = "", hostname[32] = "";
+    char text_c[8] = "", bg_c[8] = "", sb_c[8] = "", hostname[32] = "", font_v[8] = "";
 
     const char *cur = buf, *end = buf + len;
     char k[32], v[96];
@@ -1128,10 +1130,11 @@ static int oobe_apply(const char *buf, uint32_t len) {
         else if (!strcmp(k, "text_color") && parse_u(v, &n) && n < 16) strncpy(text_c, v, 7);
         else if (!strcmp(k, "bg_color") && parse_u(v, &n) && n < 16)   strncpy(bg_c, v, 7);
         else if (!strcmp(k, "statusbar_color") && parse_u(v, &n) && n < 16) strncpy(sb_c, v, 7);
+        else if (!strcmp(k, "font")) { if (!strcmp(v, "mono") || !strcmp(v, "default")) strncpy(font_v, v, 7); }
         else if (!strcmp(k, "resolution")) {
             uint32_t w = 0, h = 0; const char *x = strchr(v, 'x');
             if (x) { char a[8]; int al = (int)(x - v); if (al > 0 && al < 8) { memcpy(a, v, (size_t)al); a[al] = 0;
-                     if (parse_u(a, &w) && parse_u(x + 1, &h) && w >= 640 && w <= 1920 && h >= 480 && h <= 1080) { res_w = (int)w; res_h = (int)h; } } }
+                     if (parse_u(a, &w) && parse_u(x + 1, &h) && w >= VBE_DISPI_MIN_WIDTH && w <= VBE_DISPI_MAX_WIDTH && h >= VBE_DISPI_MIN_HEIGHT && h <= VBE_DISPI_MAX_HEIGHT) { res_w = (int)w; res_h = (int)h; } } }
         }
         else if (!strcmp(k, "net_mode")) {
             if (!strcmp(v, "off")) net_mode = TRBL_NET_OFF;
@@ -1168,6 +1171,7 @@ static int oobe_apply(const char *buf, uint32_t len) {
     if (bg_c[0])   syscfg_set("bg_color", bg_c);
     if (sb_c[0])   syscfg_set("statusbar_color", sb_c);
     if (hostname[0]) syscfg_set("hostname", hostname);
+    if (font_v[0]) syscfg_set("font", font_v);
     if (net_mode == TRBL_NET_OFF)  syscfg_set("net_mode", "off");
     if (net_mode == TRBL_NET_DHCP) syscfg_set("net_mode", "dhcp");
     if (net_mode == TRBL_NET_STATIC) syscfg_set("net_mode", "static");
@@ -1254,7 +1258,19 @@ static void sess_restart_prompt(const char *msg) {
     }
     io_put_string("Restarting...\n");
     __asm__ volatile("cli");
-    for (volatile int i = 0; i < 200000; i++) { }
+    /* 1) ACPI reset register: a full machine reset (all devices). */
+    if (acpi_reset_system() == 0) {
+        for (volatile unsigned long i = 0; i < 50000000UL; i++) { }
+    }
+    /* 2) Fallback: keyboard-controller reset pulse. Drain the output
+     *    buffer and wait for the input buffer to empty first so the
+     *    controller isn't left mid-command. */
+    for (int i = 0; i < 100000; i++) {
+        uint8_t st;
+        __asm__ volatile("inb %%dx, %0" : "=a"(st) : "d"((uint16_t)0x64));
+        if (st & 0x01) { uint8_t d; __asm__ volatile("inb %%dx, %0" : "=a"(d) : "d"((uint16_t)0x60)); (void)d; }
+        else if (!(st & 0x02)) break;
+    }
     __asm__ volatile("outb %%al, $0x64" :: "a"((uint8_t)0xFE));
     for (;;) __asm__ volatile("hlt");
 }

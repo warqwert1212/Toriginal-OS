@@ -34,6 +34,7 @@ const acpi_irq_override_t *acpi_override(int index);
 uint32_t acpi_irq_to_gsi(uint8_t irq);
 
 void acpi_init(uint32_t rsdp_old_phys, uint32_t rsdp_new_phys);
+int  acpi_reset_system(void);   /* FADT reset register; -1 if unavailable */
 
 #endif
 

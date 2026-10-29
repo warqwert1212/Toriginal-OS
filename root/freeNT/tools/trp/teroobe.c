@@ -16,6 +16,7 @@ static const char *color_names[16] = {
 
 static char user[32], pass[32], host[32] = "toriginal", tz[16] = "UTC";
 static int  c_text = 7, c_bg = 0, c_bar = 1;
+static int  font_mono;
 static char res[16] = "1024x768";
 static int  net_mode = 1;                    /* 0 off, 1 dhcp, 2 static */
 static char ip[20], mask[20], gw[20], dns[20];
@@ -66,6 +67,18 @@ static void ask_text(const char *prompt, char *out, int max, int (*valid)(const 
     }
 }
 
+static int res_ok(const char *s) {
+    u64 w = 0, h = 0; int i = 0;
+    if (!(s[0] >= '0' && s[0] <= '9')) return 0;
+    while (s[i] >= '0' && s[i] <= '9') { w = w * 10 + (u64)(s[i] - '0'); i++; if (w > 99999) return 0; }
+    if (s[i] != 'x') return 0;
+    i++;
+    if (!(s[i] >= '0' && s[i] <= '9')) return 0;
+    while (s[i] >= '0' && s[i] <= '9') { h = h * 10 + (u64)(s[i] - '0'); i++; if (h > 99999) return 0; }
+    if (s[i]) return 0;
+    return w >= 640 && w <= 4096 && h >= 400 && h <= 2304;
+}
+
 static int tz_ok(const char *s) { int n = t_strlen(s); return n >= 1 && n <= 15; }
 
 static void step_welcome(void) {
@@ -114,6 +127,9 @@ static void step_terminal(void) {
         if (c_text == c_bg) { err("Text and background are the same - pick different colours."); getch_(); continue; }
         c_bar  = pick_color("Status bar", c_bar);
         color_(c_text, c_bg);
+        puts_("\nTerminal font:\n  1) Default\n  2) Monospace (DejaVu Sans Mono)\nChoice [");
+        putc_(font_mono ? '2' : '1'); puts_("]: ");
+        { char fb[8]; readline_(fb, sizeof(fb), 0); if (fb[0] == '1') font_mono = 0; else if (fb[0] == '2') font_mono = 1; }
         banner("2/3  Terminal look - preview");
         puts_("This is how your terminal will look.\n");
         color_(15, c_bar); puts_(" status bar sample "); color_(c_text, c_bg);
@@ -125,11 +141,12 @@ static void step_terminal(void) {
 
 static void step_system(void) {
     banner("3/3  Screen, network and boot");
-    puts_("Screen resolution:\n  1) 800x600\n  2) 1024x768\n  3) 1280x720\n  4) 1280x1024\n  5) 1920x1080\n");
+    puts_("Screen resolution:\n  1) 800x600\n  2) 1024x768\n  3) 1280x720\n  4) 1280x1024\n  5) 1920x1080\n  6) Custom (any size, e.g. 1366x768)\n");
     puts_("Choice [2]: ");
     char b[16]; readline_(b, sizeof(b), 0);
     switch (b[0]) { case '1': t_strcpy(res, "800x600", 16); break; case '3': t_strcpy(res, "1280x720", 16); break;
                     case '4': t_strcpy(res, "1280x1024", 16); break; case '5': t_strcpy(res, "1920x1080", 16); break;
+                    case '6': ask_text("  Width x height: ", res, sizeof(res), res_ok, "Use WIDTHxHEIGHT (lowercase x) between 640x400 and 4096x2304."); break;
                     default: t_strcpy(res, "1024x768", 16); break; }
 
     puts_("\nNetwork:\n  1) Automatic (DHCP)\n  2) Static address\n  3) Off\nChoice [1]: ");
@@ -180,6 +197,7 @@ static int step_confirm(void) {
     puts_("Username:   "); puts_(user); puts_("\nComputer:   "); puts_(host); puts_("\nTimezone:   "); puts_(tz);
     puts_("\nColours:    text "); puts_(color_names[c_text]); puts_(" on "); puts_(color_names[c_bg]);
     puts_(", bar "); puts_(color_names[c_bar]);
+    puts_("\nFont:       "); puts_(font_mono ? "monospace" : "default");
     puts_("\nResolution: "); puts_(res);
     puts_("\nNetwork:    "); puts_(net_mode == 0 ? "off" : net_mode == 1 ? "DHCP" : ip);
     puts_("\nBoot:       "); puts_(boot_verbose ? "verbose" : "quiet"); puts_(boot_safe ? ", safe mode" : "");
@@ -203,6 +221,7 @@ int trp_main(void) {
     outn = 0;
     kv("username", user); kv("password", pass); kv("hostname", host); kv("timezone", tz);
     kvn("text_color", (u64)c_text); kvn("bg_color", (u64)c_bg); kvn("statusbar_color", (u64)c_bar);
+    kv("font", font_mono ? "mono" : "default");
     kv("resolution", res);
     kv("net_mode", net_mode == 0 ? "off" : net_mode == 1 ? "dhcp" : "static");
     if (net_mode == 2) { kv("net_ip", ip); kv("net_mask", mask); kv("net_gw", gw); kv("net_dns", dns); }

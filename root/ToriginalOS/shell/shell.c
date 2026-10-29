@@ -30,9 +30,13 @@
 #include "ata.h"
 #include "uhci.h"
 #include "shell.h"
+#include "font8x16.h"
+#include "gfx_terminal.h"
+#include "acpi.h"
+#include "wallpaper.h"
 
 #define OS_NAME    "Toriginal OS"
-#define OS_VERSION "1.2"
+#define OS_VERSION "1.3"
 #define KERNEL_NAME "freeNT"
 #define BUILD_ARCH  "x86-64"
 
@@ -126,16 +130,23 @@ static const char *color_name(vga_color_t c) {
  * kernel_os_shell() at startup (kernel/shell.c) - color changes made
  * afterward via 'settings' apply live and re-save immediately, they
  * don't need a second call to this. */
+static int g_display_found = 0;
+static int g_display_applies = 0;
+
 void sys_shell_apply_saved_display_settings(void) {
     if (!trpfs_is_mounted()) return;
 
     char buf[8];
+    g_display_found = syscfg_get("text_color", buf, sizeof(buf));
+    serial_puts(g_display_found ? "[SHELL] display settings found in config.ini\n"
+                                : "[SHELL] display settings NOT found in config.ini\n");
     vga_color_t fg, bg, sfg, sbg;
 
     syscfg_get_or("text_color", buf, sizeof(buf), "7"); /* VGA_LIGHT_GREY */
     if (!parse_color(buf, &fg)) fg = VGA_LIGHT_GREY;
     syscfg_get_or("bg_color", buf, sizeof(buf), "0"); /* VGA_BLACK */
     if (!parse_color(buf, &bg)) bg = VGA_BLACK;
+    if (gterm_is_active()) gterm_set_theme((uint8_t)fg, (uint8_t)bg);
     vga_set_color(fg, bg);
 
     syscfg_get_or("statusbar_color", buf, sizeof(buf), "15"); /* VGA_WHITE fg */
@@ -149,6 +160,10 @@ void sys_shell_apply_saved_display_settings(void) {
     vga_set_statusbar_color(sfg, sbg);
 
     syscfg_get_or("resolution", g_resolution, sizeof(g_resolution), "1024x768");
+
+    syscfg_get_or("font", buf, sizeof(buf), "default");
+    font_set_style(strcmp(buf, "mono") == 0 ? FONT_STYLE_MONO : FONT_STYLE_DEFAULT);
+    if (gterm_is_active()) gterm_refresh();
 }
 
 /* Exposed so kernel/shell.c can build the prompt (os~$ vs os/folder~$) */
@@ -219,6 +234,10 @@ static void int_to_str(int v, char *out, size_t out_len) {
 /* Rebuild and redraw the top status bar: "username | Mon DD YYYY  HH:MM:SS" */
 void sys_shell_update_statusbar(void) {
     if (!trpfs_is_mounted()) return;
+    if (!g_display_found || g_display_applies < 3) {
+        g_display_applies++;
+        sys_shell_apply_saved_display_settings();
+    }
     load_username();
 
     rtc_time_t t;
@@ -461,6 +480,31 @@ static void fd_puts(fd_t fd, const char *s) {
     fs_write(fd, s, strlen(s));
 }
 
+static void cmd_wallpaper(const char *arg) {
+    char names[32][64];
+    int n = wallpaper_list(names, 32);
+    while (arg && *arg == ' ') arg++;
+    if (!arg || !*arg || strcmp(arg, "list") == 0) {
+        if (n == 0) { io_put_string("no wallpapers in " WALLPAPER_DIR "\n"); return; }
+        for (int i = 0; i < n; i++) { io_put_string("  "); io_put_string(names[i]); io_put_string("\n"); }
+        return;
+    }
+    if (strcmp(arg, "next") == 0) { wallpaper_next(); io_put_string("ok\n"); return; }
+    if (strncmp(arg, "set ", 4) == 0) {
+        arg += 4;
+        while (*arg == ' ') arg++;
+        char path[256];
+        size_t dl = strlen(WALLPAPER_DIR);
+        memcpy(path, WALLPAPER_DIR, dl);
+        path[dl] = '/';
+        strncpy(path + dl + 1, arg, sizeof(path) - dl - 2);
+        path[sizeof(path) - 1] = '\0';
+        io_put_string(wallpaper_set_path(path) ? "ok\n" : "failed\n");
+        return;
+    }
+    io_put_string("usage: wallpaper [list|next|set <name>]\n");
+}
+
 static void cmd_help(void) {
     io_put_string("copy <src> <dst> - copy a regular file\n");
     io_put_string("write <path> <text> - write text into a file\n");
@@ -470,6 +514,7 @@ static void cmd_help(void) {
     io_put_string("desktop - launch the graphical desktop (Esc to return)\n");
     io_put_string("touch <path> - create an empty file\n");
     io_put_string("settings [480p|720p] - change the UI resolution\n");
+    io_put_string("wallpaper [list|next|set <name>] - manage wallpapers\n");
     io_put_string("mkdir <path> - create a directory\n");
     io_put_string("ls [path] - list directory contents\n");
     io_put_string("cd <path> - change directory (use .. to go up)\n");
@@ -839,6 +884,7 @@ static int parse_resolution(const char *arg, uint32_t *w, uint32_t *h) {
         }
     }
     const char *x = strchr(arg, 'x');
+    if (!x) x = strchr(arg, 'X');
     if (!x) return 0;
     uint32_t width = 0, height = 0;
     for (const char *p = arg; p < x; p++) {
@@ -885,20 +931,47 @@ static int parse_ipv4(const char *s, uint8_t out[4], const char **end) {
 static void print_settings_usage(void) {
     io_put_string("usage:\n");
     io_put_string("  settings                         show current settings\n");
-    io_put_string("  settings resolution <WxH>         e.g. 1280x720 (max 1920x1080)\n");
+    io_put_string("  settings resolution <WxH>         any size, e.g. 1366x768 or 2560x1440\n");
+    io_put_string("                                    (640x400 up to 4096x2304, width rounds down to a multiple of 8)\n");
     io_put_string("  settings network <off|dhcp>       boot-time network bring-up\n");
     io_put_string("  settings network static <ip> <mask> <gateway> <dns>\n");
     io_put_string("  settings textcolor <name|0-15>    e.g. white, lightcyan, 15\n");
     io_put_string("  settings bgcolor <name|0-15>      e.g. black, blue, 0\n");
     io_put_string("  settings statusbarcolor <name|0-15>  status/time bar text color\n");
+    io_put_string("  settings font <default|mono>      terminal font\n");
     io_put_string("colors: black blue green cyan red magenta brown lightgrey darkgrey\n");
     io_put_string("        lightblue lightgreen lightcyan lightred lightmagenta yellow white\n");
+}
+
+static int cfg_save(const char *key, const char *val) {
+    char back[32];
+    int rc = syscfg_set(key, val);
+    trpfs_sync();
+    if (rc != 0 || !syscfg_get(key, back, sizeof(back)) || strcmp(back, val) != 0) {
+        io_put_string("settings: ERROR - could not save '");
+        io_put_string(key);
+        io_put_string("' to disk\n");
+        serial_puts("[SETTINGS] save failed for key: ");
+        serial_puts(key);
+        serial_puts("\n");
+        return -1;
+    }
+    return 0;
 }
 
 static void cmd_settings(const char *arg) {
     if (!arg || !arg[0]) {
         char buf[8];
-        io_put_string("resolution:       "); io_put_string(g_resolution); io_put_char('\n');
+        io_put_string("resolution:       ");
+        if (graphics_is_available()) {
+            char rb[24]; int_to_str((int)g_framebuffer.width, rb, sizeof(rb));
+            io_put_string(rb); io_put_char('x');
+            int_to_str((int)g_framebuffer.height, rb, sizeof(rb));
+            io_put_string(rb);
+        } else {
+            io_put_string(g_resolution);
+        }
+        io_put_char('\n');
 
         io_put_string("text color:       ");
         syscfg_get_or("text_color", buf, sizeof(buf), "7");
@@ -913,6 +986,10 @@ static void cmd_settings(const char *arg) {
         io_put_string("status bar color: ");
         syscfg_get_or("statusbar_color", buf, sizeof(buf), "15");
         if (parse_color(buf, &c)) io_put_string(color_name(c)); else io_put_string(buf);
+        io_put_char('\n');
+
+        io_put_string("font:             ");
+        io_put_string(font_get_style() == FONT_STYLE_MONO ? "mono" : "default");
         io_put_char('\n');
 
         print_settings_usage();
@@ -944,20 +1021,27 @@ static void cmd_settings(const char *arg) {
             io_put_string("settings: unrecognized resolution - try e.g. 1280x720\n");
             return;
         }
-        if (w > 1920 || h > 1080) {
-            io_put_string("settings: max supported resolution is 1920x1080\n");
+        if (w > VBE_DISPI_MAX_WIDTH || h > VBE_DISPI_MAX_HEIGHT ||
+            w < VBE_DISPI_MIN_WIDTH || h < VBE_DISPI_MIN_HEIGHT) {
+            io_put_string("settings: resolution must be between 640x400 and 4096x2304\n");
             return;
         }
         if (graphics_set_mode(GRAPHICS_MODE_VESA_32BIT, w, h) != 0) {
-            io_put_string("settings: mode switch failed - this display adapter may not\n");
-            io_put_string("support the Bochs/QEMU VBE interface, or rejected that mode.\n");
+            io_put_string("settings: mode switch failed - the display adapter rejected that\n");
+            io_put_string("size, or there is not enough memory for it. Nothing was changed.\n");
             io_put_string("check the serial log ([VBE] lines) for details.\n");
             return;
         }
-        strncpy(g_resolution, value, sizeof(g_resolution) - 1);
-        g_resolution[sizeof(g_resolution) - 1] = '\0';
-        syscfg_set("resolution", g_resolution);
-        trpfs_sync();
+        w = g_framebuffer.width;
+        h = g_framebuffer.height;
+        {
+            char wb[12], hb[12]; int_to_str((int)w, wb, sizeof(wb)); int_to_str((int)h, hb, sizeof(hb));
+            size_t wl = strlen(wb), hl = strlen(hb);
+            memcpy(g_resolution, wb, wl);
+            g_resolution[wl] = 'x';
+            memcpy(g_resolution + wl + 1, hb, hl + 1);
+        }
+        cfg_save("resolution", g_resolution);
 
         /* Also persist to the TRBL boot-time settings sector (see
          * trbl_settings.h) - syscfg.ini only affects the live
@@ -975,6 +1059,23 @@ static void cmd_settings(const char *arg) {
         sys_shell_update_statusbar();
         io_put_string("settings: resolution set to ");
         io_put_string(g_resolution);
+        io_put_char('\n');
+        return;
+    }
+
+    if (strcmp(sub, "font") == 0) {
+        int style;
+        if (strcmp(value, "mono") == 0) style = FONT_STYLE_MONO;
+        else if (strcmp(value, "default") == 0) style = FONT_STYLE_DEFAULT;
+        else {
+            io_put_string("settings: font must be 'default' or 'mono'\n");
+            return;
+        }
+        font_set_style(style);
+        if (gterm_is_active()) gterm_refresh();
+        if (cfg_save("font", style == FONT_STYLE_MONO ? "mono" : "default") != 0) return;
+        io_put_string("settings: font set to ");
+        io_put_string(style == FONT_STYLE_MONO ? "mono" : "default");
         io_put_char('\n');
         return;
     }
@@ -1052,18 +1153,19 @@ static void cmd_settings(const char *arg) {
         else if (strcmp(sub, "bgcolor") == 0) bg_c = c;
         else sb_c = c;
 
+        if (gterm_is_active()) gterm_set_theme((uint8_t)text_c, (uint8_t)bg_c);
         vga_set_color(text_c, bg_c);
         vga_set_statusbar_color(sb_c, VGA_BLUE);
 
         char nb[4];
         int_to_str((int)text_c, nb, sizeof(nb));
-        syscfg_set("text_color", nb);
+        cfg_save("text_color", nb);
 
         int_to_str((int)bg_c, nb, sizeof(nb));
-        syscfg_set("bg_color", nb);
+        cfg_save("bg_color", nb);
 
         int_to_str((int)sb_c, nb, sizeof(nb));
-        syscfg_set("statusbar_color", nb);
+        cfg_save("statusbar_color", nb);
 
         trpfs_sync();
         sys_shell_update_statusbar();
@@ -1082,6 +1184,7 @@ static void cmd_settings(const char *arg) {
 }
 
 static void cmd_halt(void) {
+    trpfs_sync();
     io_put_string("Halted.\n");
     __asm__ volatile("cli");
     while (1) __asm__ volatile("hlt");
@@ -1089,7 +1192,9 @@ static void cmd_halt(void) {
 
 static void cmd_reboot(void) {
     io_put_string("Rebooting...\n");
+    trpfs_sync();
     __asm__ volatile("cli");
+    acpi_reset_system();
     for (volatile int i=0;i<100000;i++);
     __asm__ volatile("mov $0xFE,%%al;out %%al,$0x64":::"al");
     while (1) __asm__ volatile("hlt");
@@ -1655,6 +1760,7 @@ void sys_shell_dispatch(const char *line) {
     if (strcmp(cmd,"run")      ==0) { cmd_run(arg);                return; }
     if (strcmp(cmd,"desktop")  ==0) { cmd_desktop();               return; }
     if (strcmp(cmd,"settings") ==0) { cmd_settings(arg);           return; }
+    if (strcmp(cmd,"wallpaper")==0) { cmd_wallpaper(arg);          return; }
     if (strcmp(cmd,"trpbuild") ==0) { cmd_trpbuild(arg);           return; }
     if (strcmp(cmd,"trpm")     ==0) { cmd_trpm(arg);               return; }
     if (strcmp(cmd,"ifconfig") ==0) { cmd_ifconfig(arg);           return; }

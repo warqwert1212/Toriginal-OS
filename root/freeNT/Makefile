@@ -142,17 +142,21 @@ $(BIN)/kernel.elf: $(OBJS) $(OBJ)/boot/bootloader_blobs.o kernel/boot/kernel64.l
 	@x86_64-linux-gnu-readelf -h $@ | grep -E "Class|Machine|Entry"
 
 # ── Embedded assets + boot logo ──────────────────────────────────────────
+ASSET_ROOT           ?= $(firstword $(wildcard ../sys/gui/assets ../ToriginalOS/gui/assets))
+ASSET_WALLPAPERS_SRC := $(ASSET_ROOT)/desktop/wallpapers
+ASSET_STARTMENU_SRC  := $(ASSET_ROOT)/desktop/startmenu
+ASSET_CURSOR_SRC     := $(ASSET_ROOT)/desktop/mice
+
 # asset_blob.bin is regenerated whenever any wallpaper/start-menu-
 # image/cursor file changes or a new one is added - ASSET_*_NAMES
 # (defined further down) is the same dynamic `find`-based discovery
 # the ISO build already uses, so this and the ISO can never drift out
 # of sync with each other or with what's actually in those folders.
-$(BIN)/asset_blob.bin: kernel/boot/build_asset_blob.py \
-        $(addprefix $(ASSET_WALLPAPERS_SRC)/,$(ASSET_WALLPAPERS_NAMES)) \
-        $(addprefix $(ASSET_STARTMENU_SRC)/,$(ASSET_STARTMENU_NAMES)) \
-        $(addprefix $(ASSET_CURSOR_SRC)/,$(ASSET_CURSOR_NAMES)) \
-        | $(BIN)
-	python3 kernel/boot/build_asset_blob.py $@
+.PHONY: FORCE
+FORCE:
+
+$(BIN)/asset_blob.bin: kernel/boot/build_asset_blob.py FORCE | $(BIN)
+	python3 kernel/boot/build_asset_blob.py $@ "$(ASSET_ROOT)"
 
 $(OBJ)/boot/asset_blob.o: $(BOOT)/asset_blob.s $(BIN)/asset_blob.bin | $(OBJ)/boot
 	$(CC) $(CFLAGS) -x assembler-with-cpp \
@@ -200,10 +204,6 @@ esp: $(BIN)/esp.img
 run-uefi: esp
 	qemu-system-x86_64 -bios /usr/share/OVMF/OVMF_CODE.fd -drive file=$(BIN)/esp.img,format=raw -m 512M -serial stdio -no-reboot
 
-
-ASSET_WALLPAPERS_SRC := ../sys/gui/assets/desktop/wallpapers
-ASSET_STARTMENU_SRC  := ../sys/gui/assets/desktop/startmenu
-ASSET_CURSOR_SRC     := ../sys/gui/assets/desktop/mice
 
 ASSET_WALLPAPERS_NAMES := $(shell find $(ASSET_WALLPAPERS_SRC) -maxdepth 1 -type f ! -name '* *' -printf '%f\n' 2>/dev/null)
 ASSET_STARTMENU_NAMES  := $(shell find $(ASSET_STARTMENU_SRC)  -maxdepth 1 -type f ! -name '* *' -printf '%f\n' 2>/dev/null)

@@ -25,8 +25,8 @@ int syscfg_get(const char *key, char *out, size_t out_len);
  * yet. If the key is already present its line is replaced in place
  * (value length may differ - the whole file is rewritten); otherwise
  * the pair is appended. Returns 0 on success, -1 on failure (e.g. no
- * filesystem mounted). Does not itself call trpfs_sync() - callers
- * doing several syscfg_set() calls in a row should sync once at the end. */
+ * filesystem mounted). Syncs the filesystem (bitmap + superblock)
+ * on every successful write, so the change survives a hard reset. */
 int syscfg_set(const char *key, const char *value);
 
 /* Convenience: syscfg_get() but returns a default value string when the

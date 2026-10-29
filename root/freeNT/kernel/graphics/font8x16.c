@@ -282,12 +282,22 @@ const uint8_t font8x16_data[FONT8X16_NUM_GLYPHS][FONT8X16_HEIGHT] = {
  * keeps every glyph edge crisp, matching how bitmap fonts have
  * always been scaled in real terminal emulators and old VGA text
  * modes at higher resolutions. */
+static int g_font_style = FONT_STYLE_DEFAULT;
+
+void font_set_style(int style) {
+    g_font_style = (style == FONT_STYLE_MONO) ? FONT_STYLE_MONO : FONT_STYLE_DEFAULT;
+}
+
+int font_get_style(void) { return g_font_style; }
+
 void font_draw_glyph(uint32_t x, uint32_t y, char c, color_t fg, color_t bg,
                      int bg_transparent, uint32_t scale) {
     if (scale == 0) scale = 1;
 
     uint8_t code = (uint8_t)c;
     const uint8_t *rows = font8x16_data[code];
+    if (g_font_style == FONT_STYLE_MONO && code >= 32 && code <= 126)
+        rows = font_mono8x16_data[code - 32];
 
     for (uint32_t row = 0; row < FONT8X16_HEIGHT; row++) {
         uint8_t bits = rows[row];

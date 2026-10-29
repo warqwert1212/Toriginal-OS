@@ -61,11 +61,22 @@ static int blk_write(uint64_t lba, const void *buf) {
 
 /* ── Bitmap allocator ────────────────────────────────────────────────────── */
 
+static uint64_t g_bm_lo = (uint64_t)-1;
+static uint64_t g_bm_hi = 0;
+static int      g_sb_dirty = 0;
+
+static inline void bm_mark(uint64_t bit) {
+    uint64_t blk = (bit >> 3) / TRPFS_BLOCK_SIZE;
+    if (blk < g_bm_lo) g_bm_lo = blk;
+    if (blk > g_bm_hi) g_bm_hi = blk;
+}
+
 static int flush_bitmap(void) {
     for (uint64_t i = 0; i < g_sb.bitmap_blocks; i++) {
         if (blk_write(g_sb.bitmap_block + i, g_bitmap + i * TRPFS_BLOCK_SIZE) != 0)
             return -1;
     }
+    g_bm_lo = (uint64_t)-1; g_bm_hi = 0;
     return 0;
 }
 
@@ -73,7 +84,21 @@ static int flush_superblock(void) {
     uint8_t buf[TRPFS_BLOCK_SIZE];
     memset(buf, 0, sizeof(buf));
     memcpy(buf, &g_sb, sizeof(g_sb));
+    g_sb_dirty = 0;
     return blk_write(0, buf);
+}
+
+static int flush_dirty(void) {
+    int rc = 0;
+    if (!g_dev || !g_bitmap) return -1;
+    if (g_bm_lo != (uint64_t)-1) {
+        for (uint64_t i = g_bm_lo; i <= g_bm_hi && i < g_sb.bitmap_blocks; i++) {
+            if (blk_write(g_sb.bitmap_block + i, g_bitmap + i * TRPFS_BLOCK_SIZE) != 0) rc = -1;
+        }
+        g_bm_lo = (uint64_t)-1; g_bm_hi = 0;
+    }
+    if (g_sb_dirty && flush_superblock() != 0) rc = -1;
+    return rc;
 }
 
 static inline int bit_test(uint64_t bit)  { return (g_bitmap[bit >> 3] >> (bit & 7)) & 1; }
@@ -85,9 +110,9 @@ static uint64_t alloc_block(void) {
     for (uint64_t b = g_sb.data_start_block; b < g_sb.total_blocks; b++) {
         if (!bit_test(b)) {
             bit_set(b);
+            bm_mark(b);
             g_sb.free_blocks--;
-            flush_bitmap();
-            flush_superblock();
+            g_sb_dirty = 1;
             return b;
         }
     }
@@ -98,9 +123,9 @@ static void free_block(uint64_t b) {
     if (b < g_sb.data_start_block || b >= g_sb.total_blocks) return;
     if (bit_test(b)) {
         bit_clear(b);
+        bm_mark(b);
         g_sb.free_blocks++;
-        flush_bitmap();
-        flush_superblock();
+        g_sb_dirty = 1;
     }
 }
 
@@ -141,7 +166,7 @@ static uint64_t alloc_inode(void) {
             if (ino > g_sb.inode_count) return 0;
             if (cand->mode == 0) {
                 g_sb.free_inodes--;
-                flush_superblock();
+                g_sb_dirty = 1;
                 return ino;
             }
         }
@@ -172,7 +197,7 @@ static void free_inode(uint64_t ino) {
     memset(&node, 0, sizeof(node));
     write_inode(ino, &node);
     g_sb.free_inodes++;
-    flush_superblock();
+    g_sb_dirty = 1;
 }
 
 /* ── Logical block mapping ──────────────────────────────────────────────── */
@@ -506,6 +531,7 @@ int trpfs_mount(trpfs_blkdev_t *dev) {
     g_sb  = sb;
     g_dev = dev;
 
+    g_bm_lo = (uint64_t)-1; g_bm_hi = 0; g_sb_dirty = 0;
     if (g_bitmap) kfree(g_bitmap);
     g_bitmap = (uint8_t *)kmalloc(g_sb.bitmap_blocks * TRPFS_BLOCK_SIZE);
     if (!g_bitmap) { g_dev = NULL; return -1; }
@@ -523,8 +549,7 @@ int trpfs_mount(trpfs_blkdev_t *dev) {
 
 int trpfs_sync(void) {
     if (!g_dev) return -1;
-    if (flush_bitmap() != 0) return -1;
-    return flush_superblock();
+    return flush_dirty();
 }
 
 /* ── fs.h API ─────────────────────────────────────────────────────────────
@@ -541,7 +566,7 @@ void fs_init(void) {
     serial_puts("[TRPFS] fs_init: waiting for a volume to be mounted.\n");
 }
 
-fd_t fs_open(const char *path, int flags, int mode) {
+static fd_t fs_open_impl(const char *path, int flags, int mode) {
     if (!g_dev || !path) return -1;
 
     uint64_t ino; uint8_t type;
@@ -630,8 +655,6 @@ ssize_t fs_read(fd_t fd, void *buf, size_t count) {
     }
 
     f->offset += done;
-    node.atime = now_ticks();
-    write_inode(f->ino, &node);
     return (ssize_t)done;
 }
 
@@ -676,6 +699,7 @@ ssize_t fs_write(fd_t fd, const void *buf, size_t count) {
 int fs_close(fd_t fd) {
     if (fd < 0 || fd >= TRPFS_MAX_OPEN_FILES || !g_files[fd].in_use) return -1;
     g_files[fd].in_use = 0;
+    flush_dirty();
     return 0;
 }
 
@@ -722,7 +746,7 @@ int fs_seek(fd_t fd, int64_t offset, int whence) {
     return 0;
 }
 
-int fs_mkdir(const char *path, int mode) {
+static int fs_mkdir_impl(const char *path, int mode) {
     if (!g_dev || !path) return -1;
 
     uint64_t existing;
@@ -789,7 +813,7 @@ int fs_stat(const char *path, inode_t *stat) {
  * parent's link count, then frees the inode's data blocks and the inode
  * itself. Does NOT remove non-empty directories (use rmdir for that later).
  * Returns 0 on success, -1 on error. */
-int fs_unlink(const char *path) {
+static int fs_unlink_impl(const char *path) {
     if (!g_dev || !path) return -1;
 
     uint64_t ino; uint8_t type;
@@ -873,4 +897,23 @@ int fs_readdir(const char *path,
         }
     }
     return 0;
+}
+
+
+fd_t fs_open(const char *path, int flags, int mode) {
+    fd_t fd = fs_open_impl(path, flags, mode);
+    if (flags & (O_CREAT | O_TRUNC)) flush_dirty();
+    return fd;
+}
+
+int fs_mkdir(const char *path, int mode) {
+    int rc = fs_mkdir_impl(path, mode);
+    flush_dirty();
+    return rc;
+}
+
+int fs_unlink(const char *path) {
+    int rc = fs_unlink_impl(path);
+    flush_dirty();
+    return rc;
 }

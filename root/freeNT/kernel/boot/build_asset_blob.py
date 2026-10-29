@@ -43,21 +43,33 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # (source dir, destination TRPFS prefix) - destination prefixes match
 # grub.cfg's existing module2 lines exactly, so wallpaper.c/desktop
 # code reading from these paths needs no changes.
-SOURCES = [
-    (os.path.join(SCRIPT_DIR, "..", "..", "..", "sys", "gui", "assets", "desktop", "wallpapers"),
-     "/system/gui/wallpapers/"),
-    (os.path.join(SCRIPT_DIR, "..", "..", "..", "sys", "gui", "assets", "desktop", "startmenu"),
-     "/system/gui/startmenu/"),
-    (os.path.join(SCRIPT_DIR, "..", "..", "..", "sys", "gui", "assets", "desktop", "mice"),
-     "/sys/gui/assets/"),
-]
+def find_asset_root(cli_root):
+    candidates = []
+    if cli_root:
+        candidates.append(cli_root)
+    if os.environ.get("ASSET_ROOT"):
+        candidates.append(os.environ["ASSET_ROOT"])
+    base = os.path.join(SCRIPT_DIR, "..", "..", "..")
+    candidates.append(os.path.join(base, "sys", "gui", "assets"))
+    candidates.append(os.path.join(base, "ToriginalOS", "gui", "assets"))
+    for c in candidates:
+        if c and os.path.isdir(os.path.join(c, "desktop")):
+            return os.path.abspath(c)
+    return None
+
+
+def build_sources(asset_root):
+    return [
+        (os.path.join(asset_root, "desktop", "wallpapers"), "/system/gui/wallpapers/"),
+        (os.path.join(asset_root, "desktop", "startmenu"), "/system/gui/startmenu/"),
+        (os.path.join(asset_root, "desktop", "mice"), "/sys/gui/assets/"),
+    ]
 
 PATH_FIELD_SIZE = 128
 
 
 def discover_files(src_dir):
-    """Plain files only, skip filenames containing spaces - matches
-    the Makefile's `find ... -maxdepth 1 -type f ! -name '* *'`."""
+    """Every plain file in the folder, names kept exactly as they are."""
     if not os.path.isdir(src_dir):
         return []
     names = []
@@ -65,20 +77,25 @@ def discover_files(src_dir):
         full = os.path.join(src_dir, name)
         if not os.path.isfile(full):
             continue
-        if " " in name:
-            continue
         names.append(name)
     return names
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: build_asset_blob.py <output_path>")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("usage: build_asset_blob.py <output_path> [asset_root]")
         sys.exit(1)
     out_path = sys.argv[1]
+    asset_root = find_asset_root(sys.argv[2] if len(sys.argv) == 3 else None)
+    if asset_root is None:
+        print("[build_asset_blob] WARNING: no gui assets folder found - embedding no assets")
+        sources = []
+    else:
+        print(f"[build_asset_blob] asset root: {asset_root}")
+        sources = build_sources(asset_root)
 
     entries = []  # (dest_path, file_bytes)
-    for src_dir, dest_prefix in SOURCES:
+    for src_dir, dest_prefix in sources:
         for name in discover_files(src_dir):
             dest_path = dest_prefix + name
             if len(dest_path.encode("utf-8")) >= PATH_FIELD_SIZE:
@@ -105,10 +122,14 @@ def main():
         data_region += data
         running_offset += len(data)
 
-    with open(out_path, "wb") as f:
-        f.write(header)
-        f.write(table)
-        f.write(data_region)
+    blob = header + bytes(table) + bytes(data_region)
+    unchanged = False
+    if os.path.exists(out_path):
+        with open(out_path, "rb") as f:
+            unchanged = (f.read() == blob)
+    if not unchanged:
+        with open(out_path, "wb") as f:
+            f.write(blob)
 
     total = 8 + len(table) + len(data_region)
     print(f"[build_asset_blob] wrote {out_path}: {total} bytes, "

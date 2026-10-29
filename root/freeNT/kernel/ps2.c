@@ -82,6 +82,29 @@ void ps2_flush_output(void) {
     }
 }
 
+void ps2_prepare_reset(void) {
+    write_cmd(CMD_DISABLE_PORT1);
+    write_cmd(CMD_DISABLE_PORT2);
+    ps2_flush_output();
+
+    write_cmd(CMD_ENABLE_PORT1);
+    write_data(0xFF);
+    for (int i = 0; i < 3; i++) { if (wait_output_full() < 0) break; (void)inb(I8042_DATA); }
+
+    write_cmd(CMD_ENABLE_PORT2);
+    write_cmd(CMD_WRITE_TO_PORT2);
+    write_data(0xFF);
+    for (int i = 0; i < 3; i++) { if (wait_output_full() < 0) break; (void)inb(I8042_DATA); }
+
+    write_cmd(CMD_DISABLE_PORT1);
+    write_cmd(CMD_DISABLE_PORT2);
+    ps2_flush_output();
+    write_cfg_byte(0x45);
+    write_cmd(CMD_ENABLE_PORT1);
+    write_cmd(CMD_ENABLE_PORT2);
+    ps2_flush_output();
+}
+
 void ps2_controller_init(void) {
 
     write_cmd(CMD_DISABLE_PORT1);

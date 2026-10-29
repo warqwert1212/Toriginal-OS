@@ -1,11 +1,4 @@
-/* partitionmanager.trp - install-time partition manager (terminal UI).
- *
- * Runs from the live CD before anything is installed. It edits the MBR
- * partition table through SYS_PART_READ / SYS_PART_WRITE (the kernel
- * validates and refuses anything overlapping the TRBL boot region),
- * picks which partition Toriginal OS goes on, and exits 0 so the kernel
- * can format that partition and install. Exit 1 = cancelled.
- */
+/* partitionmanager.c */
 #include "trp_rt.h"
 
 #define ALIGN_SECTORS 2048u          /* 1 MiB */
@@ -84,6 +77,20 @@ static int find_gaps(u64 *gs, u64 *gl, int max) {
     return g;
 }
 
+
+#define K_UP    0x83
+#define K_DOWN  0x84
+#define K_ESC   27
+
+static int key_(void) {
+    for (;;) {
+        int c = getch_();
+        if (c == '\r' || c == '\n') return '\n';
+        if (c == K_UP || c == K_DOWN || c == K_ESC || c == 0x81 || c == 0x82) return c;
+        if (c >= 0x20 && c < 0x7F) return c;
+    }
+}
+
 static void header(void) {
     clear_();
     color_(15, 1);
@@ -91,7 +98,7 @@ static void header(void) {
     color_(7, 0);
 }
 
-static void draw(void) {
+static void draw_info(void) {
     header();
     puts_("Disk: "); puts_(g_disk.model[0] ? g_disk.model : "ATA disk");
     puts_("  "); putu(mib(g_disk.total_sectors)); puts_(" MiB\n");
@@ -116,40 +123,104 @@ static void draw(void) {
     else { color_(12, 0); puts_("not chosen yet"); }
     color_(7, 0);
     puts_("\n\n");
-    color_(11, 0);
-    puts_(" [A] Use whole disk   [N] New   [D] Delete\n");
-    puts_(" [S] Select target    [W] Write + install\n");
-    puts_(" [R] Reset            [Q] Quit\n");
-    color_(7, 0);
-    puts_("\n> ");
+}
+
+static void hint(const char *text) {
+    color_(11, 0); puts_(text); color_(7, 0); putc_('\n');
+}
+
+static int pick(const char *title, const char **items, int n, int sel, const char *esc_text) {
+    for (;;) {
+        draw_info();
+        color_(14, 0); puts_(title); color_(7, 0); puts_("\n\n");
+        for (int i = 0; i < n; i++) {
+            if (i == sel) { color_(0, 15); puts_(" > "); put_pad(items[i], 44); color_(7, 0); }
+            else { puts_("   "); puts_(items[i]); }
+            putc_('\n');
+        }
+        puts_("\n");
+        hint("Up/Down = move    Enter = OK");
+        hint(esc_text);
+        int k = key_();
+        if (k == K_UP && sel > 0) sel--;
+        else if (k == K_DOWN && sel < n - 1) sel++;
+        else if (k == '\n') return sel;
+        else if (k == K_ESC) return -1;
+    }
+}
+
+static int confirm(const char *l1, const char *l2) {
+    draw_info();
+    color_(14, 0); puts_(l1); color_(7, 0); putc_('\n');
+    if (l2) { puts_(l2); putc_('\n'); }
+    puts_("\n");
+    hint("Enter = OK    Esc = No");
+    for (;;) {
+        int k = key_();
+        if (k == '\n') return 1;
+        if (k == K_ESC) return 0;
+    }
 }
 
 static void pause_msg(const char *m) {
+    draw_info();
     color_(12, 0); puts_(m); color_(7, 0);
-    puts_("\n(press any key)\n"); getch_();
+    puts_("\n\n");
+    hint("Enter = OK");
+    for (;;) { int k = key_(); if (k == '\n' || k == K_ESC) return; }
 }
 
-static int ask_slot(const char *prompt, int want_used) {
-    char b[8]; u64 v;
-    puts_(prompt); readline_(b, sizeof(b), 0);
-    if (!parse_u64(b, &v) || v < 1 || v > 4) return -1;
-    int s = (int)v - 1;
-    if (want_used && !g_pe[s].count) return -1;
-    if (!want_used && g_pe[s].count) return -1;
-    return s;
+static int read_num_esc(const char *title, u64 *out) {
+    char b[16]; int n = 0;
+    for (;;) {
+        draw_info();
+        color_(14, 0); puts_(title); color_(7, 0); puts_("\n\n> ");
+        b[n] = 0; puts_(b);
+        puts_("\n\n");
+        hint("Type digits    Enter = OK    Esc = cancel");
+        int k = key_();
+        if (k == K_ESC) return 0;
+        if (k == '\n') { if (n && parse_u64(b, out)) return 1; continue; }
+        if ((k == '\b' || k == 127) && n > 0) n--;
+        else if (k >= '0' && k <= '9' && n < 10) b[n++] = (char)k;
+    }
+}
+
+static char g_lines[8][64];
+
+static void fmt_part(char *dst, int i) {
+    char tmp[24]; int o = 0, l;
+    dst[o++] = (char)('1' + i); dst[o++] = ' '; dst[o++] = ' ';
+    const char *t = type_name(g_pe[i].type);
+    while (*t && o < 30) dst[o++] = *t++;
+    while (o < 24) dst[o++] = ' ';
+    u64 v = mib(g_pe[i].count); int tl = 0;
+    if (!v) tmp[tl++] = '0';
+    while (v) { tmp[tl++] = (char)('0' + v % 10); v /= 10; }
+    for (l = tl - 1; l >= 0; l--) dst[o++] = tmp[l];
+    dst[o++] = ' '; dst[o++] = 'M'; dst[o++] = 'i'; dst[o++] = 'B'; dst[o] = 0;
+}
+
+static int pick_partition(const char *title, int need_target_ok) {
+    const char *items[4]; int idx[4]; int n = 0;
+    for (int i = 0; i < 4; i++) {
+        if (!g_pe[i].count) continue;
+        if (need_target_ok && (g_pe[i].type != 0x83 || mib(g_pe[i].count) < MIN_SYSTEM_MIB)) continue;
+        fmt_part(g_lines[n], i); items[n] = g_lines[n]; idx[n] = i; n++;
+    }
+    if (!n) { pause_msg(need_target_ok ? "No suitable Toriginal partition (needs 128 MiB or more)." : "There are no partitions."); return -1; }
+    int r = pick(title, items, n, 0, "Esc = cancel");
+    return r < 0 ? -1 : idx[r];
 }
 
 static void do_auto(void) {
-    puts_("\nThis removes ALL partitions on the disk and creates one Toriginal OS\n");
-    puts_("partition using the whole disk. Type YES to continue: ");
-    char b[8]; readline_(b, sizeof(b), 0);
-    if (!t_streq(b, "YES")) return;
-    t_memset(g_pe, 0, 64);
+    if (!confirm("Use the whole disk?", "This removes ALL partitions and creates one Toriginal OS partition.")) return;
     u64 start = align_up(g_disk.boot_reserved);
     u64 end = align_down(g_disk.total_sectors);
     if (end > 0xFFFFF800ULL) end = 0xFFFFF800ULL;
     u64 len = end - start;
     if (mib(len) < MIN_SYSTEM_MIB) { pause_msg("Disk is too small (need at least 128 MiB)."); return; }
+    t_memset(g_pe, 0, 64);
     g_pe[0].type = 0x83; g_pe[0].start = (u32)start; g_pe[0].count = (u32)len;
     g_target = 0; g_dirty = 1;
 }
@@ -160,22 +231,41 @@ static void do_new(void) {
     if (slot < 0) { pause_msg("All 4 partition slots are in use. Delete one first."); return; }
     u64 gs[6], gl[6]; int ng = find_gaps(gs, gl, 6);
     if (!ng) { pause_msg("No free space. Delete a partition first."); return; }
-    puts_("\nFree gaps:\n");
-    for (int i = 0; i < ng; i++) {
-        puts_("  "); putu((u64)(i + 1)); puts_(") at "); putu(mib(gs[i])); puts_(" MiB, "); putu(mib(gl[i])); puts_(" MiB free\n");
+
+    int gi = 0;
+    if (ng > 1) {
+        const char *items[6];
+        for (int i = 0; i < ng; i++) {
+            char *d = g_lines[i]; int o = 0; char tmp[24]; int tl;
+            const char *a = "Gap at "; while (*a) d[o++] = *a++;
+            u64 v = mib(gs[i]); tl = 0; if (!v) tmp[tl++] = '0'; while (v) { tmp[tl++] = (char)('0' + v % 10); v /= 10; }
+            while (tl) d[o++] = tmp[--tl];
+            a = " MiB, "; while (*a) d[o++] = *a++;
+            v = mib(gl[i]); tl = 0; if (!v) tmp[tl++] = '0'; while (v) { tmp[tl++] = (char)('0' + v % 10); v /= 10; }
+            while (tl) d[o++] = tmp[--tl];
+            a = " MiB free"; while (*a) d[o++] = *a++;
+            d[o] = 0; items[i] = d;
+        }
+        gi = pick("Create the partition in which free space?", items, ng, 0, "Esc = cancel");
+        if (gi < 0) return;
     }
-    char b[16]; u64 v;
-    puts_("Gap number: "); readline_(b, sizeof(b), 0);
-    if (!parse_u64(b, &v) || v < 1 || (int)v > ng) { pause_msg("Invalid gap."); return; }
-    int gi = (int)v - 1;
-    puts_("Size in MiB (or 'max'): "); readline_(b, sizeof(b), 0);
-    u64 len;
-    if (t_streq(b, "max")) len = gl[gi];
-    else { if (!parse_u64(b, &v) || v < 1) { pause_msg("Invalid size."); return; } len = align_down(v * 2048ULL); }
-    if (len > gl[gi]) { pause_msg("That is larger than the free gap."); return; }
+
+    const char *sz_items[2] = { "Use all of this free space", "Enter a size in MiB" };
+    int sz = pick("Partition size", sz_items, 2, 0, "Esc = cancel");
+    if (sz < 0) return;
+    u64 len = gl[gi], v;
+    if (sz == 1) {
+        if (!read_num_esc("Size in MiB:", &v)) return;
+        if (v < 1) { pause_msg("Invalid size."); return; }
+        len = align_down(v * 2048ULL);
+    }
+    if (len > gl[gi]) { pause_msg("That is larger than the free space."); return; }
     if (len < ALIGN_SECTORS) { pause_msg("Too small."); return; }
-    puts_("Type: 1) Toriginal OS system  2) Data : "); readline_(b, sizeof(b), 0);
-    u8 type = (b[0] == '2') ? 0x07 : 0x83;
+
+    const char *ty_items[2] = { "Toriginal OS system", "Data" };
+    int ty = pick("Partition type", ty_items, 2, 0, "Esc = cancel");
+    if (ty < 0) return;
+    u8 type = ty == 1 ? 0x07 : 0x83;
     if (type == 0x83 && mib(len) < MIN_SYSTEM_MIB) { pause_msg("A system partition needs at least 128 MiB."); return; }
     g_pe[slot].type = type; g_pe[slot].start = (u32)gs[gi]; g_pe[slot].count = (u32)len;
     g_pe[slot].boot = 0;
@@ -184,36 +274,23 @@ static void do_new(void) {
 }
 
 static void do_delete(void) {
-    int s = ask_slot("\nDelete which partition (1-4): ", 1);
-    if (s < 0) { pause_msg("No such partition."); return; }
-    puts_("Type YES to delete partition "); putu((u64)(s + 1)); puts_(": ");
-    char b[8]; readline_(b, sizeof(b), 0);
-    if (!t_streq(b, "YES")) return;
+    int s = pick_partition("Delete which partition?", 0);
+    if (s < 0) return;
+    if (!confirm("Delete this partition?", "Its data will be lost when the table is written.")) return;
     t_memset(&g_pe[s], 0, 16);
     if (g_target == s) g_target = -1;
     g_dirty = 1;
 }
 
 static void do_select(void) {
-    int s = ask_slot("\nInstall Toriginal OS on partition (1-4): ", 1);
-    if (s < 0) { pause_msg("No such partition."); return; }
-    if (g_pe[s].type != 0x83) { pause_msg("Only a 'Toriginal (TRPFS)' partition can be the target."); return; }
-    if (mib(g_pe[s].count) < MIN_SYSTEM_MIB) { pause_msg("That partition is smaller than 128 MiB."); return; }
-    g_target = s;
+    int s = pick_partition("Install Toriginal OS on which partition?", 1);
+    if (s >= 0) g_target = s;
 }
 
 static void do_write(void) {
-    if (g_target < 0) { pause_msg("Choose an install target first ([S])."); return; }
-    header();
-    color_(14, 0);
-    puts_("\nReady to install.\n\n");
-    color_(7, 0);
-    puts_("  Partition "); putu((u64)(g_target + 1)); puts_(" ("); putu(mib(g_pe[g_target].count));
-    puts_(" MiB) will be ERASED and formatted for Toriginal OS.\n");
-    puts_("  The partition table will be written to the disk now.\n\n");
-    puts_("Type INSTALL to continue, anything else to go back: ");
-    char b[16]; readline_(b, sizeof(b), 0);
-    if (!t_streq(b, "INSTALL")) return;
+    if (g_target < 0) { pause_msg("Choose an install target first."); return; }
+    if (!confirm("Ready to install. The target partition will be ERASED.",
+                 "The partition table is written to the disk now.")) return;
 
     if (trp_sys(SYS_PART_WRITE, (long)g_sector, 0, 0) != 0) {
         pause_msg("The kernel rejected the partition table."); return;
@@ -221,6 +298,7 @@ static void do_write(void) {
     if (trp_sys(SYS_INSTALL_CTL, INSTALL_CTL_SELECT_TARGET, g_target, 0) != 0) {
         pause_msg("The kernel rejected that install target."); return;
     }
+    header();
     puts_("\nPartition table written. Starting installation...\n");
     trp_exit(0);
 }
@@ -236,24 +314,26 @@ int trp_main(void) {
     }
     load_table();
 
+    const char *menu[] = {
+        "Use whole disk", "New partition", "Delete partition",
+        "Select install target", "Write + install", "Reset changes", "Quit"
+    };
+    int sel = 4;
     for (;;) {
-        draw();
-        int c = t_lower((char)getch_());
-        putc_(c); putc_('\n');
-        switch (c) {
-        case 'a': do_auto(); break;
-        case 'n': do_new(); break;
-        case 'd': do_delete(); break;
-        case 's': do_select(); break;
-        case 'w': do_write(); break;
-        case 'r': load_table(); break;
-        case 'q': {
-            puts_("\nCancel the installation? Type YES: ");
-            char b[8]; readline_(b, sizeof(b), 0);
-            if (t_streq(b, "YES")) return 1;
-            break;
+        int c = pick("What do you want to do?", menu, 7, sel, "Esc = quit");
+        if (c < 0) {
+            if (confirm("Cancel the installation?", 0)) return 1;
+            continue;
         }
-        default: break;
+        sel = c;
+        switch (c) {
+        case 0: do_auto(); break;
+        case 1: do_new(); break;
+        case 2: do_delete(); break;
+        case 3: do_select(); break;
+        case 4: do_write(); break;
+        case 5: load_table(); break;
+        case 6: if (confirm("Cancel the installation?", 0)) return 1; break;
         }
     }
 }
