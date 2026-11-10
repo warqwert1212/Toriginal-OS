@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""mktrp.py <manifest.txt> <payload.bin> <out.trp>  - same layout as the
-kernel's trpbuild: [magic,version,manifest_off,manifest_len,payload_off,
-payload_len] + manifest text + flat payload."""
-import struct, sys
-man = open(sys.argv[1], 'rb').read()
-pay = open(sys.argv[2], 'rb').read()
-if len(pay) > 0x100000:
-    sys.exit("payload larger than the 1 MiB TRP code window")
-mo = 24
-hdr = struct.pack('<6I', 0x4B505254, 1, mo, len(man), mo + len(man), len(pay))
-open(sys.argv[3], 'wb').write(hdr + man + pay)
-print("built %s (manifest=%dB, payload=%dB)" % (sys.argv[3], len(man), len(pay)))
+import os
+import runpy
+import sys
+
+if len(sys.argv) != 4:
+    sys.exit("usage: mktrp.py <manifest> <payload.bin> <out.trp>")
+sys.argv = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "trpc.py"), "pack"] + sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")

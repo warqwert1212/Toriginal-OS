@@ -13,7 +13,8 @@ ISO_DIR := isodir
 
 GCC_FREESTANDING_INCLUDE := $(shell $(CC) -print-file-name=include)
 
-CFLAGS  := -ffreestanding -nostdlib -nostdinc -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -O2 -Wall -Wextra -Iinclude -Ikernel -I$(GCC_FREESTANDING_INCLUDE)
+OS_BUILD := $(shell tr -d " \r\n" < osbuild)
+CFLAGS  := -DBUILD_NUMBER='"$(OS_BUILD)"' -ffreestanding -nostdlib -nostdinc -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -O2 -Wall -Wextra -Iinclude -Ikernel -I$(GCC_FREESTANDING_INCLUDE)
 LDFLAGS := -T kernel/boot/kernel64.ld --no-undefined -z noexecstack
 
 # A source that lives in a subdirectory (kernel/trpfs/, kernel/graphics/) wins
@@ -46,7 +47,6 @@ SYS_OBJS := $(patsubst $(SYS)/%.c, $(OBJ)/sys/%.o,  $(SYS_SRCS))
 
 OBJS_COMMON := $(OBJ)/boot/boot64.o \
         $(filter-out $(OBJ)/boot/boot64.o, $(S_OBJS)) \
-        $(OBJ)/boot/asset_blob.o \
         $(OBJ)/boot/trbl_logo_blob.o \
         $(C_OBJS_SHARED) \
         $(SYS_OBJS)
@@ -152,16 +152,14 @@ ASSET_CURSOR_SRC     := $(ASSET_ROOT)/desktop/mice
 # (defined further down) is the same dynamic `find`-based discovery
 # the ISO build already uses, so this and the ISO can never drift out
 # of sync with each other or with what's actually in those folders.
+TRP_NAMES := partitionmanager teroobe terminal settings packages computer welcome notepad
+TRP_BIN   := $(addprefix $(BIN)/trp/,$(addsuffix .trp,$(TRP_NAMES)))
+
 .PHONY: FORCE
 FORCE:
 
-$(BIN)/asset_blob.bin: kernel/boot/build_asset_blob.py FORCE | $(BIN)
-	python3 kernel/boot/build_asset_blob.py $@ "$(ASSET_ROOT)"
-
-$(OBJ)/boot/asset_blob.o: $(BOOT)/asset_blob.s $(BIN)/asset_blob.bin | $(OBJ)/boot
-	$(CC) $(CFLAGS) -x assembler-with-cpp \
-	    -DASSET_BLOB_PATH='"$(CURDIR)/$(BIN)/asset_blob.bin"' \
-	    -c $< -o $@
+$(BIN)/osimage.img: kernel/boot/build_asset_blob.py osbuild $(TRP_BIN) FORCE | $(BIN)
+	python3 kernel/boot/build_asset_blob.py $@ "$(ASSET_ROOT)" "$(BIN)/trp"
 
 $(OBJ)/boot/trbl_logo_blob.o: $(BOOT)/trbl_logo_blob.s $(BOOT)/assets/trbl_logo.png | $(OBJ)/boot
 	$(CC) $(CFLAGS) -x assembler-with-cpp \
@@ -232,12 +230,17 @@ $(ISO_DIR)/boot/assets/cursor/%: $(ASSET_CURSOR_SRC)/% | $(ISO_DIR)/boot/grub
 # Built by tools/trp/build.sh, shipped on the ISO as GRUB modules and
 # copied onto the installed disk under /system/trp/. NOT linked into the
 # kernel.
-TRP_NAMES := partitionmanager teroobe
-TRP_BIN   := $(addprefix $(BIN)/trp/,$(addsuffix .trp,$(TRP_NAMES)))
 TRP_ISO   := $(addprefix $(ISO_DIR)/boot/trp/,$(addsuffix .trp,$(TRP_NAMES)))
 
-$(BIN)/trp/%.trp: tools/trp/%.c tools/trp/%.manifest tools/trp/trp_rt.h tools/trp/trp.ld tools/trp/build.sh include/install_abi.h | $(BIN)
-	sh tools/trp/build.sh $(BIN)/trp
+TRP_SRC_FILES := $(wildcard tools/trp/*.c tools/trp/*.h tools/trp/*.manifest tools/trp/*.ld tools/trp/terminal/* tools/trp/libc/*) tools/trp/trpc.py include/install_abi.h include/app_abi.h
+
+$(BIN)/trp/.stamp: $(TRP_SRC_FILES) | $(BIN)
+	mkdir -p $(BIN)/trp
+	python3 tools/trp/trpc.py all tools/trp -o $(BIN)/trp
+	touch $@
+
+$(BIN)/trp/%.trp: $(BIN)/trp/.stamp
+	@test -f $@
 
 $(ISO_DIR)/boot/trp/%.trp: $(BIN)/trp/%.trp | $(ISO_DIR)/boot/grub
 	mkdir -p $(dir $@)
@@ -265,15 +268,7 @@ $(ISO_DIR)/boot/grub/grub.cfg: Makefile | $(ISO_DIR)/boot/grub
 	    else \
 	      echo "  multiboot2 /boot/kernel.elf"; \
 	    fi; \
-	    for f in $(ASSET_WALLPAPERS_NAMES); do \
-	      echo "  module2 /boot/assets/wallpapers/$$f /system/gui/wallpapers/$$f"; \
-	    done; \
-	    for f in $(ASSET_STARTMENU_NAMES); do \
-	      echo "  module2 /boot/assets/startmenu/$$f /system/gui/startmenu/$$f"; \
-	    done; \
-	    for f in $(ASSET_CURSOR_NAMES); do \
-	      echo "  module2 /boot/assets/cursor/$$f /sys/gui/assets/$$f"; \
-	    done; \
+	    echo "  module2 /boot/osimage.img /system/osimage.img"; \
 	    for f in $(TRP_NAMES); do \
 	      echo "  module2 /boot/trp/$$f.trp /system/trp/$$f.trp"; \
 	    done; \
@@ -308,9 +303,11 @@ $(ISO_DIR)/boot/kernel.elf: $(BIN)/kernel.elf | $(ISO_DIR)/boot/grub
 # own -boot_image/-append_partition option list (confirmed real via
 # `xorriso -help` on the actual target machine), not confirmed
 # end-to-end here.
+$(ISO_DIR)/boot/osimage.img: $(BIN)/osimage.img | $(ISO_DIR)/boot/grub
+	cp $< $@
+
 toriginal_OS.iso: $(ISO_DIR)/boot/kernel.elf $(ISO_DIR)/boot/grub/grub.cfg $(TRP_ISO) \
-                   $(ASSET_WALLPAPERS_ISO) $(ASSET_STARTMENU_ISO) $(ASSET_CURSOR_ISO) \
-                   $(BIN)/esp.img
+                   $(ISO_DIR)/boot/osimage.img $(BIN)/esp.img
 	$(MKISO) -o $@ $(ISO_DIR) -d /usr/lib/grub/i386-pc -- \
 	    -boot_image any partition_table=on \
 	    -boot_image any appended_part_as=gpt \

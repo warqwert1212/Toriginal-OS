@@ -39,6 +39,7 @@ int ata_drive_present(int drive_index);
 int ata_drive_info(int drive_index, uint64_t *total_sectors, char *model, int model_len);
 int ata_raw_read_sector(uint32_t lba, void *buf);
 int ata_raw_write_sector(uint32_t lba, const void *buf);
+int ata_flush_all(void);
 
 trpfs_blkdev_t *ata_init_blkdev(uint64_t total_bytes);
 trpfs_blkdev_t *ata_init_blkdev_drive(int drive_index, uint64_t total_bytes);

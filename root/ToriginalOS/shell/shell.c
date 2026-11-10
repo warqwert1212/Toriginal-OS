@@ -20,6 +20,8 @@
 #include "sha256.h"
 #include "config.h"
 #include "desktop.h"
+#include "logo.h"
+#include "cursor.h"
 #include "syscfg.h"
 #include "graphics_core.h"
 #include "vbe_dispi.h"
@@ -34,6 +36,10 @@
 #include "gfx_terminal.h"
 #include "acpi.h"
 #include "wallpaper.h"
+#include "kernel.h"
+#include "apphost.h"
+#include "trp_manifest.h"
+#include "heap.h"
 
 #define OS_NAME    "Toriginal OS"
 #define OS_VERSION "1.3"
@@ -44,9 +50,8 @@
  * from trploader.h — this used to be a second, independent copy here,
  * which is exactly the kind of drift that breaks package loading. */
 
-/* Package index lives at /pkgs/index.txt - one entry per line: name */
+/* Installed packages live in /pkgs as <name>.trp */
 #define PKG_DIR   "/pkgs"
-#define PKG_INDEX "/pkgs/index.txt"
 
 static char g_cwd[256] = "/";
 static char g_username[32] = "user";
@@ -168,6 +173,11 @@ void sys_shell_apply_saved_display_settings(void) {
 
 /* Exposed so kernel/shell.c can build the prompt (os~$ vs os/folder~$) */
 const char *sys_shell_get_cwd(void) { return g_cwd; }
+void sys_shell_set_cwd(const char *path) {
+    if (!path || path[0] != '/') return;
+    strncpy(g_cwd, path, sizeof(g_cwd) - 1);
+    g_cwd[sizeof(g_cwd) - 1] = '\0';
+}
 
 /* Read "username=..." out of /toriginal_os/config.ini, once, cached. */
 static void load_username(void) {
@@ -292,7 +302,16 @@ static void print_hex_u32(uint32_t v, int digits) {
     io_put_string(buf);
 }
 
+static const char *strip_root(const char *p) {
+    if (p && p[0]=='r' && p[1]=='o' && p[2]=='o' && p[3]=='t') {
+        if (p[4] == '\0') return "/";
+        if (p[4] == '/') return p + 4;
+    }
+    return p;
+}
+
 static void resolve_path(const char *arg, char *dst, size_t n) {
+    arg = strip_root(arg);
     if (!arg || !arg[0]) { strncpy(dst, g_cwd, n-1); dst[n-1]='\0'; return; }
     if (arg[0] == '/') { strncpy(dst, arg, n-1); dst[n-1]='\0'; return; }
     size_t cl = strlen(g_cwd);
@@ -367,6 +386,7 @@ static void resolve_and_normalize(const char *arg, char *dst, size_t n) {
 }
 
 static int resolve_cd_target(const char *arg, char *dst, size_t n) {
+    arg = strip_root(arg);
     char path[256];
     resolve_and_normalize(arg, path, sizeof(path));
 
@@ -481,7 +501,7 @@ static void fd_puts(fd_t fd, const char *s) {
 }
 
 static void cmd_wallpaper(const char *arg) {
-    char names[32][64];
+    char names[32][128];
     int n = wallpaper_list(names, 32);
     while (arg && *arg == ' ') arg++;
     if (!arg || !*arg || strcmp(arg, "list") == 0) {
@@ -548,31 +568,41 @@ static void cmd_advanced_help(void) {
     io_put_string("\n");
 }
 
+extern const char *osimage_status(void);
+
+static int count_dir_cb(const char *name, uint8_t name_len, uint8_t type, void *ctx) {
+    (void)name; (void)type;
+    if (name_len) (*(int *)ctx)++;
+    return 0;
+}
+
+static void print_dir_count(const char *path) {
+    int n = 0;
+    int rc = fs_readdir(path, count_dir_cb, &n);
+    io_put_string("  ");
+    io_put_string(path);
+    io_put_string(rc == 0 ? ": present\n" : ": MISSING\n");
+}
+
+static void cmd_osimage(void) {
+    io_put_string("\n" TORIGINAL_LOGO "\n");
+    io_put_string(osimage_status());
+    io_put_string("\n");
+    print_dir_count("/system/gui/wallpapers");
+    print_dir_count("/system/gui/startmenu");
+    print_dir_count("/system/gui/icons");
+    print_dir_count("/system/trp");
+}
+
 static void cmd_sysver(void) {
-    io_put_string(OS_NAME " v" OS_VERSION " (" KERNEL_NAME "/" BUILD_ARCH ")\n");
+    io_put_string(OS_NAME " v" OS_VERSION " build " BUILD_NUMBER " (" KERNEL_NAME "/" BUILD_ARCH ")\n");
     io_put_string("heap . TRPFS . PS/2 kbd+mouse . PIT . TRP packages\n\n");
 
-    io_put_string(
-"             _______               \n"
-"        ${c2}, ${c5}:8@@@@B@@@@@@B. ${c2},         \n"
-"      _P${c4}_${c2}gggggggggggggggg;${c4}_${c2}@_       \n"
-"    ,@@{${c3}g${c2}@@@@@@@@@@@@@@@@|${c3}g${c2}[@@,     \n"
-"   _@@@@_${c3}@@@@@@${c2}@@@@]${c3}@@@@@W${c2}_@@@@,    \n"
-"  ${c1}.${c2}9@@@W${c3}_g@P${c4}_g@${c2}@@@@]${c4}@g${c3}\"4@@${c2}\"%@@@C    \n"
-"  .@@@\"${c3}@@P${c4}g@@@@${c2}@@@@]${c4}@@@@g${c3}t@[${c2}%@@@`   \n"
-"  [@@${c3};@@/${c4}@@@@@@${c2}@@@@]${c4}@@@@@@${c3}\\\\@b${c2}4@@${c3}'   \n"
-"  ${c2}'@@${c3}[@@${c4}@@@@@@@${c2}@@@@]${c4}@@@@@@]${c3}@@${c2}!@@'   \n"
-"   @@${c3}[@]${c4}@@@@@@@${c2}@@@@]${c4}@@@@@@@${c3}@@'${c2}@,    \n"
-"   '@${c3}.@@${c4}[@@@@@@${c2}@@@@]${c4}@@@@@@T${c3}@@${c2}|@     \n"
-"     .${c3}4@p${c4}4@@@@@${c2}@@@@]${c4}@@@@@P${c3}g@/${c2}P      \n"
-"       ${c3}^@@${c4}\"@@@@${c2}BBBB\"${c4}@@@@\"${c3}@W'        \n"
-"         '@@~${c4}\"0B@@@BD\"${c3}o@D'          \n"
-"             \"\"<===\"\"               \n"
-    );
+    io_put_string("\n" TORIGINAL_LOGO "\n");
 }
 
 static void cmd_cls(void) { io_clear_screen(); }
-static void cmd_pwd(void) { io_put_string(g_cwd); io_put_char('\n'); }
+static void cmd_pwd(void) { io_put_string("root"); io_put_string(g_cwd[1] ? g_cwd : "/"); io_put_char('\n'); }
 
 static void cmd_cd(const char *arg) {
     if (!arg || !arg[0]) { g_cwd[0]='/'; g_cwd[1]='\0'; return; }
@@ -1026,6 +1056,21 @@ static void cmd_settings(const char *arg) {
             io_put_string("settings: resolution must be between 640x400 and 4096x2304\n");
             return;
         }
+        if (desktop_is_running()) {
+            char wb[12], hb[12]; int_to_str((int)w, wb, sizeof(wb)); int_to_str((int)h, hb, sizeof(hb));
+            size_t wl = strlen(wb), hl = strlen(hb);
+            memcpy(g_resolution, wb, wl);
+            g_resolution[wl] = 'x';
+            memcpy(g_resolution + wl + 1, hb, hl + 1);
+            cfg_save("resolution", g_resolution);
+            if (trbl_settings_set_resolution((uint16_t)w, (uint16_t)h) != 0)
+                io_put_string("settings: warning - could not save the boot resolution\n");
+            desktop_request_resolution(w, h);
+            io_put_string("settings: resolution set to ");
+            io_put_string(g_resolution);
+            io_put_string("\n");
+            return;
+        }
         if (graphics_set_mode(GRAPHICS_MODE_VESA_32BIT, w, h) != 0) {
             io_put_string("settings: mode switch failed - the display adapter rejected that\n");
             io_put_string("size, or there is not enough memory for it. Nothing was changed.\n");
@@ -1396,50 +1441,163 @@ static void cmd_ping(const char *arg) {
 }
 
 
+static void str_append(char *dst, const char *src, size_t cap) {
+    size_t l = strlen(dst);
+    size_t i = 0;
+    while (src[i] && l + i + 1 < cap) { dst[l + i] = src[i]; i++; }
+    dst[l + i] = '\0';
+}
+
+static int str_contains(const char *h, const char *n) {
+    size_t nl = strlen(n);
+    if (!nl) return 1;
+    for (; *h; h++) if (strncmp(h, n, nl) == 0) return 1;
+    return 0;
+}
+
+#define TRPM_MAX_PKGS 48
+#define TRPM_WINDOW   (1u << 20)
+
+typedef struct { char names[TRPM_MAX_PKGS][48]; int n; } trpm_names_t;
+
+static trp_manifest_t g_pm;
+static uint8_t g_pbuf[TRPM_WINDOW + 8192];
+static size_t  g_pbuf_len;
+
+static int str_ends_with(const char *s, const char *suf) {
+    size_t a = strlen(s), b = strlen(suf);
+    return a >= b && strcmp(s + a - b, suf) == 0;
+}
+
+static int trpm_names_cb(const char *name, uint8_t name_len, uint8_t type, void *ctx) {
+    trpm_names_t *c = (trpm_names_t *)ctx;
+    (void)type;
+    if (name_len < 5 || name_len >= 47 || c->n >= TRPM_MAX_PKGS) return 0;
+    if (strcmp(name + name_len - 4, ".trp") != 0) return 0;
+    memcpy(c->names[c->n], name, (size_t)name_len - 4);
+    c->names[c->n][name_len - 4] = '\0';
+    c->n++;
+    return 0;
+}
+
+static void trpm_scan(const char *dir, trpm_names_t *out) {
+    out->n = 0;
+    fs_readdir(dir, trpm_names_cb, out);
+}
+
 static void pkg_ensure_dir(void) {
     inode_t st;
     if (fs_stat(PKG_DIR, &st) != 0) fs_mkdir(PKG_DIR, 0755);
-    if (fs_stat(PKG_INDEX, &st) != 0) {
-        fd_t fd = fs_open(PKG_INDEX, O_WRONLY|O_CREAT, 0644);
-        if (fd >= 0) fs_close(fd);
-    }
 }
 
-/* List all lines in index.txt */
-typedef struct { int count; } list_ctx_t;
+static int trpm_name_ok(const char *n) {
+    if (!n[0] || strlen(n) > 40) return 0;
+    for (const char *p = n; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')) return 0;
+    }
+    return n[0] != '.';
+}
+
+static void trpm_name_from(const char *arg, char *out, size_t n) {
+    const char *base = arg;
+    for (const char *p = arg; *p; p++) if (*p == '/') base = p + 1;
+    strncpy(out, base, n - 1);
+    out[n - 1] = '\0';
+    size_t l = strlen(out);
+    if (l > 4 && strcmp(out + l - 4, ".trp") == 0) out[l - 4] = '\0';
+}
+
+static int trpm_load(const char *path, const char **err) {
+    inode_t st;
+    if (fs_stat(path, &st) != 0) { *err = "file not found"; return -1; }
+    if (st.size < sizeof(trp_file_header_t)) { *err = "file too small to be a TRP package"; return -1; }
+    if (st.size > sizeof(g_pbuf)) { *err = "package is larger than the 1 MiB program window"; return -1; }
+    fd_t fd = fs_open(path, O_RDONLY, 0);
+    if (fd < 0) { *err = "cannot open package"; return -1; }
+    size_t got = 0;
+    while (got < st.size) {
+        ssize_t n = fs_read(fd, g_pbuf + got, st.size - got);
+        if (n <= 0) break;
+        got += (size_t)n;
+    }
+    fs_close(fd);
+    if (got != st.size) { *err = "short read"; return -1; }
+    g_pbuf_len = got;
+
+    trp_file_header_t h;
+    memcpy(&h, g_pbuf, sizeof(h));
+    if (h.magic != TRP_MAGIC) { *err = "not a TRP package (bad magic)"; return -1; }
+    if ((uint64_t)h.manifest_offset + h.manifest_len > got || (uint64_t)h.payload_offset + h.payload_len > got) {
+        *err = "header points outside the file"; return -1;
+    }
+    if (h.payload_len == 0 || h.payload_len > TRPM_WINDOW) { *err = "payload size is invalid"; return -1; }
+    memset(&g_pm, 0, sizeof(g_pm));
+    if (trp_manifest_parse((const char *)g_pbuf + h.manifest_offset, h.manifest_len, &g_pm) != 0 || !g_pm.execute_at_found) {
+        *err = "manifest is invalid or has no 'Execute at/:' line"; return -1;
+    }
+    if (!trp_manifest_verify_checksum(&g_pm, g_pbuf + h.payload_offset, h.payload_len)) {
+        *err = "checksum mismatch - the package is corrupted or was modified"; return -1;
+    }
+    return 0;
+}
+
+static void trpm_path_for(const char *name, char *out, size_t n) {
+    strncpy(out, PKG_DIR "/", n - 1);
+    out[n - 1] = '\0';
+    size_t l = strlen(out);
+    strncpy(out + l, name, n - l - 5);
+    out[n - 5] = '\0';
+    str_append(out, ".trp", sizeof(out));
+}
+
+static int trpm_find_installed(const char *name, char *path, size_t n) {
+    inode_t st;
+    trpm_path_for(name, path, n);
+    if (fs_stat(path, &st) == 0) return 1;
+    strncpy(path, "/system/trp/", n - 1);
+    path[n - 1] = '\0';
+    size_t l = strlen(path);
+    strncpy(path + l, name, n - l - 5);
+    path[n - 5] = '\0';
+    str_append(path, ".trp", sizeof(path));
+    return fs_stat(path, &st) == 0 ? 2 : 0;
+}
+
+static void trpm_print_line(const char *name, const char *tag) {
+    io_put_string("  ");
+    io_put_string(name);
+    for (size_t i = strlen(name); i < 18; i++) io_put_char(' ');
+    io_put_string(g_pm.version[0] ? g_pm.version : "-");
+    for (size_t i = strlen(g_pm.version[0] ? g_pm.version : "-"); i < 8; i++) io_put_char(' ');
+    io_put_string(g_pm.appstat_is_gui ? "gui   " : "term  ");
+    io_put_string(tag);
+    if (g_pm.description[0]) { io_put_string("  "); io_put_string(g_pm.description); }
+    io_put_char('\n');
+}
 
 static void cmd_trpm_list(void) {
     if (!need_fs("trpm")) return;
     pkg_ensure_dir();
-
-    fd_t fd = fs_open(PKG_INDEX, O_RDONLY, 0);
-    if (fd < 0) { io_put_string("trpm: cannot read index\n"); return; }
-
-    char buf[1024]; ssize_t n = fs_read(fd, buf, sizeof(buf)-1);
-    fs_close(fd);
-
-    if (n <= 0) { io_put_string("trpm: no packages installed\n"); return; }
-    buf[n] = '\0';
-
-    io_put_string("Installed packages:\n");
-    /* Walk lines */
-    char *p = buf;
-    int count = 0;
-    while (*p) {
-        char *nl = p;
-        while (*nl && *nl != '\n') nl++;
-        if (nl > p) {
-            io_put_string("  "); 
-            char tmp = *nl; *nl = '\0';
-            io_put_string(p);
-            *nl = tmp;
-            io_put_char('\n');
-            count++;
-        }
-        if (*nl == '\n') nl++;
-        p = nl;
+    trpm_names_t *list = (trpm_names_t *)kmalloc(sizeof(trpm_names_t));
+    if (!list) { io_put_string("trpm: out of memory\n"); return; }
+    io_put_string("  NAME              VERSION UI    SOURCE\n");
+    trpm_scan("/system/trp", list);
+    for (int i = 0; i < list->n; i++) {
+        char p[96]; const char *err;
+        trpm_find_installed(list->names[i], p, sizeof(p));
+        if (trpm_load(p, &err) == 0) trpm_print_line(list->names[i], "built-in");
+        else { io_put_string("  "); io_put_string(list->names[i]); io_put_string("  (damaged: "); io_put_string(err); io_put_string(")\n"); }
     }
-    if (!count) io_put_string("  (none)\n");
+    trpm_scan(PKG_DIR, list);
+    for (int i = 0; i < list->n; i++) {
+        char p[96]; const char *err;
+        trpm_path_for(list->names[i], p, sizeof(p));
+        if (trpm_load(p, &err) == 0) trpm_print_line(list->names[i], "installed");
+        else { io_put_string("  "); io_put_string(list->names[i]); io_put_string("  (damaged: "); io_put_string(err); io_put_string(")\n"); }
+    }
+    if (!list->n) io_put_string("  no user-installed packages yet. try: trpm install <name|file.trp>\n");
+    kfree(list);
 }
 
 #define TRPM_REPO_CONFIG_PATH "/trpm_repo.txt"
@@ -1585,150 +1743,340 @@ static int trpm_fetch_remote(const char *host_and_port, const char *pkgname, con
     return 1;
 }
 
-static void cmd_trpm_install(const char *arg) {
-    if (!arg || !arg[0]) { io_put_string("usage: trpm install <pkg.trp | package-name>\n"); return; }
-    if (!need_fs("trpm")) return;
-    pkg_ensure_dir();
+static int trpm_write_pkg(const char *dest) {
+    fs_unlink(dest);
+    fd_t fd = fs_open(dest, O_WRONLY | O_CREAT, 0755);
+    if (fd < 0) return -1;
+    size_t put = 0;
+    while (put < g_pbuf_len) {
+        ssize_t n = fs_write(fd, g_pbuf + put, g_pbuf_len - put);
+        if (n <= 0) { fs_close(fd); fs_unlink(dest); return -1; }
+        put += (size_t)n;
+    }
+    fs_close(fd);
+    return 0;
+}
 
-    char path[256]; resolve_and_normalize(arg, path, sizeof(path));
-    char pkgname[128];
-    int is_remote = 0;
-
+static int trpm_locate_source(const char *arg, char *out, size_t n) {
     inode_t st;
-    if (fs_stat(path, &st) != 0) {
+    char name[48];
+    trpm_name_from(arg, name, sizeof(name));
+    int has_path = strchr(arg, '/') != NULL || str_ends_with(arg, ".trp");
+    if (has_path) {
+        resolve_and_normalize(arg, out, n);
+        if (fs_stat(out, &st) == 0) return 1;
+        char alt[256];
+        strncpy(alt, arg, sizeof(alt) - 5);
+        alt[sizeof(alt) - 5] = '\0';
+        str_append(alt, ".trp", sizeof(alt));
+        resolve_and_normalize(alt, out, n);
+        if (fs_stat(out, &st) == 0) return 1;
+        if (strchr(arg, '/')) return 0;
+    }
+    if (!trpm_name_ok(name)) return 0;
+    static const char *dirs[] = { "/packages/", "/system/trp/", NULL };
+    for (int i = 0; dirs[i]; i++) {
+        strncpy(out, dirs[i], n - 1);
+        out[n - 1] = '\0';
+        size_t l = strlen(out);
+        strncpy(out + l, name, n - l - 5);
+        out[n - 5] = '\0';
+        str_append(out, ".trp", sizeof(out));
+        if (fs_stat(out, &st) == 0) return 1;
+    }
+    return 0;
+}
+
+static int trpm_install_one(const char *arg, int depth, int *installed_count);
+
+static int trpm_deps_ok(int depth, int *installed_count) {
+    char deps[8][48];
+    int nd = g_pm.depends_count > 8 ? 8 : g_pm.depends_count;
+    for (int i = 0; i < nd; i++) { strncpy(deps[i], g_pm.depends[i], sizeof(deps[i]) - 1); deps[i][sizeof(deps[i]) - 1] = '\0'; }
+    for (int i = 0; i < nd; i++) {
+        char p[96];
+        char name[48];
+        trpm_name_from(deps[i], name, sizeof(name));
+        if (!name[0] || trpm_find_installed(name, p, sizeof(p))) continue;
+        io_put_string("trpm: needs "); io_put_string(name); io_put_string(", installing it first\n");
+        if (depth >= 4 || trpm_install_one(name, depth + 1, installed_count) != 0) {
+            io_put_string("trpm: dependency "); io_put_string(name); io_put_string(" could not be installed\n");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int trpm_install_one(const char *arg, int depth, int *installed_count) {
+    char src[256];
+    char name[48];
+    int remote = 0;
+    const char *err = "";
+    trpm_name_from(arg, name, sizeof(name));
+    if (!trpm_name_ok(name)) { io_put_string("trpm: invalid package name: "); io_put_string(arg); io_put_char('\n'); return -1; }
+
+    if (!trpm_locate_source(arg, src, sizeof(src))) {
         char host[256];
         if (!trpm_get_repo_host(host, sizeof(host))) {
-            io_put_string("trpm: not found locally: "); io_put_string(arg); io_put_char('\n');
-            io_put_string("trpm: no repo host configured for remote install — set one with: trpm repo <host>\n");
-            return;
+            io_put_string("trpm: '"); io_put_string(arg); io_put_string("' was not found in the current folder, /packages or /system/trp\n");
+            io_put_string("      to download packages, set a repo first: trpm repo <host>\n");
+            return -1;
         }
-
-        strncpy(pkgname, arg, sizeof(pkgname) - 1); pkgname[sizeof(pkgname)-1] = '\0';
-        size_t pl = strlen(pkgname);
-        if (pl > 4 && strcmp(pkgname + pl - 4, ".trp") == 0) pkgname[pl - 4] = '\0';
-
-        strncpy(path, "/_trpm_download.trp", sizeof(path) - 1);
-        if (!trpm_fetch_remote(host, pkgname, path)) return;
-        is_remote = 1;
+        strncpy(src, "/_trpm_download.trp", sizeof(src) - 1);
+        src[sizeof(src) - 1] = '\0';
+        fs_unlink(src);
+        if (!trpm_fetch_remote(host, name, src)) return -1;
+        remote = 1;
     }
 
-  
-    if (fs_stat(path, &st) != 0) {
-        io_put_string("trpm: not found: "); io_put_string(path); io_put_char('\n'); return;
-    }
-    if (st.size < sizeof(trp_file_header_t)) {
-        io_put_string("trpm: file too small to be a TRP package\n"); return;
+    if (trpm_load(src, &err) != 0) {
+        io_put_string("trpm: refusing "); io_put_string(arg); io_put_string(": "); io_put_string(err); io_put_char('\n');
+        if (remote) fs_unlink(src);
+        return -1;
     }
 
-    fd_t fd = fs_open(path, O_RDONLY, 0);
-    if (fd < 0) { io_put_string("trpm: cannot open package\n"); return; }
-    trp_file_header_t hdr;
-    fs_read(fd, &hdr, sizeof(hdr));
-    fs_close(fd);
+    if (!trpm_deps_ok(depth, installed_count)) { if (remote) fs_unlink(src); return -1; }
+    if (trpm_load(src, &err) != 0) { if (remote) fs_unlink(src); return -1; }
 
-    if (hdr.magic != TRP_MAGIC) {
-        io_put_string("trpm: invalid TRP magic - not a valid package\n"); return;
+    for (int i = 0; i < g_pm.conflicts_count; i++) {
+        char p[96], cn[48];
+        trpm_name_from(g_pm.conflicts[i], cn, sizeof(cn));
+        if (cn[0] && strcmp(cn, name) != 0 && trpm_find_installed(cn, p, sizeof(p))) {
+            io_put_string("trpm: "); io_put_string(name); io_put_string(" conflicts with installed package "); io_put_string(cn); io_put_char('\n');
+            if (remote) fs_unlink(src);
+            return -1;
+        }
     }
 
-    if (!is_remote) {
-        const char *base = path;
-        for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;
-        strncpy(pkgname, base, sizeof(pkgname)-1); pkgname[sizeof(pkgname)-1]='\0';
-        size_t nl = strlen(pkgname);
-        if (nl > 4 && strcmp(pkgname + nl - 4, ".trp") == 0) pkgname[nl-4] = '\0';
+    pkg_ensure_dir();
+    char dest[96];
+    char old_version[64] = "";
+    trpm_path_for(name, dest, sizeof(dest));
+    int existed = 0;
+    {
+        inode_t st;
+        if (fs_stat(dest, &st) == 0) {
+            existed = 1;
+            char newv[64];
+            strncpy(newv, g_pm.version, sizeof(newv) - 1); newv[sizeof(newv) - 1] = '\0';
+            if (trpm_load(dest, &err) == 0) { strncpy(old_version, g_pm.version, sizeof(old_version) - 1); old_version[sizeof(old_version) - 1] = '\0'; }
+            if (trpm_load(src, &err) != 0) { if (remote) fs_unlink(src); return -1; }
+        }
     }
+    int rc = trpm_write_pkg(dest);
+    if (remote) fs_unlink(src);
+    if (rc != 0) { io_put_string("trpm: could not write "); io_put_string(dest); io_put_char('\n'); return -1; }
 
-    /* Copy .trp into /pkgs/<name>.trp */
-    char dest[256];
-    strncpy(dest, PKG_DIR "/", sizeof(dest)-1);
-    size_t dl = strlen(dest);
-    strncpy(dest + dl, pkgname, sizeof(dest)-dl-6);
-    strncpy(dest + strlen(dest), ".trp", 5);
+    io_put_string(existed ? "trpm: updated " : "trpm: installed ");
+    io_put_string(name);
+    if (existed && old_version[0]) { io_put_string(" ("); io_put_string(old_version); io_put_string(" -> "); io_put_string(g_pm.version[0] ? g_pm.version : "-"); io_put_char(')'); }
+    else if (g_pm.version[0]) { io_put_string(" "); io_put_string(g_pm.version); }
+    io_put_char('\n');
+    io_put_string("      start it with: trpm run "); io_put_string(name); io_put_char('\n');
+    if (installed_count) (*installed_count)++;
+    return 0;
+}
 
-    /* Copy file contents */
-    fd_t src = fs_open(path, O_RDONLY, 0);
-    fd_t dst = fs_open(dest, O_WRONLY|O_CREAT, 0755);
-    if (src < 0 || dst < 0) {
-        io_put_string("trpm: copy failed\n");
-        if (src >= 0) fs_close(src);
-        if (dst >= 0) fs_close(dst);
-        return;
+static void cmd_trpm_install(const char *arg) {
+    if (!arg || !arg[0]) { io_put_string("usage: trpm install <name | file.trp> [more ...]\n"); return; }
+    if (!need_fs("trpm")) return;
+    pkg_ensure_dir();
+    char buf[256];
+    strncpy(buf, arg, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    int count = 0;
+    char *p = buf;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        char *e = p;
+        while (*e && *e != ' ') e++;
+        char saved = *e;
+        *e = '\0';
+        trpm_install_one(p, 0, &count);
+        if (!saved) break;
+        p = e + 1;
     }
-    char cbuf[512]; ssize_t nr;
-    while ((nr = fs_read(src, cbuf, sizeof(cbuf))) > 0)
-        fs_write(dst, cbuf, (size_t)nr);
-    fs_close(src); fs_close(dst);
+}
 
-    /* Append name to index */
-    fd_t idx = fs_open(PKG_INDEX, O_WRONLY|O_CREAT, 0644);
-    if (idx >= 0) {
-        fs_seek(idx, 0, 2); /* seek to end */
-        fd_puts(idx, pkgname);
-        fd_puts(idx, "\n");
-        fs_close(idx);
+static int trpm_depends_on(const char *pkg_path, const char *name) {
+    const char *err;
+    if (trpm_load(pkg_path, &err) != 0) return 0;
+    for (int i = 0; i < g_pm.depends_count; i++) {
+        char dn[48];
+        trpm_name_from(g_pm.depends[i], dn, sizeof(dn));
+        if (strcmp(dn, name) == 0) return 1;
     }
-
-    io_put_string("trpm: installed "); io_put_string(pkgname);
-    io_put_string(" -> "); io_put_string(dest); io_put_char('\n');
-    io_put_string("      run it with: run "); io_put_string(dest); io_put_char('\n');
+    return 0;
 }
 
 static void cmd_trpm_remove(const char *arg) {
-    if (!arg || !arg[0]) { io_put_string("usage: trpm remove <name>\n"); return; }
+    if (!arg || !arg[0]) { io_put_string("usage: trpm remove [-f] <name>\n"); return; }
     if (!need_fs("trpm")) return;
-
-    /* Remove the .trp file from /pkgs/ */
-    char dest[256];
-    strncpy(dest, PKG_DIR "/", sizeof(dest)-1);
-    size_t dl = strlen(dest);
-    strncpy(dest + dl, arg, sizeof(dest)-dl-6);
-    strncpy(dest + strlen(dest), ".trp", 5);
-
-    if (fs_unlink(dest) != 0) {
-        io_put_string("trpm: package not found: "); io_put_string(arg); io_put_char('\n'); return;
+    int force = 0;
+    if (arg[0] == '-' && arg[1] == 'f' && arg[2] == ' ') { force = 1; arg += 3; while (*arg == ' ') arg++; }
+    char name[48];
+    trpm_name_from(arg, name, sizeof(name));
+    if (!trpm_name_ok(name)) { io_put_string("trpm: invalid package name\n"); return; }
+    char dest[96];
+    trpm_path_for(name, dest, sizeof(dest));
+    inode_t st;
+    if (fs_stat(dest, &st) != 0) {
+        char sp[96];
+        if (trpm_find_installed(name, sp, sizeof(sp)) == 2) io_put_string("trpm: that is a built-in system app and cannot be removed\n");
+        else { io_put_string("trpm: not installed: "); io_put_string(name); io_put_char('\n'); }
+        return;
     }
-
-    /* Rebuild index without this entry */
-    fd_t fd = fs_open(PKG_INDEX, O_RDONLY, 0);
-    char old_idx[2048]; ssize_t on = 0;
-    if (fd >= 0) { on = fs_read(fd, old_idx, sizeof(old_idx)-1); fs_close(fd); }
-    if (on > 0) old_idx[on] = '\0'; else old_idx[0] = '\0';
-
-    fd_t wfd = fs_open(PKG_INDEX, O_WRONLY|O_CREAT, 0644);
-    if (wfd >= 0) {
-        char *p = old_idx;
-        while (*p) {
-            char *nl = p;
-            while (*nl && *nl != '\n') nl++;
-            size_t ll = (size_t)(nl - p);
-            /* Write line only if it doesn't match the removed name */
-            if (ll != strlen(arg) || strncmp(p, arg, ll) != 0) {
-                fs_write(wfd, p, ll);
-                fs_write(wfd, "\n", 1);
+    if (!force) {
+        trpm_names_t *list = (trpm_names_t *)kmalloc(sizeof(trpm_names_t));
+        if (list) {
+            trpm_scan(PKG_DIR, list);
+            for (int i = 0; i < list->n; i++) {
+                char p[96];
+                if (strcmp(list->names[i], name) == 0) continue;
+                trpm_path_for(list->names[i], p, sizeof(p));
+                if (trpm_depends_on(p, name)) {
+                    io_put_string("trpm: "); io_put_string(list->names[i]); io_put_string(" depends on "); io_put_string(name);
+                    io_put_string(" - remove it first, or use: trpm remove -f "); io_put_string(name); io_put_char('\n');
+                    kfree(list);
+                    return;
+                }
             }
-            if (*nl == '\n') nl++;
-            p = nl;
+            kfree(list);
         }
-        fs_close(wfd);
     }
+    if (fs_unlink(dest) != 0) { io_put_string("trpm: could not remove "); io_put_string(name); io_put_char('\n'); return; }
+    io_put_string("trpm: removed "); io_put_string(name); io_put_char('\n');
+}
 
-    io_put_string("trpm: removed "); io_put_string(arg); io_put_char('\n');
+static void cmd_trpm_info(const char *arg) {
+    if (!arg || !arg[0]) { io_put_string("usage: trpm info <name | file.trp>\n"); return; }
+    if (!need_fs("trpm")) return;
+    char path[256], name[48];
+    const char *err;
+    trpm_name_from(arg, name, sizeof(name));
+    const char *where = "file";
+    int found = 0;
+    if (strchr(arg, '/') || str_ends_with(arg, ".trp")) { resolve_and_normalize(arg, path, sizeof(path)); inode_t st; found = fs_stat(path, &st) == 0; }
+    if (!found && trpm_name_ok(name)) {
+        int r = trpm_find_installed(name, path, sizeof(path));
+        if (r) { found = 1; where = r == 2 ? "built-in" : "installed"; }
+        else if (trpm_locate_source(arg, path, sizeof(path))) { found = 1; where = "available, not installed"; }
+    }
+    if (!found) { io_put_string("trpm: no such package: "); io_put_string(arg); io_put_char('\n'); return; }
+    if (trpm_load(path, &err) != 0) { io_put_string("trpm: "); io_put_string(path); io_put_string(": "); io_put_string(err); io_put_char('\n'); return; }
+    io_put_string("name:        "); io_put_string(name); io_put_char('\n');
+    io_put_string("status:      "); io_put_string(where); io_put_char('\n');
+    io_put_string("version:     "); io_put_string(g_pm.version[0] ? g_pm.version : "-"); io_put_char('\n');
+    if (g_pm.description[0]) { io_put_string("about:       "); io_put_string(g_pm.description); io_put_char('\n'); }
+    io_put_string("type:        "); io_put_string(g_pm.appstat_is_gui ? "graphical app" : "terminal program"); io_put_char('\n');
+    if (g_pm.window_name[0]) { io_put_string("window:      "); io_put_string(g_pm.window_name); io_put_char('\n'); }
+    io_put_string("size:        "); print_u64((uint64_t)g_pbuf_len); io_put_string(" bytes\n");
+    if (g_pm.checksum[0]) { io_put_string("sha256:      "); io_put_string(g_pm.checksum); io_put_char('\n'); }
+    for (int i = 0; i < g_pm.depends_count; i++) { io_put_string(i ? "             " : "depends:     "); io_put_string(g_pm.depends[i]); io_put_char('\n'); }
+    for (int i = 0; i < g_pm.conflicts_count; i++) { io_put_string(i ? "             " : "conflicts:   "); io_put_string(g_pm.conflicts[i]); io_put_char('\n'); }
+    io_put_string("location:    "); io_put_string(path); io_put_char('\n');
+}
+
+static void cmd_trpm_search(const char *arg) {
+    if (!need_fs("trpm")) return;
+    trpm_names_t *list = (trpm_names_t *)kmalloc(sizeof(trpm_names_t));
+    if (!list) return;
+    static const char *dirs[] = { "/packages", "/system/trp", NULL };
+    int shown = 0;
+    for (int d = 0; dirs[d]; d++) {
+        trpm_scan(dirs[d], list);
+        for (int i = 0; i < list->n; i++) {
+            if (arg && arg[0] && !str_contains(list->names[i], arg)) continue;
+            char p[96], src[96];
+            const char *err;
+            strncpy(src, dirs[d], sizeof(src) - 1); src[sizeof(src) - 1] = '\0';
+            str_append(src, "/", sizeof(src)); str_append(src, list->names[i], sizeof(src)); str_append(src, ".trp", sizeof(src));
+            if (trpm_load(src, &err) != 0) continue;
+            int st = trpm_find_installed(list->names[i], p, sizeof(p));
+            trpm_print_line(list->names[i], st == 2 ? "built-in" : st == 1 ? "installed" : "available");
+            shown++;
+        }
+    }
+    if (!shown) io_put_string("trpm: nothing matched. Drop .trp files in /packages, or set a repo with: trpm repo <host>\n");
+    kfree(list);
+}
+
+static void cmd_trpm_update(const char *arg) {
+    if (!need_fs("trpm")) return;
+    char host[256];
+    if (!trpm_get_repo_host(host, sizeof(host))) { io_put_string("trpm: no repo configured - set one with: trpm repo <host>\n"); return; }
+    trpm_names_t *list = (trpm_names_t *)kmalloc(sizeof(trpm_names_t));
+    if (!list) return;
+    trpm_scan(PKG_DIR, list);
+    int count = 0;
+    for (int i = 0; i < list->n; i++) {
+        if (arg && arg[0] && strcmp(arg, list->names[i]) != 0) continue;
+        char name[48];
+        strncpy(name, list->names[i], sizeof(name) - 1); name[sizeof(name) - 1] = '\0';
+        char tmp[] = "/_trpm_download.trp";
+        fs_unlink(tmp);
+        if (!trpm_fetch_remote(host, name, tmp)) continue;
+        const char *err;
+        char cur[96];
+        trpm_path_for(name, cur, sizeof(cur));
+        if (trpm_load(cur, &err) != 0) { fs_unlink(tmp); continue; }
+        char oldv[64];
+        strncpy(oldv, g_pm.version, sizeof(oldv) - 1); oldv[sizeof(oldv) - 1] = '\0';
+        if (trpm_load(tmp, &err) != 0) { io_put_string("trpm: skipping "); io_put_string(name); io_put_string(": "); io_put_string(err); io_put_char('\n'); fs_unlink(tmp); continue; }
+        if (strcmp(oldv, g_pm.version) == 0) { io_put_string("trpm: "); io_put_string(name); io_put_string(" is up to date\n"); fs_unlink(tmp); continue; }
+        trpm_install_one(tmp, 0, &count);
+        fs_unlink(tmp);
+    }
+    if (!list->n) io_put_string("trpm: no installed packages to update\n");
+    kfree(list);
+}
+
+static void cmd_trpm_run(const char *arg) {
+    if (!arg || !arg[0]) { io_put_string("usage: trpm run <name>\n"); return; }
+    char name[48], path[96];
+    const char *err;
+    trpm_name_from(arg, name, sizeof(name));
+    if (!trpm_name_ok(name) || !trpm_find_installed(name, path, sizeof(path))) { io_put_string("trpm: not installed: "); io_put_string(arg); io_put_char('\n'); return; }
+    if (trpm_load(path, &err) != 0) { io_put_string("trpm: "); io_put_string(err); io_put_char('\n'); return; }
+    if (g_pm.appstat_is_gui && graphics_is_available()) {
+        if (apphost_launch(path) != 0) { io_put_string("trpm: could not start "); io_put_string(name); io_put_char('\n'); }
+        else { io_put_string("trpm: started "); io_put_string(name); io_put_char('\n'); }
+        return;
+    }
+    cmd_run(path);
+}
+
+static void cmd_trpm_help(void) {
+    io_put_string("trpm - Toriginal package manager\n");
+    io_put_string("  trpm list                    installed and built-in packages\n");
+    io_put_string("  trpm search [text]           packages in /packages and /system/trp\n");
+    io_put_string("  trpm info <name|file.trp>    details, dependencies, checksum\n");
+    io_put_string("  trpm install <name|file>...  install from a file, /packages, or the repo\n");
+    io_put_string("  trpm remove [-f] <name>      uninstall\n");
+    io_put_string("  trpm update [name]           fetch newer versions from the repo\n");
+    io_put_string("  trpm run <name>              start an installed package\n");
+    io_put_string("  trpm repo [host[:port]]      show or set the HTTP repo\n");
 }
 
 static void cmd_trpm(const char *arg) {
-    if (!arg || !arg[0]) {
-        io_put_string("usage: trpm <list|install|remove> [args]\n"); return;
-    }
+    if (!arg || !arg[0]) { cmd_trpm_help(); return; }
     char abuf[256]; strncpy(abuf, arg, sizeof(abuf)-1); abuf[sizeof(abuf)-1]='\0';
     char *rest = split_first(abuf);
 
-    if (strcmp(abuf, "list")    == 0) { cmd_trpm_list();           return; }
-    if (strcmp(abuf, "install") == 0) { cmd_trpm_install(rest);    return; }
-    if (strcmp(abuf, "remove")  == 0) { cmd_trpm_remove(rest);     return; }
-    if (strcmp(abuf, "repo")    == 0) { cmd_trpm_repo(rest);       return; }
+    if (strcmp(abuf, "list") == 0 || strcmp(abuf, "ls") == 0)           { cmd_trpm_list();         return; }
+    if (strcmp(abuf, "install") == 0 || strcmp(abuf, "add") == 0)       { cmd_trpm_install(rest);  return; }
+    if (strcmp(abuf, "remove") == 0 || strcmp(abuf, "rm") == 0 ||
+        strcmp(abuf, "uninstall") == 0)                                  { cmd_trpm_remove(rest);   return; }
+    if (strcmp(abuf, "info") == 0 || strcmp(abuf, "show") == 0)         { cmd_trpm_info(rest);     return; }
+    if (strcmp(abuf, "search") == 0)                                     { cmd_trpm_search(rest);   return; }
+    if (strcmp(abuf, "update") == 0 || strcmp(abuf, "upgrade") == 0)    { cmd_trpm_update(rest);   return; }
+    if (strcmp(abuf, "run") == 0 || strcmp(abuf, "start") == 0)         { cmd_trpm_run(rest);      return; }
+    if (strcmp(abuf, "repo") == 0)                                       { cmd_trpm_repo(rest);     return; }
+    if (strcmp(abuf, "help") == 0)                                       { cmd_trpm_help();         return; }
 
     io_put_string("trpm: unknown subcommand '"); io_put_string(abuf);
-    io_put_string("' - use list, install, remove, repo\n");
+    io_put_string("' - try: trpm help\n");
 }
 
 /* ── dispatch ────────────────────────────────────────────────────────────── */
@@ -1745,6 +2093,7 @@ void sys_shell_dispatch(const char *line) {
     if (strcmp(cmd,"help")     ==0) { cmd_help();                  return; }
     if (strcmp(cmd,"advancedhelp") ==0) { cmd_advanced_help();      return; }
     if (strcmp(cmd,"sysver")   ==0) { cmd_sysver();                return; }
+    if (strcmp(cmd,"osimage")  ==0) { cmd_osimage();               return; }
     if (strcmp(cmd,"uname")    ==0) { io_put_string(KERNEL_NAME " " OS_NAME " " OS_VERSION " " BUILD_ARCH "\n"); return; }
     if (strcmp(cmd,"cls")      ==0) { cmd_cls();                   return; }
     if (strcmp(cmd,"pwd")      ==0) { cmd_pwd();                   return; }
@@ -1758,6 +2107,7 @@ void sys_shell_dispatch(const char *line) {
     if (strcmp(cmd,"copy")     ==0) { cmd_copy(arg);               return; }
     if (strcmp(cmd,"echo")     ==0) { cmd_echo(arg);               return; }
     if (strcmp(cmd,"run")      ==0) { cmd_run(arg);                return; }
+    if (strcmp(cmd,"cursor")   ==0) { cursor_reload(); io_put_string("cursor: reloaded\n"); return; }
     if (strcmp(cmd,"desktop")  ==0) { cmd_desktop();               return; }
     if (strcmp(cmd,"settings") ==0) { cmd_settings(arg);           return; }
     if (strcmp(cmd,"wallpaper")==0) { cmd_wallpaper(arg);          return; }

@@ -1,9 +1,6 @@
 #ifndef TRP_RT_H
 #define TRP_RT_H
-/* Minimal freestanding runtime for Toriginal OS .trp programs.
- * (The full trplibc lives in a separate repo; the install-time programs
- * only need a handful of syscalls, so they carry this tiny shim instead
- * of depending on it.) */
+
 #include "../../include/install_abi.h"
 
 typedef unsigned long long u64;
@@ -20,9 +17,7 @@ static inline long trp_sys(long n, long a, long b, long c) {
     register long r10 __asm__("r10") = 0;
     register long r8  __asm__("r8")  = 0;
     register long r9  __asm__("r9")  = 0;
-    /* This kernel's syscall return path does not preserve the usual
-     * argument registers (rdi/rsi/rdx/r8-r10), unlike Linux - so tell the
-     * compiler every one of them may be clobbered. */
+
     __asm__ volatile("syscall"
                      : "=a"(r), "+D"(a), "+S"(b), "+d"(c), "+r"(r10), "+r"(r8), "+r"(r9)
                      : "0"(n)
@@ -30,7 +25,6 @@ static inline long trp_sys(long n, long a, long b, long c) {
     return r;
 }
 
-/* ── libc-ish bits ──────────────────────────────────────────────────────── */
 __attribute__((unused)) static int  t_strlen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 __attribute__((unused)) static int  t_streq(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
 __attribute__((unused)) static void t_memset(void *d, int v, u64 n) { u8 *p = d; while (n--) *p++ = (u8)v; }
@@ -38,7 +32,6 @@ __attribute__((unused)) static void t_memcpy(void *d, const void *s, u64 n) { u8
 __attribute__((unused)) static void t_strcpy(char *d, const char *s, int max) { int i = 0; while (s[i] && i < max - 1) { d[i] = s[i]; i++; } d[i] = 0; }
 __attribute__((unused)) static char t_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
 
-/* ── console ────────────────────────────────────────────────────────────── */
 __attribute__((unused)) static void putc_(char c) { trp_sys(SYS_WRITE_N, 1, (long)&c, 1); }
 __attribute__((unused)) static void puts_(const char *s) { trp_sys(SYS_WRITE_N, 1, (long)s, t_strlen(s)); }
 __attribute__((unused)) static void putu(u64 v) {
@@ -62,7 +55,6 @@ __attribute__((unused)) static void clear_(void) { trp_sys(SYS_CONSOLE_CTL, CONS
 __attribute__((unused)) static void color_(int fg, int bg) { trp_sys(SYS_CONSOLE_CTL, CONSOLE_CTL_SETCOLOR, fg, bg); }
 __attribute__((unused)) static void yield_(void) { trp_sys(SYS_YIELD_N, 0, 0, 0); }
 
-/* Blocking single-key read (PS/2, USB HID or serial - the kernel merges them). */
 __attribute__((unused)) static int getch_(void) {
     char c;
     for (;;) {
@@ -72,7 +64,6 @@ __attribute__((unused)) static int getch_(void) {
     }
 }
 
-/* Line input with echo (mask != 0 echoes '*'). Returns length. */
 __attribute__((unused)) static int readline_(char *buf, int max, int mask) {
     int i = 0;
     for (;;) {

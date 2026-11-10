@@ -1,3 +1,4 @@
+#include "logo.h"
 #include "io.h"
 #include "string.h"
 #include "keyboard.h"
@@ -78,14 +79,11 @@ static char shell_getc(void) {
 
 static void build_prompt(char *out, size_t outlen) {
     const char *cwd = sys_shell_get_cwd();
-    if (!cwd || cwd[0] == '\0' || (cwd[0] == '/' && cwd[1] == '\0')) {
-        strncpy(out, "os~$ ", outlen - 1);
-        out[outlen - 1] = '\0';
-        return;
-    }
     size_t n = 0;
-    out[n++] = 'o'; out[n++] = 's';
-    for (const char *p = cwd; *p && n < outlen - 5; p++) out[n++] = *p;
+    const char *root = "root";
+    while (*root && n < outlen - 5) out[n++] = *root++;
+    if (cwd && cwd[0] == '/' && cwd[1] != '\0')
+        for (const char *p = cwd; *p && n < outlen - 5; p++) out[n++] = *p;
     out[n++] = '~'; out[n++] = '$'; out[n++] = ' '; out[n] = '\0';
 }
 
@@ -252,13 +250,7 @@ static void shell_loop(const char *banner, int show_prompt_dynamic) {
 void kernel_os_shell(void) {
     sys_shell_apply_saved_display_settings();
     shell_loop(
-       "\n\n"
-        "    ______           _         _             __   ____  _____\n"
-        "   /_  __/___  _____(_)___ _  (_)___  ____ _/ /  / __ \\/ ___/\n"
-        "    / / / __ \\/ ___/ / __ `/ / / __ \\/ __ `/ /  / / / /\\__ \\ \n"
-        "   / / / /_/ / /  / / /_/ / / / / / / /_/ / /  / /_/ /___/ / \n"
-        "  /_/  \\____/_/  /_/\\__, / /_/_/ /_/\\__,_/_/   \\____//____/  \n"
-        "                   /____/                                    \n"
+       "\n\n" TORIGINAL_LOGO
         "\n"
         "Toriginal OS v1.3  |  freeNT kernel 1.3\n"
         "type 'help' for a list of commands\n"

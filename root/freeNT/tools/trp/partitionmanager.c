@@ -1,7 +1,6 @@
-/* partitionmanager.c */
 #include "trp_rt.h"
 
-#define ALIGN_SECTORS 2048u          /* 1 MiB */
+#define ALIGN_SECTORS 2048u
 #define MIN_SYSTEM_MIB 128u
 
 typedef struct {
@@ -14,9 +13,9 @@ typedef struct {
 } __attribute__((packed)) pe_t;
 
 static u8        g_sector[512];
-static pe_t     *g_pe;                 /* -> g_sector + 446 */
+static pe_t     *g_pe;
 static disk_info_t g_disk;
-static int       g_target = -1;        /* chosen system slot */
+static int       g_target = -1;
 static int       g_dirty;
 
 static u64 mib(u64 sectors) { return sectors / 2048ULL; }
@@ -36,11 +35,10 @@ static const char *type_name(u8 t) {
 static void load_table(void) {
     trp_sys(SYS_PART_READ, (long)g_sector, 0, 0);
     if (g_sector[510] != 0x55 || g_sector[511] != 0xAA) {
-        t_memset(g_sector + 446, 0, 64);           /* blank/unknown disk */
+        t_memset(g_sector + 446, 0, 64);
     }
     g_pe = (pe_t *)(g_sector + 446);
-    /* Anything not a valid partition for our rules (e.g. the stage1 placeholder
-     * entry with start LBA 0) is dropped from the editable copy. */
+
     for (int i = 0; i < 4; i++) {
         if (g_pe[i].count && g_pe[i].start < g_disk.boot_reserved) t_memset(&g_pe[i], 0, 16);
     }
@@ -50,7 +48,6 @@ static void load_table(void) {
 
 __attribute__((unused)) static int used_slots(void) { int n = 0; for (int i = 0; i < 4; i++) if (g_pe[i].count) n++; return n; }
 
-/* Free gaps (aligned), sorted by start. Returns count; gap_start/gap_len in sectors. */
 static int find_gaps(u64 *gs, u64 *gl, int max) {
     u64 order_start[4]; u64 order_end[4]; int n = 0;
     for (int i = 0; i < 4; i++) if (g_pe[i].count) {
@@ -64,8 +61,7 @@ static int find_gaps(u64 *gs, u64 *gl, int max) {
     int g = 0;
     u64 cur = align_up(g_disk.boot_reserved);
     u64 disk_end = align_down(g_disk.total_sectors);
-    /* MBR start/length fields are 32-bit: on a disk over 2 TiB only the
-     * first 2 TiB can be partitioned. */
+
     if (disk_end > 0xFFFFF800ULL) disk_end = 0xFFFFF800ULL;
     for (int i = 0; i <= n; i++) {
         u64 next = (i < n) ? order_start[i] : disk_end;
@@ -76,7 +72,6 @@ static int find_gaps(u64 *gs, u64 *gl, int max) {
     }
     return g;
 }
-
 
 #define K_UP    0x83
 #define K_DOWN  0x84

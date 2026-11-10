@@ -14,6 +14,8 @@
  * mm_alloc_pages(1) (a single physical frame with nothing mapped into
  * it at all - not usable as a real PML4). */
 paddr_t mm_create_address_space(void);
+void    mm_free_address_space(paddr_t root);
+paddr_t mm_boot_cr3(void);
 void    mm_record_boot_cr3(void);   /* call once, early, before any process exists */
 
 /* Maps one 4 KiB page into a SPECIFIC address space (identified by its

@@ -58,12 +58,18 @@ def find_asset_root(cli_root):
     return None
 
 
-def build_sources(asset_root):
-    return [
+def build_sources(asset_root, trp_dir):
+    sources = [
         (os.path.join(asset_root, "desktop", "wallpapers"), "/system/gui/wallpapers/"),
         (os.path.join(asset_root, "desktop", "startmenu"), "/system/gui/startmenu/"),
         (os.path.join(asset_root, "desktop", "mice"), "/sys/gui/assets/"),
+        (os.path.join(asset_root, "icons"), "/system/gui/icons/"),
+        (os.path.join(asset_root, "cursors"), "/system/gui/cursors/"),
+        (os.path.join(asset_root, "pritxt"), "/system/pritxt/"),
     ]
+    if trp_dir:
+        sources.append((trp_dir, "/system/trp/"))
+    return sources
 
 PATH_FIELD_SIZE = 128
 
@@ -82,22 +88,25 @@ def discover_files(src_dir):
 
 
 def main():
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
-        print("usage: build_asset_blob.py <output_path> [asset_root]")
+    if len(sys.argv) < 2 or len(sys.argv) > 4:
+        print("usage: build_asset_blob.py <output_path> [asset_root] [trp_dir]")
         sys.exit(1)
     out_path = sys.argv[1]
-    asset_root = find_asset_root(sys.argv[2] if len(sys.argv) == 3 else None)
+    asset_root = find_asset_root(sys.argv[2] if len(sys.argv) >= 3 and sys.argv[2] else None)
+    trp_dir = sys.argv[3] if len(sys.argv) == 4 else None
     if asset_root is None:
         print("[build_asset_blob] WARNING: no gui assets folder found - embedding no assets")
         sources = []
     else:
         print(f"[build_asset_blob] asset root: {asset_root}")
-        sources = build_sources(asset_root)
+        sources = build_sources(asset_root, trp_dir)
 
     entries = []  # (dest_path, file_bytes)
     for src_dir, dest_prefix in sources:
         for name in discover_files(src_dir):
             dest_path = dest_prefix + name
+            if not name.lower().endswith((".png", ".bmp", ".jpg", ".jpeg", ".trp")) and dest_prefix in ("/system/gui/icons/", "/system/trp/"):
+                continue
             if len(dest_path.encode("utf-8")) >= PATH_FIELD_SIZE:
                 print(f"[build_asset_blob] WARNING: skipping {dest_path!r} - "
                       f"destination path is {len(dest_path)} bytes, "
@@ -107,6 +116,11 @@ def main():
             with open(os.path.join(src_dir, name), "rb") as f:
                 data = f.read()
             entries.append((dest_path, data))
+
+    ob = os.path.join(SCRIPT_DIR, "..", "..", "osbuild")
+    if os.path.isfile(ob):
+        with open(ob, "rb") as f:
+            entries.append(("/system/osbuild", f.read().strip() + b"\n"))
 
     header = b"TRAS" + struct.pack("<I", len(entries))
 

@@ -18,6 +18,8 @@
                               * wm_destroy_window - the GUI syscalls */
 #include "pmm.h"            /* pmm_free_frame - releasing a destroyed
                               * window's pixel-buffer frames */
+#include "apphost.h"
+#include "app_abi.h"
 #include "string.h"         /* memcpy - copying the GUI syscalls' result
                               * structs out to user memory */
 
@@ -45,7 +47,7 @@ typedef struct {
     uint64_t user_rsp_scratch;
 } syscall_percpu_t;
 
-static uint8_t g_syscall_kstack[16384] __attribute__((aligned(16)));
+static uint8_t g_syscall_kstack[65536] __attribute__((aligned(16)));
 static syscall_percpu_t g_syscall_percpu;
 
 static inline void wrmsr(uint32_t msr, uint64_t val) {
@@ -142,6 +144,7 @@ static uint64_t sys_write(uint64_t fd, uint64_t buf, uint64_t len, uint64_t a4, 
 
 static uint64_t sys_exit(uint64_t status, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (apphost_in_slice()) apphost_exit_current((int)status);
     process_set_exit_context(1);
     process_exit((int)status);
     process_set_exit_context(0);
@@ -603,7 +606,7 @@ static uint64_t sys_wm_create_window(uint64_t x, uint64_t y, uint64_t w, uint64_
      * generous fixed cap (64 frames = 256 KiB window) bounds this
      * array's stack usage to something reasonable rather than sizing
      * it from an unbounded, syscall-caller-controlled w/h. */
-    #define SYS_WM_MAX_WINDOW_FRAMES 64
+    #define SYS_WM_MAX_WINDOW_FRAMES 1536
     if (w == 0 || h == 0 || w > 4096 || h > 4096) return (uint64_t)-1; /* reject
         * absurd/zero dimensions before any allocation is attempted -
         * matches wm_create_window_userbacked()'s own internal minimum
@@ -690,6 +693,20 @@ static int sys_wm_find_owned_slot(process_t *cur, uint32_t window_id) {
         if (cur->owned_windows[i] == window_id) return i;
     }
     return -1;
+}
+
+static int wm_remap_cb(uint32_t window_id, uint64_t phys_base, uint32_t new_frames, uint32_t old_frames) {
+    int slot = -1;
+    process_t *p = process_find_window_owner(window_id, &slot);
+    if (!p || slot < 0) return 0;
+    uint64_t vb = SYS_WM_PIXELS_VADDR_BASE + (uint64_t)slot * 0x10000000ULL;
+    int live = (paddr_t)p->page_table_root == paging_current();
+    for (uint32_t i = 0; i < new_frames; i++) {
+        mm_map_page_in(p->page_table_root, vb + (uint64_t)i * 4096, phys_base + (uint64_t)i * 4096, PAGING_WRITE | PAGING_USER);
+        if (live) paging_invalidate_current(vb + (uint64_t)i * 4096);
+    }
+    (void)old_frames;
+    return 1;
 }
 
 static uint64_t sys_wm_destroy_window(uint64_t window_id, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -846,6 +863,13 @@ static void __attribute__((naked)) syscall_entry_stub(void) {
         "mov %rsp, %gs:8\n"
         "mov %gs:0, %rsp\n"
 
+        "cmp $77, %rax\n"
+        "jne 9f\n"
+        "cmpq $0, g_host_save(%rip)\n"
+        "je 9f\n"
+        "jmp host_syscall_yield\n"
+        "9:\n"
+
         "push %rcx\n"
         "push %r11\n"
 
@@ -864,7 +888,9 @@ static void __attribute__((naked)) syscall_entry_stub(void) {
         "pop %r8\n"
         "pop %r9\n"
 
-        "sub $8, %rsp\n"             /* close the 8-byte alignment gap */
+        "mov (%rsp), %rax\n"
+        "sub $8, %rsp\n"
+        "mov %rax, (%rsp)\n"
         "call syscall_dispatch\n"
         "add $16, %rsp\n"            /* undo the sub above, plus the original
                                        * discard of the leftover r9-slot value */
@@ -959,6 +985,8 @@ static uint64_t sys_sysinfo(uint64_t buf, uint64_t a2, uint64_t a3, uint64_t a4,
     return 0;
 }
 
+extern void appsvc_register(void (*reg)(uint32_t, syscall_handler_t));
+
 void syscall_init(void) {
     for (int i = 0; i < NUM_SYSCALLS; i++) g_handlers[i] = 0;
     syscall_register_handler(SYS_WRITE,   sys_write);
@@ -1011,6 +1039,9 @@ void syscall_init(void) {
     syscall_register_handler(SYS_WM_DESTROY_WINDOW, sys_wm_destroy_window);
     syscall_register_handler(SYS_WM_POLL_EVENT,     sys_wm_poll_event);
     syscall_register_handler(SYS_WM_PRESENT,        sys_wm_present);
+
+    appsvc_register(syscall_register_handler);
+    wm_set_remap_hook(wm_remap_cb);
 
     uint64_t efer = rdmsr(MSR_EFER);
     wrmsr(MSR_EFER, efer | 1);

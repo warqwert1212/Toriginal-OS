@@ -182,6 +182,8 @@ png_result_t png_decode(const uint8_t *data, size_t len, png_image_t *out) {
     size_t scan_pos = pos;
     size_t total_idat_bytes = 0;
     int saw_iend = 0;
+    const uint8_t *plte = 0, *trns = 0;
+    uint32_t plte_n = 0, trns_n = 0;
 
     while (scan_pos < len) {
         png_chunk_t chunk;
@@ -207,6 +209,12 @@ png_result_t png_decode(const uint8_t *data, size_t len, png_image_t *out) {
         } else if (chunk_type_is(&chunk, "IDAT")) {
             if (!have_ihdr) return PNG_ERR_BAD_CHUNK; /* IDAT before IHDR - invalid order */
             total_idat_bytes += chunk.length;
+        } else if (chunk_type_is(&chunk, "PLTE")) {
+            plte = chunk.data;
+            plte_n = chunk.length / 3;
+        } else if (chunk_type_is(&chunk, "tRNS")) {
+            trns = chunk.data;
+            trns_n = chunk.length;
         } else if (chunk_type_is(&chunk, "IEND")) {
             saw_iend = 1;
             break;
@@ -218,13 +226,21 @@ png_result_t png_decode(const uint8_t *data, size_t len, png_image_t *out) {
     }
 
     if (!have_ihdr || !saw_iend) return PNG_ERR_TRUNCATED;
-    if (interlace != 0) return PNG_ERR_UNSUPPORTED_INTERLACE;
+    if (interlace > 1) return PNG_ERR_UNSUPPORTED_INTERLACE;
 
-    uint8_t channels;
-    if (bit_depth != 8) return PNG_ERR_UNSUPPORTED_COLOR;
-    if (color_type == 2) channels = 3;      /* RGB */
-    else if (color_type == 6) channels = 4; /* RGBA */
-    else return PNG_ERR_UNSUPPORTED_COLOR;  /* grayscale/palette/etc - out of scope */
+    uint8_t samples;
+    if (color_type == 0) samples = 1;
+    else if (color_type == 2) samples = 3;
+    else if (color_type == 3) samples = 1;
+    else if (color_type == 4) samples = 2;
+    else if (color_type == 6) samples = 4;
+    else return PNG_ERR_UNSUPPORTED_COLOR;
+    if (bit_depth != 1 && bit_depth != 2 && bit_depth != 4 && bit_depth != 8 && bit_depth != 16) return PNG_ERR_UNSUPPORTED_COLOR;
+    if (color_type == 3 && (bit_depth == 16 || !plte)) return PNG_ERR_UNSUPPORTED_COLOR;
+    if ((color_type == 2 || color_type == 4 || color_type == 6) && bit_depth < 8) return PNG_ERR_UNSUPPORTED_COLOR;
+    uint8_t channels = (color_type == 4 || color_type == 6 || (color_type == 3 && trns_n)) ? 4 : 3;
+    uint32_t bits_px = (uint32_t)bit_depth * samples;
+    uint32_t bpp = bits_px >= 8 ? bits_px / 8 : 1;
 
     if (total_idat_bytes == 0) return PNG_ERR_TRUNCATED;
 
@@ -261,20 +277,21 @@ png_result_t png_decode(const uint8_t *data, size_t len, png_image_t *out) {
         }
     }
 
-    /* --- Decompress the concatenated IDAT stream --- */
-
-    /* Each scanline is preceded by one filter-type byte (spec section
-     * 7.2), so the decompressed size is height * (1 + row_bytes),
-     * not just height * row_bytes. */
-    uint32_t row_bytes = width * channels;
-    uint64_t decompressed_size = (uint64_t)height * ((uint64_t)row_bytes + 1);
-
-    /* Sanity ceiling consistent with the other kmalloc call sites in
-     * this graphics stack (gfx2d_surface_create, gfx3d_init) - reject
-     * rather than risk an implausible allocation from a corrupt or
-     * maliciously-crafted IHDR (e.g. width/height claiming a
-     * multi-gigabyte image). */
-    if (decompressed_size > 0x10000000ULL) {
+    static const uint8_t px0[7] = {0, 4, 0, 2, 0, 1, 0}, py0[7] = {0, 0, 4, 0, 2, 0, 1};
+    static const uint8_t pdx[7] = {8, 8, 4, 4, 2, 2, 1}, pdy[7] = {8, 8, 8, 4, 4, 2, 2};
+    int npass = interlace ? 7 : 1;
+    uint32_t pw[7], ph[7];
+    uint64_t decompressed_size = 0;
+    for (int ps = 0; ps < npass; ps++) {
+        if (!interlace) { pw[0] = width; ph[0] = height; }
+        else {
+            pw[ps] = width > px0[ps] ? (width - px0[ps] + pdx[ps] - 1) / pdx[ps] : 0;
+            ph[ps] = height > py0[ps] ? (height - py0[ps] + pdy[ps] - 1) / pdy[ps] : 0;
+        }
+        if (pw[ps] && ph[ps])
+            decompressed_size += (uint64_t)ph[ps] * (1 + (((uint64_t)pw[ps] * bits_px + 7) / 8));
+    }
+    if (decompressed_size > 0x40000000ULL) {
         kfree(idat_concat);
         return PNG_ERR_OUT_OF_MEMORY;
     }
@@ -295,37 +312,62 @@ png_result_t png_decode(const uint8_t *data, size_t len, png_image_t *out) {
         return PNG_ERR_DECOMPRESS_FAILED;
     }
 
-    /* --- Unfilter each scanline in place, then strip the filter-type
-     * bytes into the final pixel buffer --- */
-    uint8_t bpp = channels; /* bytes per pixel, since bit_depth==8 is enforced above */
-
-    uint64_t pixel_buffer_size = (uint64_t)height * row_bytes;
-    uint8_t *pixels = (uint8_t *)kmalloc((size_t)pixel_buffer_size);
+    uint64_t out_size = (uint64_t)width * height * channels;
+    if (out_size > 0x40000000ULL) { kfree(raw); return PNG_ERR_OUT_OF_MEMORY; }
+    uint8_t *pixels = (uint8_t *)kmalloc((size_t)out_size);
     if (!pixels) {
         kfree(raw);
         return PNG_ERR_OUT_OF_MEMORY;
     }
 
-    uint8_t *prev_row_ptr = 0;
-    for (uint32_t y = 0; y < height; y++) {
-        uint8_t *src_row = raw + (uint64_t)y * (row_bytes + 1);
-        uint8_t filter_type = src_row[0];
-        uint8_t *row_data = src_row + 1;
+    uint8_t *cur = raw;
+    for (int ps = 0; ps < npass; ps++) {
+        if (!pw[ps] || !ph[ps]) continue;
+        uint32_t row_bytes = (uint32_t)(((uint64_t)pw[ps] * bits_px + 7) / 8);
+        uint8_t *prev_row_ptr = 0;
+        for (uint32_t y = 0; y < ph[ps]; y++) {
+            uint8_t filter_type = cur[0];
+            uint8_t *row = cur + 1;
+            cur += 1 + row_bytes;
+            if (filter_type > 4) { kfree(raw); kfree(pixels); return PNG_ERR_BAD_FILTER; }
+            unfilter_row(filter_type, row, prev_row_ptr, row_bytes, (uint8_t)bpp);
+            prev_row_ptr = row;
 
-        if (filter_type > 4) {
-            kfree(raw);
-            kfree(pixels);
-            return PNG_ERR_BAD_FILTER;
+            uint32_t oy = interlace ? py0[ps] + y * pdy[ps] : y;
+            for (uint32_t x = 0; x < pw[ps]; x++) {
+                uint32_t ox = interlace ? px0[ps] + x * pdx[ps] : x;
+                uint8_t *d = pixels + ((uint64_t)oy * width + ox) * channels;
+                uint8_t r, g, b, a = 255;
+                if (color_type == 2 || color_type == 6) {
+                    const uint8_t *q = row + (size_t)x * samples * (bit_depth / 8);
+                    uint32_t st = bit_depth / 8;
+                    r = q[0]; g = q[st]; b = q[2 * st];
+                    if (color_type == 6) a = q[3 * st];
+                } else if (color_type == 4) {
+                    const uint8_t *q = row + (size_t)x * 2 * (bit_depth / 8);
+                    r = g = b = q[0];
+                    a = q[bit_depth / 8];
+                } else {
+                    uint32_t v;
+                    if (bit_depth == 16) v = row[x * 2];
+                    else if (bit_depth == 8) v = row[x];
+                    else {
+                        uint32_t bit = x * bit_depth;
+                        v = (row[bit >> 3] >> (8 - bit_depth - (bit & 7))) & ((1u << bit_depth) - 1);
+                    }
+                    if (color_type == 3) {
+                        if (v >= plte_n) v = 0;
+                        r = plte[v * 3]; g = plte[v * 3 + 1]; b = plte[v * 3 + 2];
+                        if (channels == 4) a = v < trns_n ? trns[v] : 255;
+                    } else {
+                        if (bit_depth < 8) v = v * 255 / ((1u << bit_depth) - 1);
+                        r = g = b = (uint8_t)v;
+                    }
+                }
+                d[0] = r; d[1] = g; d[2] = b;
+                if (channels == 4) d[3] = a;
+            }
         }
-
-        unfilter_row(filter_type, row_data, prev_row_ptr, row_bytes, bpp);
-
-        /* Copy this now-unfiltered row into the final contiguous
-         * pixel buffer (no filter-type byte, no per-row gap). */
-        uint8_t *dst_row = pixels + (uint64_t)y * row_bytes;
-        for (uint32_t i = 0; i < row_bytes; i++) dst_row[i] = row_data[i];
-
-        prev_row_ptr = row_data; /* next row's "above" reference */
     }
 
     kfree(raw);

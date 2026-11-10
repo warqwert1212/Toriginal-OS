@@ -5,6 +5,9 @@
 
 #define KERNEL_NAME    "freeNT"
 #define KERNEL_VERSION "1.3"
+#ifndef BUILD_NUMBER
+#define BUILD_NUMBER   "0"
+#endif
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info);
 void kernel_panic(const char* reason);

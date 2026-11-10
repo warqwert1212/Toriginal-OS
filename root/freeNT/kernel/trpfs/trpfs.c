@@ -9,6 +9,7 @@
  * ========================================================================= */
 
 #include "trpfs.h"
+#include "ata.h"
 #include "string.h"
 #include "memory.h"
 #include "pit.h"
@@ -23,7 +24,8 @@
  * helper that reuses the same one. ------------------------------------- */
 static uint8_t g_data_buf[TRPFS_BLOCK_SIZE];   /* file data blocks          */
 static uint8_t g_dir_buf[TRPFS_BLOCK_SIZE];    /* directory entry blocks    */
-static uint8_t g_ptr_buf[TRPFS_BLOCK_SIZE];    /* indirect pointer blocks   */
+static uint8_t g_ptr_buf[TRPFS_BLOCK_SIZE];
+static uint8_t g_ptr2_buf[TRPFS_BLOCK_SIZE];    /* indirect pointer blocks   */
 
 /* ── Mounted volume state ────────────────────────────────────────────────── */
 static trpfs_blkdev_t   *g_dev    = NULL;
@@ -98,6 +100,7 @@ static int flush_dirty(void) {
         g_bm_lo = (uint64_t)-1; g_bm_hi = 0;
     }
     if (g_sb_dirty && flush_superblock() != 0) rc = -1;
+    ata_flush_all();
     return rc;
 }
 
@@ -106,14 +109,22 @@ static inline void bit_set(uint64_t bit)  { g_bitmap[bit >> 3] |=  (uint8_t)(1u 
 static inline void bit_clear(uint64_t bit){ g_bitmap[bit >> 3] &= (uint8_t)~(1u << (bit & 7)); }
 
 /* Allocate one free data block. Returns block number, or 0 on failure. */
+static uint64_t g_alloc_hint = 0;
+
 static uint64_t alloc_block(void) {
-    for (uint64_t b = g_sb.data_start_block; b < g_sb.total_blocks; b++) {
-        if (!bit_test(b)) {
-            bit_set(b);
-            bm_mark(b);
-            g_sb.free_blocks--;
-            g_sb_dirty = 1;
-            return b;
+    uint64_t start = g_alloc_hint < g_sb.data_start_block ? g_sb.data_start_block : g_alloc_hint;
+    for (int pass = 0; pass < 2; pass++) {
+        uint64_t lo = pass == 0 ? start : g_sb.data_start_block;
+        uint64_t hi = pass == 0 ? g_sb.total_blocks : start;
+        for (uint64_t b = lo; b < hi; b++) {
+            if (!bit_test(b)) {
+                bit_set(b);
+                bm_mark(b);
+                g_sb.free_blocks--;
+                g_sb_dirty = 1;
+                g_alloc_hint = b + 1;
+                return b;
+            }
         }
     }
     return 0;
@@ -122,6 +133,7 @@ static uint64_t alloc_block(void) {
 static void free_block(uint64_t b) {
     if (b < g_sb.data_start_block || b >= g_sb.total_blocks) return;
     if (bit_test(b)) {
+        if (b < g_alloc_hint) g_alloc_hint = b;
         bit_clear(b);
         bm_mark(b);
         g_sb.free_blocks++;
@@ -188,6 +200,23 @@ static void free_inode_blocks(trpfs_inode_raw_t *node) {
         free_block(node->indirect);
         node->indirect = 0;
     }
+    if (node->double_indirect) {
+        if (blk_read(node->double_indirect, g_ptr2_buf) == 0) {
+            uint64_t *l1 = (uint64_t *)g_ptr2_buf;
+            for (uint64_t a = 0; a < TRPFS_PTRS_PER_BLOCK; a++) {
+                if (!l1[a]) continue;
+                if (blk_read(l1[a], g_ptr_buf) == 0) {
+                    uint64_t *l2 = (uint64_t *)g_ptr_buf;
+                    for (uint64_t b = 0; b < TRPFS_PTRS_PER_BLOCK; b++)
+                        if (l2[b]) free_block(l2[b]);
+                }
+                free_block(l1[a]);
+                if (blk_read(node->double_indirect, g_ptr2_buf) != 0) break;
+            }
+        }
+        free_block(node->double_indirect);
+        node->double_indirect = 0;
+    }
 }
 
 static void free_inode(uint64_t ino) {
@@ -206,13 +235,14 @@ static void free_inode(uint64_t ino) {
  * If `allocate` is non-zero, missing blocks (and the indirect block, if
  * needed) are allocated and `*dirty` is set so the caller re-writes the
  * inode.  Returns 0 if `index` is out of range or allocation failed. */
+static int g_skip_zero = 0;
+
 static uint64_t inode_block(trpfs_inode_raw_t *node, uint64_t index, int allocate, int *dirty) {
     if (index < TRPFS_DIRECT_BLOCKS) {
         if (node->direct[index] == 0 && allocate) {
             uint64_t b = alloc_block();
             if (!b) return 0;
-            memset(g_data_buf, 0, sizeof(g_data_buf));
-            blk_write(b, g_data_buf);
+            if (!g_skip_zero) { memset(g_data_buf, 0, sizeof(g_data_buf)); blk_write(b, g_data_buf); }
             node->direct[index] = b;
             *dirty = 1;
         }
@@ -220,7 +250,44 @@ static uint64_t inode_block(trpfs_inode_raw_t *node, uint64_t index, int allocat
     }
 
     uint64_t iidx = index - TRPFS_DIRECT_BLOCKS;
-    if (iidx >= TRPFS_PTRS_PER_BLOCK) return 0; /* beyond v1 max file size */
+    if (iidx >= TRPFS_PTRS_PER_BLOCK) {
+        uint64_t didx = iidx - TRPFS_PTRS_PER_BLOCK;
+        if (didx >= (uint64_t)TRPFS_PTRS_PER_BLOCK * TRPFS_PTRS_PER_BLOCK) return 0;
+        uint64_t a = didx / TRPFS_PTRS_PER_BLOCK, b = didx % TRPFS_PTRS_PER_BLOCK;
+
+        if (node->double_indirect == 0) {
+            if (!allocate) return 0;
+            uint64_t nb = alloc_block();
+            if (!nb) return 0;
+            memset(g_ptr2_buf, 0, sizeof(g_ptr2_buf));
+            blk_write(nb, g_ptr2_buf);
+            node->double_indirect = nb;
+            *dirty = 1;
+        }
+        if (blk_read(node->double_indirect, g_ptr2_buf) != 0) return 0;
+        uint64_t *l1 = (uint64_t *)g_ptr2_buf;
+        if (l1[a] == 0) {
+            if (!allocate) return 0;
+            uint64_t nb = alloc_block();
+            if (!nb) return 0;
+            memset(g_ptr_buf, 0, sizeof(g_ptr_buf));
+            blk_write(nb, g_ptr_buf);
+            l1[a] = nb;
+            blk_write(node->double_indirect, g_ptr2_buf);
+        }
+        uint64_t l2blk = l1[a];
+        if (blk_read(l2blk, g_ptr_buf) != 0) return 0;
+        uint64_t *l2 = (uint64_t *)g_ptr_buf;
+        if (l2[b] == 0) {
+            if (!allocate) return 0;
+            uint64_t nb = alloc_block();
+            if (!nb) return 0;
+            if (!g_skip_zero) { memset(g_data_buf, 0, sizeof(g_data_buf)); blk_write(nb, g_data_buf); }
+            l2[b] = nb;
+            blk_write(l2blk, g_ptr_buf);
+        }
+        return l2[b];
+    }
 
     if (node->indirect == 0) {
         if (!allocate) return 0;
@@ -239,8 +306,7 @@ static uint64_t inode_block(trpfs_inode_raw_t *node, uint64_t index, int allocat
         if (!allocate) return 0;
         uint64_t b = alloc_block();
         if (!b) return 0;
-        memset(g_data_buf, 0, sizeof(g_data_buf));
-        blk_write(b, g_data_buf);
+        if (!g_skip_zero) { memset(g_data_buf, 0, sizeof(g_data_buf)); blk_write(b, g_data_buf); }
         ptrs[iidx] = b;
         blk_write(node->indirect, g_ptr_buf);
     }
@@ -676,7 +742,9 @@ ssize_t fs_write(fd_t fd, const void *buf, size_t count) {
         uint64_t chunk = TRPFS_BLOCK_SIZE - blk_offset;
         if (chunk > (count - done)) chunk = count - done;
 
+        g_skip_zero = chunk == TRPFS_BLOCK_SIZE;
         uint64_t pb = inode_block(&node, blk_index, 1, &dirty);
+        g_skip_zero = 0;
         if (!pb) break; /* out of space or beyond v1 max file size */
 
         if (chunk != TRPFS_BLOCK_SIZE) {

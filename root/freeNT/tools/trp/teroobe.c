@@ -1,11 +1,3 @@
-/* teroobe.trp - terminal out-of-box setup (second boot).
- *
- * Collects: account (username, password, computer name, timezone),
- * terminal look (text / background / status-bar colour), screen
- * resolution, network, boot options and memory mode. Nothing is applied
- * here: everything is sent to the kernel in one SYS_OOBE_SUBMIT call and
- * the OS applies + saves it, then asks for a restart.
- */
 #include "trp_rt.h"
 
 static const char *color_names[16] = {
@@ -18,10 +10,10 @@ static char user[32], pass[32], host[32] = "toriginal", tz[16] = "UTC";
 static int  c_text = 7, c_bg = 0, c_bar = 1;
 static int  font_mono;
 static char res[16] = "1024x768";
-static int  net_mode = 1;                    /* 0 off, 1 dhcp, 2 static */
+static int  net_mode = 1;
 static char ip[20], mask[20], gw[20], dns[20];
 static int  boot_verbose, boot_safe;
-static int  mem_mode;                        /* 0 max, 1 custom, 2 least */
+static int  mem_mode;
 static u64  ram_kb;
 static sysinfo_t sinfo;
 
@@ -61,7 +53,7 @@ static void ask_text(const char *prompt, char *out, int max, int (*valid)(const 
     char b[64];
     for (;;) {
         puts_(prompt); readline_(b, sizeof(b), 0);
-        if (!b[0] && out[0]) return;                 /* keep default */
+        if (!b[0] && out[0]) return;
         if (valid(b)) { t_strcpy(out, b, max); return; }
         err(hint);
     }
@@ -178,7 +170,6 @@ static void step_system(void) {
     }
 }
 
-/* Append "key=value\n" to the submit buffer. */
 static char out[1024]; static int outn;
 static void kv(const char *k, const char *v) {
     int kl = t_strlen(k), vl = t_strlen(v);

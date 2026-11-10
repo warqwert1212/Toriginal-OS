@@ -56,6 +56,8 @@ typedef enum {
     WM_EVENT_MOUSE_UP,
     WM_EVENT_KEY_DOWN,
     WM_EVENT_KEY_UP,
+    WM_EVENT_CLOSE,
+    WM_EVENT_RESIZE,
 } wm_event_type_t;
 
 typedef struct {
@@ -139,6 +141,7 @@ typedef struct {
 
 /* Call once at startup. Sets screen dimensions so WM can clamp windows. */
 void wm_init(int32_t screen_w, int32_t screen_h);
+void wm_set_screen(int32_t screen_w, int32_t screen_h);
 
 /* Shutdown - frees all windows. */
 void wm_shutdown(void);
@@ -146,7 +149,7 @@ void wm_shutdown(void);
 /* Create a new window. Returns window ID (> 0) on success, 0 on failure. */
 /* Same as wm_create_window(), except the pixel buffer is allocated as
  * page-aligned physical frames (pmm_alloc_frame) rather than kmalloc,
- * and *out_phys_frames/*out_frame_count report those frames' physical
+ * and out_phys_frames and out_frame_count report those frames' physical
  * addresses so a syscall layer (see syscall.c's sys_wm_create_window)
  * can map them into a USER PROCESS's own address space via
  * mm_map_page_in() - giving that process direct, zero-syscall-per-
@@ -200,7 +203,10 @@ uint32_t wm_get_focus(void);
  * exactly where it was, not at some default size. */
 void wm_set_maximize_area(int32_t x, int32_t y, int32_t w, int32_t h);
 void wm_minimize_window(uint32_t window_id);
+typedef int (*wm_remap_fn)(uint32_t window_id, uint64_t phys_base, uint32_t new_frames, uint32_t old_frames);
+void wm_set_remap_hook(wm_remap_fn fn);
 void wm_maximize_window(uint32_t window_id);
+int  wm_cursor_hint(int32_t x, int32_t y);
 void wm_restore_window(uint32_t window_id);  /* un-minimizes OR un-maximizes, whichever is set */
 
 /* - Input handling - */

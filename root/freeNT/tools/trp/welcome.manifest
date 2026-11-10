@@ -1,0 +1,8 @@
+Execute at/: welcome.bin
+Window name/: Welcome
+Icon/: /system/gui/icons/vista_get_started.png
+Language/: bin
+Version/: 1.0
+Description/: System information
+Appstat/: gui
+mark executable/

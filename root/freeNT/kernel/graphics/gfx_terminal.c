@@ -527,9 +527,13 @@ void gterm_tick(void) {
         cursor_get_size(g_last_mouse_shape, &last_w, &last_h);
 
         uint32_t r0, c0, r1, c1;
-        pixel_to_cell(g_last_mouse_x, g_last_mouse_y, &r0, &c0);
-        pixel_to_cell(g_last_mouse_x + (int32_t)last_w - 1,
-                      g_last_mouse_y + (int32_t)last_h - 1, &r1, &c1);
+        int32_t lhx, lhy;
+        cursor_get_hotspot(g_last_mouse_shape, &lhx, &lhy);
+        int32_t lx0 = g_last_mouse_x - lhx, ly0 = g_last_mouse_y - lhy;
+        if (lx0 < 0) lx0 = 0;
+        if (ly0 < 0) ly0 = 0;
+        pixel_to_cell(lx0, ly0, &r0, &c0);
+        pixel_to_cell(lx0 + (int32_t)last_w - 1, ly0 + (int32_t)last_h - 1, &r1, &c1);
         for (uint32_t r = r0; r <= r1 && r < g_rows; r++) {
             for (uint32_t c = c0; c <= c1 && c < g_cols; c++) {
                 redraw_cell(r, c);

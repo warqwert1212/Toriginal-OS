@@ -85,6 +85,22 @@ void wm_init(int32_t screen_w, int32_t screen_h) {
     g_wm.maximize_h = screen_h;
 }
 
+void wm_set_screen(int32_t screen_w, int32_t screen_h) {
+    g_wm.screen_w = screen_w;
+    g_wm.screen_h = screen_h;
+    for (int i = 0; i < g_wm.count; i++) {
+        wm_window_t *w = &g_wm.windows[i];
+        if (w->x + w->w > screen_w) w->x = screen_w - w->w;
+        if (w->y + w->h > screen_h) w->y = screen_h - w->h;
+        if (w->x < 0) w->x = 0;
+        if (w->y < 0) w->y = 0;
+        int32_t cx, cy, cw, ch;
+        wm_decorate_bounds(w->x, w->y, w->w, w->h, &cx, &cy, &cw, &ch);
+        w->client_x = cx;
+        w->client_y = cy;
+    }
+}
+
 void wm_set_maximize_area(int32_t x, int32_t y, int32_t w, int32_t h) {
     g_wm.maximize_x = x;
     g_wm.maximize_y = y;
@@ -139,7 +155,46 @@ wm_window_t *wm_get_window(uint32_t window_id) {
  * 0 and leaves the window at its old size/buffer if the reallocation
  * fails, rather than leaving win->client_w/h claiming a size the
  * buffer doesn't actually have. */
+static void free_userbacked_pixels(wm_window_t *win);
+void wm_push_event(uint32_t window_id, const wm_event_t *ev);
+static wm_remap_fn g_remap_hook;
+
+void wm_set_remap_hook(wm_remap_fn fn) { g_remap_hook = fn; }
+
+static int wm_userbacked_resize(wm_window_t *win, int32_t ncw, int32_t nch) {
+    if (ncw < 1 || nch < 1 || ncw > 8192 || nch > 8192) return 0;
+    int32_t npitch = ncw * 4;
+    uint64_t nsize = (uint64_t)npitch * (uint64_t)nch;
+    uint32_t need = (uint32_t)((nsize + 4095) / 4096);
+    if (need > win->userbacked_frame_count) {
+        uint32_t want = need + need / 4;
+        void *base = pmm_alloc_contiguous_frames(want);
+        if (!base) { want = need; base = pmm_alloc_contiguous_frames(want); }
+        if (!base) return 0;
+        if (!g_remap_hook || !g_remap_hook(win->id, (uint64_t)(uintptr_t)base, want, win->userbacked_frame_count)) {
+            for (uint32_t i = 0; i < want; i++) pmm_free_frame((uint8_t *)base + (uint64_t)i * 4096);
+            return 0;
+        }
+        free_userbacked_pixels(win);
+        win->pixels = (uint32_t *)base;
+        win->userbacked_frame_count = want;
+    }
+    memset(win->pixels, 0, (size_t)nsize);
+    win->pitch = npitch;
+    win->client_w = ncw;
+    win->client_h = nch;
+    wm_event_t ev;
+    ev.type = WM_EVENT_RESIZE;
+    ev.x = ncw;
+    ev.y = nch;
+    ev.button = 0;
+    ev.keycode = 0;
+    wm_push_event(win->id, &ev);
+    return 1;
+}
+
 static int wm_window_resize_buffer(wm_window_t *win, int32_t new_client_w, int32_t new_client_h) {
+    if (win->flags & WM_WIN_USERBACKED) return wm_userbacked_resize(win, new_client_w, new_client_h);
     int32_t new_pitch = new_client_w * 4;
     uint64_t new_size = (uint64_t)new_pitch * (uint64_t)new_client_h;
     uint64_t old_size = (uint64_t)win->pitch * (uint64_t)win->client_h;
@@ -559,6 +614,28 @@ static drag_type_t wm_classify_point(wm_window_t *win, int32_t x, int32_t y) {
     return DRAG_NONE;
 }
 
+int wm_cursor_hint(int32_t x, int32_t y) {
+    drag_type_t t = g_wm.drag.type;
+    if (t == DRAG_NONE) {
+        wm_window_t *win = NULL;
+        for (int i = g_wm.count - 1; i >= 0; i--) {
+            wm_window_t *w = &g_wm.windows[i];
+            if (w->flags & WM_WIN_MINIMIZED) continue;
+            if (wm_point_in_window(w, x, y)) { win = w; break; }
+        }
+        if (!win || (win->flags & WM_WIN_MAXIMIZED)) return 0;
+        t = wm_classify_point(win, x, y);
+        if (t == DRAG_TITLEBAR) return 0;
+    } else if (t == DRAG_TITLEBAR) return 5;
+    switch (t) {
+        case DRAG_BORDER_LEFT: case DRAG_BORDER_RIGHT: return 2;
+        case DRAG_BORDER_TOP: case DRAG_BORDER_BOTTOM: return 1;
+        case DRAG_CORNER_TL: case DRAG_CORNER_BR: return 3;
+        case DRAG_CORNER_TR: case DRAG_CORNER_BL: return 4;
+        default: return 0;
+    }
+}
+
 /* Find topmost window under the point (search from top down). */
 static wm_window_t *wm_window_at_point(int32_t x, int32_t y) {
     for (int i = g_wm.count - 1; i >= 0; i--) {
@@ -725,6 +802,21 @@ uint32_t wm_handle_mouse_down(int32_t x, int32_t y, int button) {
          * thing" gesture, not a "manipulate this thing" gesture.
          * Callers (desktop.c) use the returned window ID purely
          * to decide which context menu to show. */
+        if ((win->flags & WM_WIN_USERBACKED) &&
+            x >= win->client_x && x < win->client_x + win->client_w &&
+            y >= win->client_y && y < win->client_y + win->client_h) {
+            uint32_t rid = win->id;
+            wm_event_t rev;
+            rev.type = WM_EVENT_MOUSE_DOWN;
+            rev.x = x - win->client_x;
+            rev.y = y - win->client_y;
+            rev.button = 1;
+            rev.keycode = 0;
+            wm_raise_window(rid);
+            wm_set_focus(rid);
+            wm_push_event(rid, &rev);
+            return rid;
+        }
         return win->id;
     }
 

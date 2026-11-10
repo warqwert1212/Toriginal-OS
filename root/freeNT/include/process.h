@@ -219,8 +219,11 @@ void process_set_exit_context(int in_syscall);
 int  process_exit_context(void);
 void process_kill(pid_t pid);
 process_t* process_get_current(void);
+process_t *process_find_window_owner(uint32_t window_id, int *slot);
+void process_set_current(process_t *p);
 process_t* process_get_by_pid(pid_t pid);
 void process_start(pid_t pid);
+void process_reap(process_t *proc);
 
 /* ── Per-process file descriptors ─────────────────────────────────────
  * process_fd_install() finds a free slot and points it at an already-

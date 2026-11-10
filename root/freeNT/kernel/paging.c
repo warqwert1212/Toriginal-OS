@@ -153,6 +153,33 @@ void mm_record_boot_cr3(void)
     g_boot_cr3 = c & ~0xFFFULL;
 }
 
+paddr_t mm_boot_cr3(void) { return (paddr_t)g_boot_cr3; }
+
+void mm_free_address_space(paddr_t root)
+{
+    if (!root || root == (paddr_t)g_boot_cr3) return;
+    if (paging_current() == root && g_boot_cr3) paging_switch_to((paddr_t)g_boot_cr3);
+    pml_entry_t *p4 = (pml_entry_t *)(uintptr_t)root;
+    for (uint32_t i4 = 0; i4 < 512; i4++) {
+        if (!(p4[i4].entry & PAGE_PRESENT)) continue;
+        pml_entry_t *l3 = (pml_entry_t *)(uintptr_t)(p4[i4].entry & ~0xFFFULL);
+        for (uint32_t i3 = 0; i3 < 512; i3++) {
+            if (!(l3[i3].entry & PAGE_PRESENT)) continue;
+            if (i4 == 0 && i3 >= 1 && i3 < 4) continue;
+            pml_entry_t *l2 = (pml_entry_t *)(uintptr_t)(l3[i3].entry & ~0xFFFULL);
+            for (uint32_t i2 = 0; i2 < 512; i2++) {
+                uint64_t e = l2[i2].entry;
+                if (!(e & PAGE_PRESENT) || (e & 0x80ULL)) continue;
+                if (i4 == 0 && i3 == 0 && i2 >= (uint32_t)(KERNEL_SHARED_TOP >> 21)) continue;
+                pmm_free_frame((void *)(uintptr_t)(e & ~0xFFFULL));
+            }
+            pmm_free_frame((void *)l2);
+        }
+        pmm_free_frame((void *)l3);
+    }
+    pmm_free_frame((void *)p4);
+}
+
 static void map_shared_kernel_range(pml_entry_t *pml4)
 {
     for (uint64_t pa = 0; pa < KERNEL_SHARED_TOP; pa += PAGE_SIZE) {

@@ -8,8 +8,8 @@
 #include "string.h"
 
 #define WP_MAX_PATH     256
-#define WP_MAX_ENTRIES  64
-#define WP_MAX_NAME     64
+#define WP_MAX_ENTRIES  128
+#define WP_MAX_NAME     128
 
 static png_image_t g_decoded    = {0};   /* raw decoded PNG, kept so a screen resize can rescale without re-reading the file */
 static color_t     *g_scaled    = NULL;  /* pre-scaled to the last-requested screen size */
@@ -101,9 +101,12 @@ int wallpaper_set_path(const char *path) {
     return 1;
 }
 
+void wallpaper_release_scaled(void) { free_scaled(); }
+
 static void rescale_to(uint32_t w, uint32_t h) {
     if (!g_decoded.pixels || w == 0 || h == 0) return;
     if (g_scaled && g_scaled_w == w && g_scaled_h == h) return;
+    free_scaled();
 
     color_t *buf = (color_t *)kmalloc((size_t)w * h * sizeof(color_t));
     if (!buf) return; /* draw() falls back to flat color when g_scaled stays NULL */
@@ -129,7 +132,7 @@ static void rescale_to(uint32_t w, uint32_t h) {
         for (uint32_t x = 0; x < w; x++) {
             uint32_t sx = off_x + (uint32_t)(((uint64_t)x * crop_w) / w);
             const uint8_t *px = row + (size_t)sx * ch;
-            buf[(size_t)y * w + x] = graphics_rgb(px[0], px[1], px[2]);
+            buf[(size_t)y * w + x] = ch >= 3 ? graphics_rgb(px[0], px[1], px[2]) : graphics_rgb(px[0], px[0], px[0]);
         }
     }
 
@@ -187,7 +190,7 @@ static int collect_cb(const char *name, uint8_t name_len, uint8_t type, void *ct
     return 0;
 }
 
-int wallpaper_list(char out_names[][64], int max_entries) {
+int wallpaper_list(char out_names[][128], int max_entries) {
     if (!out_names || max_entries <= 0) return 0;
 
     wp_listing_t listing = {0};
@@ -195,8 +198,8 @@ int wallpaper_list(char out_names[][64], int max_entries) {
 
     int n = listing.count < max_entries ? listing.count : max_entries;
     for (int i = 0; i < n; i++) {
-        strncpy(out_names[i], listing.names[i], 63);
-        out_names[i][63] = '\0';
+        strncpy(out_names[i], listing.names[i], 127);
+        out_names[i][127] = '\0';
     }
     return n;
 }

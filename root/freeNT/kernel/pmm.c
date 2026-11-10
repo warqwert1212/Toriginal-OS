@@ -304,6 +304,28 @@ void pmm_init(uint64_t multiboot_ptr) {
     for (uint32_t i = 256; i < kernel_end_frame && i < total_frames; i++)
         if (!bitmap_test(i)) { bitmap_set(i); used_frames++; }
 
+    if (multiboot_ptr) {
+        uint32_t mbi_size = *(uint32_t *)(uintptr_t)multiboot_ptr;
+        if (mbi_size >= 8 && mbi_size < 0x100000) {
+            uint32_t f0 = (uint32_t)(multiboot_ptr / PMM_FRAME_SIZE);
+            uint32_t f1 = (uint32_t)((multiboot_ptr + mbi_size + PMM_FRAME_SIZE - 1) / PMM_FRAME_SIZE);
+            for (uint32_t i = f0; i < f1 && i < total_frames; i++)
+                if (!bitmap_test(i)) { bitmap_set(i); used_frames++; }
+        }
+        uint8_t *mp = (uint8_t *)(uintptr_t)(multiboot_ptr + 8);
+        while (1) {
+            struct mb2_tag *mt = (struct mb2_tag *)mp;
+            if (mt->type == MB2_TAG_END || mt->size == 0) break;
+            if (mt->type == 3 && mt->size >= 16) {
+                uint32_t ms = ((uint32_t *)mp)[2], me = ((uint32_t *)mp)[3];
+                uint32_t f0 = ms / PMM_FRAME_SIZE, f1 = (me + PMM_FRAME_SIZE - 1) / PMM_FRAME_SIZE;
+                for (uint32_t i = f0; i < f1 && i < total_frames; i++)
+                    if (!bitmap_test(i)) { bitmap_set(i); used_frames++; }
+            }
+            mp += (mt->size + 7) & ~7u;
+        }
+    }
+
     // Print free RAM
     uint32_t fkb = pmm_get_free_ram();
     char buf[12]; int idx = 0;

@@ -1,5 +1,6 @@
 
 #include "kernel.h"
+#include "crash.h"
 #include "paging.h"
 #include "graphics_core.h"
 #include "types.h"
@@ -314,6 +315,9 @@ static void parse_multiboot(uint32_t mb_info_phys) {
     }
 }
 
+void seed_embedded_assets_to_fs(void);
+void osimage_note_no_disk(void);
+
 static volatile int kernel_initialized = 0;
 
 /* Writes every parsed multiboot module's raw bytes to the TRPFS path
@@ -339,7 +343,7 @@ static volatile int kernel_initialized = 0;
  * bootloader ran - see that function's own comment for why this
  * second path exists at all). mkdir -p's dest_path's parent, then
  * writes total bytes from src to it. */
-static void write_bytes_to_fs_path(const char *dest_path, const uint8_t *src, size_t total) {
+void os_write_file(const char *dest_path, const uint8_t *src, size_t total) {
     char tmp[128];
     size_t len = strlen(dest_path);
     if (len == 0 || len >= sizeof(tmp)) return;
@@ -377,6 +381,25 @@ static void write_bytes_to_fs_path(const char *dest_path, const uint8_t *src, si
     }
 }
 
+
+int os_find_boot_module(const char *dest, const uint8_t **data, uint64_t *len) {
+    for (int i = 0; i < g_mb_module_count; i++) {
+        mb2_module_entry_t *m = &g_mb_modules[i];
+        if (m->phys_end <= m->phys_start) continue;
+        if (strcmp(m->dest_path, dest) != 0) continue;
+        *data = (const uint8_t *)(uintptr_t)m->phys_start;
+        *len = (uint64_t)(m->phys_end - m->phys_start);
+        return 1;
+    }
+    return 0;
+}
+
+int os_boot_module_count(void) { return g_mb_module_count; }
+
+static int is_os_image_module(const char *path) {
+    return strcmp(path, "/system/osimage.img") == 0;
+}
+
 /* Install-session helper: seed only the boot modules whose destination
  * path starts with `prefix` (e.g. "/system/trp/") - used to stage the
  * install-time .trp programs into the live RAM filesystem without also
@@ -388,7 +411,8 @@ int seed_boot_modules_matching(const char *prefix) {
         mb2_module_entry_t *m = &g_mb_modules[i];
         if (m->phys_end <= m->phys_start) continue;
         if (strncmp(m->dest_path, prefix, pl) != 0) continue;
-        write_bytes_to_fs_path(m->dest_path, (const uint8_t *)(uintptr_t)m->phys_start,
+        if (is_os_image_module(m->dest_path)) continue;
+        os_write_file(m->dest_path, (const uint8_t *)(uintptr_t)m->phys_start,
                                 (size_t)(m->phys_end - m->phys_start));
         n++;
     }
@@ -399,98 +423,14 @@ void seed_boot_modules_to_fs(void) {
     for (int i = 0; i < g_mb_module_count; i++) {
         mb2_module_entry_t *m = &g_mb_modules[i];
         if (m->phys_end <= m->phys_start) continue;
+        if (is_os_image_module(m->dest_path)) continue;
         {
             inode_t st;
             if (fs_stat(m->dest_path, &st) == 0 && st.size == (uint64_t)(m->phys_end - m->phys_start)) continue;
         }
-        write_bytes_to_fs_path(m->dest_path, (const uint8_t *)(uintptr_t)m->phys_start,
+        os_write_file(m->dest_path, (const uint8_t *)(uintptr_t)m->phys_start,
                                 (size_t)(m->phys_end - m->phys_start));
     }
-}
-
-/* ── Embedded asset seeding (kernel/boot/asset_blob.s) ─────────────────────
- * seed_boot_modules_to_fs() above only has anything to seed when GRUB
- * booted the install disc - GRUB's grub.cfg has one `module2` line
- * per wallpaper/start-menu-image/cursor file (see the Makefile's
- * dynamic ASSET_*_NAMES discovery), and GRUB turns each into a
- * multiboot2 MB2_TAG_MODULE the kernel receives. TRBL - this OS's own
- * bootloader, which replaces GRUB for every boot after the first
- * install - has no concept of "modules" at all; it only ever loads
- * the kernel ELF itself. So on any TRBL-only boot (which is every
- * boot after the disk is installed), g_mb_module_count is always 0
- * and seed_boot_modules_to_fs() silently does nothing - assets never
- * get (re-)seeded, no matter how many times the automount path below
- * calls it.
- *
- * This is the real fix: the exact same asset files, discovered the
- * same dynamic way (see build_asset_blob.py, which walks the
- * wallpapers/startmenu/cursor folders exactly like the Makefile's
- * ASSET_*_NAMES does), get packed into one flat archive and baked
- * directly into kernel.elf via .incbin (kernel/boot/asset_blob.s) -
- * the same technique bootloader_blobs.s already uses for TRBL's own
- * stage1/stage2. Since the assets now live inside the kernel binary
- * itself, seeding them works identically whether GRUB or TRBL booted
- * this kernel - no module delivery mechanism required at all. */
-typedef struct {
-    char     path[128];
-    uint32_t data_offset;
-    uint32_t data_len;
-} __attribute__((packed)) asset_blob_entry_t;
-
-extern const uint8_t g_asset_blob[];
-extern const uint64_t g_asset_blob_size;
-
-void seed_embedded_assets_to_fs(void) {
-    if (g_asset_blob_size < 8) return;
-    if (g_asset_blob[0] != 'T' || g_asset_blob[1] != 'R' ||
-        g_asset_blob[2] != 'A' || g_asset_blob[3] != 'S') {
-        early_print("[ASSET] Embedded asset blob has bad magic - skipping\n");
-        return;
-    }
-    uint32_t count;
-    memcpy(&count, g_asset_blob + 4, 4);
-
-    uint64_t table_bytes = (uint64_t)count * sizeof(asset_blob_entry_t);
-    if (8 + table_bytes > g_asset_blob_size) {
-        early_print("[ASSET] Embedded asset blob table exceeds blob size - skipping\n");
-        return;
-    }
-
-    const asset_blob_entry_t *table = (const asset_blob_entry_t *)(g_asset_blob + 8);
-
-    uint64_t h = 1469598103934665603ULL;
-    for (uint64_t b = 0; b < g_asset_blob_size; b++) {
-        h ^= g_asset_blob[b];
-        h *= 1099511628211ULL;
-    }
-    char stamp[24];
-    for (int d = 0; d < 16; d++) stamp[d] = g_hex_digits[(h >> (60 - d * 4)) & 0xF];
-    stamp[16] = '\0';
-    char have[24];
-    int up_to_date = syscfg_get("assets_stamp", have, sizeof(have)) && strcmp(have, stamp) == 0;
-
-    int wrote_any = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        const asset_blob_entry_t *e = &table[i];
-        if ((uint64_t)e->data_offset + e->data_len > g_asset_blob_size) {
-            early_print("[ASSET] Embedded asset entry out of range, skipping one file\n");
-            continue;
-        }
-        /* path[] has no guaranteed null terminator if a source
-         * filename's full destination path ever hit exactly 128
-         * bytes - force one so strlen() in write_bytes_to_fs_path()
-         * can't run past the entry into the next one. */
-        char path[129];
-        memcpy(path, e->path, 128);
-        path[128] = '\0';
-        if (up_to_date) {
-            inode_t st;
-            if (fs_stat(path, &st) == 0 && st.size == e->data_len) continue;
-        }
-        write_bytes_to_fs_path(path, g_asset_blob + e->data_offset, e->data_len);
-        wrote_any = 1;
-    }
-    if (!up_to_date || wrote_any) syscfg_set("assets_stamp", stamp);
 }
 
 /* ── Boot logo (kernel/boot/trbl_logo_blob.s) ───────────────────────────────
@@ -645,6 +585,10 @@ static void kernel_init(uint32_t mb_info_phys) {
 
         seed_boot_modules_to_fs();
         seed_embedded_assets_to_fs();
+        {
+            extern const char *osimage_status(void);
+            kprint("[7/8] "); kprint(osimage_status()); kprint("\n");
+        }
 
         bootsplash_progress(72);
         if (cursor_assets_init() == 0) {
@@ -654,6 +598,7 @@ static void kernel_init(uint32_t mb_info_phys) {
         }
     } else {
         kprint("[7/8] No persistent disk found - run 'install' to set one up\n");
+        osimage_note_no_disk();
         kprint("[7/8] Cursor assets unavailable until a disk is installed - using fallback cursor shape\n");
     }
 
@@ -668,9 +613,15 @@ static void kernel_init(uint32_t mb_info_phys) {
         bootsplash_progress(80);
         if (g_trbl_settings.boot_flags & TRBL_FLAG_VERBOSE) bootsplash_finish();
         if (pmm_apply_ram_config(g_trbl_settings.mem_mode, g_trbl_settings.ram_limit_kb) == 0) {
-            kprint("[7/8] RAM allocation applied from saved settings ("); 
-            if (!bootsplash_active()) vga_write_dec(pmm_get_ram_limit_kb() / 1024);
-            kprint(" MB of "); if (!bootsplash_active()) vga_write_dec(pmm_get_total_ram_kb() / 1024); kprint(" MB detected)\n");
+            if (bootsplash_active()) {
+                serial_write("[7/8] RAM allocation applied from saved settings\n");
+            } else {
+                kprint("[7/8] RAM allocation applied from saved settings (");
+                vga_write_dec(pmm_get_ram_limit_kb() / 1024);
+                kprint(" MB of ");
+                vga_write_dec(pmm_get_total_ram_kb() / 1024);
+                kprint(" MB detected)\n");
+            }
         }
 
         /* Apply the saved screen resolution. TRBL's stage2 can only pick
@@ -775,7 +726,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
     }
 
     serial_write("[boot] Shell starting - type commands below\n");
-    serial_write("os~$ ");
+    serial_write("root~$ ");
 
     kernel_os_shell();
 
@@ -783,14 +734,5 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info) {
 }
 
 void kernel_panic(const char *reason) {
-    __asm__ volatile("cli");
-    vga_set_color(VGA_WHITE, VGA_RED);
-    vga_clear();
-    vga_write("\n  !!! KERNEL PANIC !!!\n\n  ");
-    vga_write(reason);
-    vga_write("\n\n  System halted.\n");
-    serial_write("\nKERNEL PANIC: ");
-    serial_write(reason);
-    serial_write("\n");
-    for (;;) __asm__ volatile("hlt");
+    rsod_show("KERNEL PANIC", reason, 0);
 }

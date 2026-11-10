@@ -75,7 +75,7 @@
 #define SYS_THREAD_JOIN   52
 #define SYS_THREAD_SELF   53
 
-#define NUM_SYSCALLS    80
+#define NUM_SYSCALLS    96
 
 #include "install_abi.h"   /* SYS_DISK_INFO .. SYS_SYSINFO (70-76) */
 

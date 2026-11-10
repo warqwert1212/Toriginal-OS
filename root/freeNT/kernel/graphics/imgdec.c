@@ -4,9 +4,13 @@
 #include "heap.h"
 #include "string.h"
 
-#define IMG_MAX_OUT_W 1920u
-#define IMG_MAX_OUT_H 1200u
-#define IMG_MAX_BYTES (24u * 1024u * 1024u)
+extern uint32_t pmm_get_free_ram(void);
+
+static uint64_t img_budget(void) {
+    uint64_t b = (uint64_t)pmm_get_free_ram() * 1024ULL / 4ULL;
+    if (b < (8ULL << 20)) b = 8ULL << 20;
+    return b;
+}
 
 static const uint8_t g_zigzag[64] = {
      0,  1,  8, 16,  9,  2,  3, 10,
@@ -118,7 +122,9 @@ typedef struct {
 typedef struct {
     int      id, h, v, tq, td, ta, pred;
     int      pw, ph;
+    int      bw, bh;
     uint8_t *plane;
+    int16_t *coef;
 } jcomp_t;
 
 typedef struct {
@@ -207,10 +213,220 @@ typedef struct {
     int      ncomp;
     int      width, height;
     int      hmax, vmax;
+    int      mcux, mcuy;
     int      ri;
     int      adobe_transform;
     int      have_sof;
+    int      prog;
 } jpeg_t;
+
+typedef struct {
+    uint8_t  *pixels;
+    uint32_t *acc;
+    int       acc_rows, out_y, ow, oh, s_down;
+} jout_t;
+
+static void emit_strip(jpeg_t *j, jout_t *o, int my) {
+    int W = j->width, H = j->height;
+    int strip_h = 8 * j->vmax;
+    for (int ry = 0; ry < strip_h; ry++) {
+        int y = my * strip_h + ry;
+        if (y >= H) break;
+        for (int x = 0; x < W; x++) {
+            int r, g, b;
+            if (j->ncomp == 1) {
+                int Y = j->comp[0].plane[(size_t)(ry * j->comp[0].v / j->vmax) * j->comp[0].pw + (x * j->comp[0].h / j->hmax)];
+                r = g = b = Y;
+            } else {
+                jcomp_t *c0 = &j->comp[0], *c1 = &j->comp[1], *c2 = &j->comp[2];
+                int Y  = c0->plane[(size_t)(ry * c0->v / j->vmax) * c0->pw + (x * c0->h / j->hmax)];
+                int Cb = c1->plane[(size_t)(ry * c1->v / j->vmax) * c1->pw + (x * c1->h / j->hmax)];
+                int Cr = c2->plane[(size_t)(ry * c2->v / j->vmax) * c2->pw + (x * c2->h / j->hmax)];
+                if (j->adobe_transform == 0) {
+                    r = Y; g = Cb; b = Cr;
+                } else {
+                    Cb -= 128; Cr -= 128;
+                    r = Y + ((91881 * Cr) >> 16);
+                    g = Y - ((22554 * Cb + 46802 * Cr) >> 16);
+                    b = Y + ((116130 * Cb) >> 16);
+                }
+            }
+            uint32_t *a = &o->acc[(size_t)(x / o->s_down) * 3];
+            a[0] += (uint32_t)clamp8(r);
+            a[1] += (uint32_t)clamp8(g);
+            a[2] += (uint32_t)clamp8(b);
+        }
+        o->acc_rows++;
+        if (o->acc_rows == o->s_down || y == H - 1) {
+            for (int ox = 0; ox < o->ow; ox++) {
+                int cols = W - ox * o->s_down;
+                if (cols > o->s_down) cols = o->s_down;
+                uint32_t cnt = (uint32_t)(cols * o->acc_rows);
+                uint8_t *px = o->pixels + ((size_t)o->out_y * o->ow + ox) * 3;
+                px[0] = (uint8_t)(o->acc[ox * 3 + 0] / cnt);
+                px[1] = (uint8_t)(o->acc[ox * 3 + 1] / cnt);
+                px[2] = (uint8_t)(o->acc[ox * 3 + 2] / cnt);
+            }
+            memset(o->acc, 0, (size_t)o->ow * 3 * sizeof(uint32_t));
+            o->acc_rows = 0;
+            o->out_y++;
+        }
+    }
+}
+
+static void bs_restart(bitstream_t *bs) {
+    bs->acc = 0;
+    bs->cnt = 0;
+    while (bs->p + 1 < bs->end && !(bs->p[0] == 0xFF && bs->p[1] >= 0xD0 && bs->p[1] <= 0xD7)) bs->p++;
+    if (bs->p + 1 < bs->end) bs->p += 2;
+}
+
+static int block_baseline(bitstream_t *bs, jcomp_t *c, const huff_t *hd, const huff_t *ha, int16_t *blk) {
+    int t = huff_decode(bs, hd);
+    if (t < 0 || t > 15) return 0;
+    int diff = t ? receive_extend(bs, t) : 0;
+    c->pred += diff;
+    blk[0] = (int16_t)c->pred;
+    for (int k = 1; k < 64;) {
+        int rs = huff_decode(bs, ha);
+        if (rs < 0) return 0;
+        int r = rs >> 4, sb = rs & 15;
+        if (sb == 0) {
+            if (r == 15) { k += 16; continue; }
+            break;
+        }
+        k += r;
+        if (k > 63) break;
+        blk[g_zigzag[k]] = (int16_t)receive_extend(bs, sb);
+        k++;
+    }
+    return 1;
+}
+
+static int block_prog(bitstream_t *bs, jcomp_t *c, const huff_t *hd, const huff_t *ha, int16_t *blk,
+                      int Ss, int Se, int Ah, int Al, int *eobrun) {
+    if (Ss == 0) {
+        if (Ah == 0) {
+            int t = huff_decode(bs, hd);
+            if (t < 0 || t > 15) return 0;
+            int diff = t ? receive_extend(bs, t) : 0;
+            c->pred += diff;
+            blk[0] = (int16_t)(c->pred * (1 << Al));
+        } else if (bs_getbit(bs)) {
+            blk[0] |= (int16_t)(1 << Al);
+        }
+        return 1;
+    }
+    if (Ah == 0) {
+        if (*eobrun > 0) { (*eobrun)--; return 1; }
+        for (int k = Ss; k <= Se;) {
+            int rs = huff_decode(bs, ha);
+            if (rs < 0) return 0;
+            int r = rs >> 4, sb = rs & 15;
+            if (sb == 0) {
+                if (r < 15) {
+                    *eobrun = (1 << r) - 1;
+                    if (r) *eobrun += bs_getbits(bs, r);
+                    break;
+                }
+                k += 16;
+                continue;
+            }
+            k += r;
+            if (k > 63) break;
+            blk[g_zigzag[k]] = (int16_t)(receive_extend(bs, sb) * (1 << Al));
+            k++;
+        }
+        return 1;
+    }
+    int p1 = 1 << Al, m1 = -(1 << Al);
+    int k = Ss;
+    if (*eobrun == 0) {
+        for (; k <= Se; k++) {
+            int rs = huff_decode(bs, ha);
+            if (rs < 0) return 0;
+            int r = rs >> 4, sb = rs & 15, val = 0;
+            if (sb) {
+                val = bs_getbit(bs) ? p1 : m1;
+            } else if (r != 15) {
+                *eobrun = 1 << r;
+                if (r) *eobrun += bs_getbits(bs, r);
+                break;
+            }
+            while (k <= Se) {
+                int16_t *tc = &blk[g_zigzag[k]];
+                if (*tc != 0) {
+                    if (bs_getbit(bs) && (*tc & p1) == 0) *tc = (int16_t)(*tc >= 0 ? *tc + p1 : *tc + m1);
+                } else {
+                    if (--r < 0) break;
+                }
+                k++;
+            }
+            if (val && k <= 63) blk[g_zigzag[k]] = (int16_t)val;
+        }
+    }
+    if (*eobrun > 0) {
+        for (; k <= Se; k++) {
+            int16_t *tc = &blk[g_zigzag[k]];
+            if (*tc != 0 && bs_getbit(bs) && (*tc & p1) == 0) *tc = (int16_t)(*tc >= 0 ? *tc + p1 : *tc + m1);
+        }
+        (*eobrun)--;
+    }
+    return 1;
+}
+
+static int scan_coef(jpeg_t *j, const uint8_t *start, const uint8_t *end, int ns, const int *sidx,
+                     int Ss, int Se, int Ah, int Al) {
+    bitstream_t bs;
+    bs.p = start; bs.end = end; bs.acc = 0; bs.cnt = 0;
+    int eobrun = 0;
+    for (int i = 0; i < j->ncomp; i++) j->comp[i].pred = 0;
+    int units, ucols = 0;
+    if (ns == 1) {
+        jcomp_t *c = &j->comp[sidx[0]];
+        int cw = (j->width * c->h + j->hmax - 1) / j->hmax;
+        int ch = (j->height * c->v + j->vmax - 1) / j->vmax;
+        ucols = (cw + 7) / 8;
+        units = ucols * ((ch + 7) / 8);
+    } else {
+        units = j->mcux * j->mcuy;
+    }
+    for (int u = 0; u < units; u++) {
+        if (ns == 1) {
+            jcomp_t *c = &j->comp[sidx[0]];
+            int bx = u % ucols, by = u / ucols;
+            int16_t *blk = c->coef + ((size_t)by * c->bw + bx) * 64;
+            if (j->prog) { if (!block_prog(&bs, c, &j->dc[c->td], &j->ac[c->ta], blk, Ss, Se, Ah, Al, &eobrun)) return 0; }
+            else if (!block_baseline(&bs, c, &j->dc[c->td], &j->ac[c->ta], blk)) return 0;
+        } else {
+            int mx = u % j->mcux, my = u / j->mcux;
+            for (int si = 0; si < ns; si++) {
+                jcomp_t *c = &j->comp[sidx[si]];
+                for (int by = 0; by < c->v; by++) {
+                    for (int bx = 0; bx < c->h; bx++) {
+                        int16_t *blk = c->coef + ((size_t)(my * c->v + by) * c->bw + (mx * c->h + bx)) * 64;
+                        if (j->prog) { if (!block_prog(&bs, c, &j->dc[c->td], &j->ac[c->ta], blk, Ss, Se, Ah, Al, &eobrun)) return 0; }
+                        else if (!block_baseline(&bs, c, &j->dc[c->td], &j->ac[c->ta], blk)) return 0;
+                    }
+                }
+            }
+        }
+        if (j->ri && ((u + 1) % j->ri) == 0 && u + 1 < units) {
+            bs_restart(&bs);
+            for (int i = 0; i < j->ncomp; i++) j->comp[i].pred = 0;
+            eobrun = 0;
+        }
+    }
+    return 1;
+}
+
+static const uint8_t *next_marker(const uint8_t *p, const uint8_t *end) {
+    while (p + 1 < end) {
+        if (p[0] == 0xFF && p[1] != 0x00 && p[1] != 0xFF && !(p[1] >= 0xD0 && p[1] <= 0xD7)) return p;
+        p++;
+    }
+    return end;
+}
 
 static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
     jpeg_t *j = (jpeg_t *)kmalloc(sizeof(jpeg_t));
@@ -219,10 +435,9 @@ static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
     j->adobe_transform = -1;
 
     int rc = -1;
-    uint32_t *acc = 0;
-    uint8_t *pixels = 0;
-    uint8_t *prev_planes[3] = {0, 0, 0};
-    (void)prev_planes;
+    jout_t o;
+    memset(&o, 0, sizeof(o));
+    int coef_mode = 0, stream = 0, scans_done = 0;
 
     const uint8_t *p = data;
     const uint8_t *end = data + len;
@@ -230,7 +445,6 @@ static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
     p += 2;
 
     const uint8_t *scan = 0;
-    int scan_td[3] = {0, 0, 0}, scan_ta[3] = {0, 0, 0};
 
     while (p + 4 <= end) {
         if (p[0] != 0xFF) { p++; continue; }
@@ -239,7 +453,7 @@ static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
         if (m == 0x00 || m == 0x01 || (m >= 0xD0 && m <= 0xD8)) { p += 2; continue; }
         if (m == 0xD9) break;
         uint16_t seglen = rd16(p + 2);
-        if (seglen < 2 || p + 2 + seglen > end) goto done;
+        if (seglen < 2 || p + 2 + seglen > end) break;
         const uint8_t *s = p + 4;
         const uint8_t *se = p + 2 + seglen;
 
@@ -253,9 +467,11 @@ static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
                 }
                 j->qt_present[tq] = 1;
             }
-        } else if (m == 0xC0 || m == 0xC1) {
+        } else if (m == 0xC0 || m == 0xC1 || m == 0xC2) {
+            if (j->have_sof) goto done;
             if (se - s < 6) goto done;
             if (s[0] != 8) goto done;
+            j->prog = (m == 0xC2);
             j->height = rd16(s + 1);
             j->width  = rd16(s + 3);
             j->ncomp  = s[5];
@@ -270,7 +486,7 @@ static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
                 if (j->comp[i].tq > 3) goto done;
             }
             j->have_sof = 1;
-        } else if (m == 0xC2 || (m >= 0xC3 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC)) {
+        } else if (m >= 0xC3 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
             goto done;
         } else if (m == 0xC4) {
             while (s + 17 <= se) {
@@ -293,177 +509,182 @@ static int jpeg_decode(const uint8_t *data, size_t len, png_image_t *out) {
         } else if (m == 0xDA) {
             if (!j->have_sof) goto done;
             int ns = s[0];
-            if (ns != j->ncomp || se - s < 1 + 2 * ns + 3) goto done;
+            if (ns < 1 || ns > j->ncomp || se - s < 1 + 2 * ns + 3) goto done;
+            int sidx[3] = {0, 0, 0};
             for (int i = 0; i < ns; i++) {
                 int cid = s[1 + i * 2];
                 int tdta = s[2 + i * 2];
                 int idx = -1;
                 for (int k = 0; k < j->ncomp; k++) if (j->comp[k].id == cid) idx = k;
                 if (idx < 0) goto done;
-                scan_td[idx] = tdta >> 4;
-                scan_ta[idx] = tdta & 15;
+                sidx[i] = idx;
+                j->comp[idx].td = (tdta >> 4) & 3;
+                j->comp[idx].ta = tdta & 3;
             }
-            scan = se;
-            break;
+            int Ss = s[1 + 2 * ns], Se = s[2 + 2 * ns], Ah = s[3 + 2 * ns] >> 4, Al = s[3 + 2 * ns] & 15;
+            if (!j->prog) { Ss = 0; Se = 63; Ah = 0; Al = 0; }
+            if (Se > 63 || Ss > Se) goto done;
+
+            if (j->width <= 0 || j->height <= 0) goto done;
+            if (!scans_done && !coef_mode && !stream) {
+                j->hmax = 1; j->vmax = 1;
+                for (int i = 0; i < j->ncomp; i++) {
+                    if (j->comp[i].h > j->hmax) j->hmax = j->comp[i].h;
+                    if (j->comp[i].v > j->vmax) j->vmax = j->comp[i].v;
+                }
+                j->mcux = (j->width + 8 * j->hmax - 1) / (8 * j->hmax);
+                j->mcuy = (j->height + 8 * j->vmax - 1) / (8 * j->vmax);
+                if (!j->prog && ns == j->ncomp) stream = 1;
+                else coef_mode = 1;
+                if (coef_mode) {
+                    uint64_t need = 0;
+                    for (int i = 0; i < j->ncomp; i++) {
+                        j->comp[i].bw = j->mcux * j->comp[i].h;
+                        j->comp[i].bh = j->mcuy * j->comp[i].v;
+                        need += (uint64_t)j->comp[i].bw * j->comp[i].bh * 128ULL;
+                    }
+                    if (need > img_budget() * 2ULL) goto done;
+                    for (int i = 0; i < j->ncomp; i++) {
+                        size_t n = (size_t)j->comp[i].bw * j->comp[i].bh * 64;
+                        j->comp[i].coef = (int16_t *)kmalloc(n * sizeof(int16_t));
+                        if (!j->comp[i].coef) goto cleanup;
+                        memset(j->comp[i].coef, 0, n * sizeof(int16_t));
+                    }
+                }
+            }
+            if (stream) { scan = se; break; }
+            for (int i = 0; i < ns; i++) {
+                jcomp_t *c = &j->comp[sidx[i]];
+                if (Ss == 0 && Ah == 0 && !j->dc[c->td].present) goto cleanup;
+                if (Se > 0 && !j->ac[c->ta].present) goto cleanup;
+            }
+            if (!scan_coef(j, se, end, ns, sidx, Ss, Se, Ah, Al)) {
+                if (scans_done == 0) goto cleanup;
+            }
+            scans_done++;
+            p = next_marker(se, end);
+            continue;
         }
         p += 2 + seglen;
     }
 
-    if (!scan || j->width <= 0 || j->height <= 0) goto done;
-    for (int i = 0; i < j->ncomp; i++) {
-        j->comp[i].td = scan_td[i] & 3;
-        j->comp[i].ta = scan_ta[i] & 3;
-        if (!j->qt_present[j->comp[i].tq]) goto done;
-        if (!j->dc[j->comp[i].td].present || !j->ac[j->comp[i].ta].present) goto done;
-    }
+    if (!j->have_sof || j->width <= 0 || j->height <= 0) goto done;
+    if (stream && !scan) goto done;
+    if (coef_mode && !scans_done) goto cleanup;
 
     int W = j->width, H = j->height;
-    j->hmax = 1; j->vmax = 1;
-    for (int i = 0; i < j->ncomp; i++) {
-        if (j->comp[i].h > j->hmax) j->hmax = j->comp[i].h;
-        if (j->comp[i].v > j->vmax) j->vmax = j->comp[i].v;
-    }
-
-    int mcux = (W + 8 * j->hmax - 1) / (8 * j->hmax);
-    int mcuy = (H + 8 * j->vmax - 1) / (8 * j->vmax);
+    for (int i = 0; i < j->ncomp; i++) if (!j->qt_present[j->comp[i].tq]) goto cleanup;
 
     int s_down = 1;
-    while ((W + s_down - 1) / s_down > (int)IMG_MAX_OUT_W || (H + s_down - 1) / s_down > (int)IMG_MAX_OUT_H) s_down++;
+    uint64_t budget = img_budget();
+    while ((uint64_t)((W + s_down - 1) / s_down) * (uint64_t)((H + s_down - 1) / s_down) * 3ULL > budget) s_down++;
     int ow = (W + s_down - 1) / s_down;
     int oh = (H + s_down - 1) / s_down;
-    if ((uint64_t)ow * oh * 3 > IMG_MAX_BYTES) goto done;
 
     for (int i = 0; i < j->ncomp; i++) {
-        j->comp[i].pw = mcux * 8 * j->comp[i].h;
+        j->comp[i].pw = j->mcux * 8 * j->comp[i].h;
         j->comp[i].ph = 8 * j->comp[i].v;
         j->comp[i].plane = (uint8_t *)kmalloc((size_t)j->comp[i].pw * j->comp[i].ph);
         if (!j->comp[i].plane) goto cleanup;
         j->comp[i].pred = 0;
     }
 
-    pixels = (uint8_t *)kmalloc((size_t)ow * oh * 3);
-    acc = (uint32_t *)kmalloc((size_t)ow * 3 * sizeof(uint32_t));
-    if (!pixels || !acc) goto cleanup;
-    memset(acc, 0, (size_t)ow * 3 * sizeof(uint32_t));
+    o.pixels = (uint8_t *)kmalloc((size_t)ow * oh * 3);
+    o.acc = (uint32_t *)kmalloc((size_t)ow * 3 * sizeof(uint32_t));
+    if (!o.pixels || !o.acc) goto cleanup;
+    memset(o.acc, 0, (size_t)ow * 3 * sizeof(uint32_t));
+    o.ow = ow; o.oh = oh; o.s_down = s_down;
 
-    bitstream_t bs;
-    bs.p = scan; bs.end = end; bs.acc = 0; bs.cnt = 0;
-
-    int coef[64];
-    int acc_rows = 0;
-    int out_y = 0;
-    int mcu_count = 0;
-    int total_mcus = mcux * mcuy;
     int ok = 1;
-
-    for (int my = 0; my < mcuy && ok; my++) {
-        for (int mx = 0; mx < mcux && ok; mx++) {
-            for (int ci = 0; ci < j->ncomp && ok; ci++) {
+    if (coef_mode) {
+        int tmp[64];
+        for (int my = 0; my < j->mcuy; my++) {
+            for (int ci = 0; ci < j->ncomp; ci++) {
                 jcomp_t *c = &j->comp[ci];
-                const huff_t *hd = &j->dc[c->td];
-                const huff_t *ha = &j->ac[c->ta];
                 const uint16_t *q = j->qt[c->tq];
                 for (int by = 0; by < c->v; by++) {
-                    for (int bx = 0; bx < c->h; bx++) {
-                        memset(coef, 0, sizeof(coef));
-                        int t = huff_decode(&bs, hd);
-                        if (t < 0 || t > 15) { ok = 0; break; }
-                        int diff = t ? receive_extend(&bs, t) : 0;
-                        c->pred += diff;
-                        coef[0] = c->pred * (int)q[0];
-                        int k = 1;
-                        while (k < 64) {
-                            int rs = huff_decode(&bs, ha);
-                            if (rs < 0) { ok = 0; break; }
-                            int r = rs >> 4, sbits = rs & 15;
-                            if (sbits == 0) {
-                                if (r == 15) { k += 16; continue; }
-                                break;
-                            }
-                            k += r;
-                            if (k > 63) break;
-                            coef[g_zigzag[k]] = receive_extend(&bs, sbits) * (int)q[k];
-                            k++;
-                        }
-                        if (!ok) break;
-                        idct_block(c->plane + (size_t)(by * 8) * c->pw + (size_t)(mx * c->h + bx) * 8, c->pw, coef);
+                    for (int bx = 0; bx < c->bw; bx++) {
+                        const int16_t *blk = c->coef + ((size_t)(my * c->v + by) * c->bw + bx) * 64;
+                        for (int k = 0; k < 64; k++) tmp[g_zigzag[k]] = blk[g_zigzag[k]] * (int)q[k];
+                        idct_block(c->plane + (size_t)(by * 8) * c->pw + (size_t)bx * 8, c->pw, tmp);
                     }
-                    if (!ok) break;
                 }
             }
-            mcu_count++;
-            if (ok && j->ri && (mcu_count % j->ri) == 0 && mcu_count < total_mcus) {
-                bs.acc = 0; bs.cnt = 0;
-                while (bs.p + 1 < bs.end && !(bs.p[0] == 0xFF && bs.p[1] >= 0xD0 && bs.p[1] <= 0xD7)) bs.p++;
-                if (bs.p + 1 < bs.end) bs.p += 2;
-                for (int ci = 0; ci < j->ncomp; ci++) j->comp[ci].pred = 0;
-            }
+            emit_strip(j, &o, my);
         }
-
-        int strip_h = 8 * j->vmax;
-        for (int ry = 0; ry < strip_h; ry++) {
-            int y = my * strip_h + ry;
-            if (y >= H) break;
-            for (int x = 0; x < W; x++) {
-                int r, g, b;
-                if (j->ncomp == 1) {
-                    int Y = j->comp[0].plane[(size_t)(ry * j->comp[0].v / j->vmax) * j->comp[0].pw + (x * j->comp[0].h / j->hmax)];
-                    r = g = b = Y;
-                } else {
-                    jcomp_t *c0 = &j->comp[0], *c1 = &j->comp[1], *c2 = &j->comp[2];
-                    int Y  = c0->plane[(size_t)(ry * c0->v / j->vmax) * c0->pw + (x * c0->h / j->hmax)];
-                    int Cb = c1->plane[(size_t)(ry * c1->v / j->vmax) * c1->pw + (x * c1->h / j->hmax)];
-                    int Cr = c2->plane[(size_t)(ry * c2->v / j->vmax) * c2->pw + (x * c2->h / j->hmax)];
-                    if (j->adobe_transform == 0) {
-                        r = Y; g = Cb; b = Cr;
-                    } else {
-                        Cb -= 128; Cr -= 128;
-                        r = Y + ((91881 * Cr) >> 16);
-                        g = Y - ((22554 * Cb + 46802 * Cr) >> 16);
-                        b = Y + ((116130 * Cb) >> 16);
+    } else {
+        bitstream_t bs;
+        bs.p = scan; bs.end = end; bs.acc = 0; bs.cnt = 0;
+        int coef[64];
+        int mcu_count = 0;
+        int total_mcus = j->mcux * j->mcuy;
+        for (int my = 0; my < j->mcuy && ok; my++) {
+            for (int mx = 0; mx < j->mcux && ok; mx++) {
+                for (int ci = 0; ci < j->ncomp && ok; ci++) {
+                    jcomp_t *c = &j->comp[ci];
+                    const huff_t *hd = &j->dc[c->td];
+                    const huff_t *ha = &j->ac[c->ta];
+                    const uint16_t *q = j->qt[c->tq];
+                    if (!hd->present || !ha->present) { ok = 0; break; }
+                    for (int by = 0; by < c->v && ok; by++) {
+                        for (int bx = 0; bx < c->h; bx++) {
+                            memset(coef, 0, sizeof(coef));
+                            int t = huff_decode(&bs, hd);
+                            if (t < 0 || t > 15) { ok = 0; break; }
+                            int diff = t ? receive_extend(&bs, t) : 0;
+                            c->pred += diff;
+                            coef[0] = c->pred * (int)q[0];
+                            int k = 1;
+                            while (k < 64) {
+                                int rs = huff_decode(&bs, ha);
+                                if (rs < 0) { ok = 0; break; }
+                                int r = rs >> 4, sbits = rs & 15;
+                                if (sbits == 0) {
+                                    if (r == 15) { k += 16; continue; }
+                                    break;
+                                }
+                                k += r;
+                                if (k > 63) break;
+                                coef[g_zigzag[k]] = receive_extend(&bs, sbits) * (int)q[k];
+                                k++;
+                            }
+                            if (!ok) break;
+                            idct_block(c->plane + (size_t)(by * 8) * c->pw + (size_t)(mx * c->h + bx) * 8, c->pw, coef);
+                        }
                     }
                 }
-                uint32_t *a = &acc[(size_t)(x / s_down) * 3];
-                a[0] += (uint32_t)clamp8(r);
-                a[1] += (uint32_t)clamp8(g);
-                a[2] += (uint32_t)clamp8(b);
-            }
-            acc_rows++;
-            if (acc_rows == s_down || y == H - 1) {
-                for (int ox = 0; ox < ow; ox++) {
-                    int cols = W - ox * s_down;
-                    if (cols > s_down) cols = s_down;
-                    uint32_t cnt = (uint32_t)(cols * acc_rows);
-                    uint8_t *o = pixels + ((size_t)out_y * ow + ox) * 3;
-                    o[0] = (uint8_t)(acc[ox * 3 + 0] / cnt);
-                    o[1] = (uint8_t)(acc[ox * 3 + 1] / cnt);
-                    o[2] = (uint8_t)(acc[ox * 3 + 2] / cnt);
+                mcu_count++;
+                if (ok && j->ri && (mcu_count % j->ri) == 0 && mcu_count < total_mcus) {
+                    bs_restart(&bs);
+                    for (int ci = 0; ci < j->ncomp; ci++) j->comp[ci].pred = 0;
                 }
-                memset(acc, 0, (size_t)ow * 3 * sizeof(uint32_t));
-                acc_rows = 0;
-                out_y++;
             }
+            if (ok || my == 0) emit_strip(j, &o, my);
+            else emit_strip(j, &o, my);
         }
     }
 
-    if (!ok && out_y < oh / 2) goto cleanup;
-    while (out_y < oh) {
-        memset(pixels + (size_t)out_y * ow * 3, 0, (size_t)ow * 3);
-        out_y++;
+    if (!ok && o.out_y < oh / 2) goto cleanup;
+    while (o.out_y < oh) {
+        memset(o.pixels + (size_t)o.out_y * ow * 3, 0, (size_t)ow * 3);
+        o.out_y++;
     }
 
     out->width = (uint32_t)ow;
     out->height = (uint32_t)oh;
     out->channels = 3;
-    out->pixels = pixels;
-    pixels = 0;
+    out->pixels = o.pixels;
+    o.pixels = 0;
     rc = 0;
 
 cleanup:
-    for (int i = 0; i < 3; i++) if (j->comp[i].plane) kfree(j->comp[i].plane);
+    for (int i = 0; i < 3; i++) {
+        if (j->comp[i].plane) kfree(j->comp[i].plane);
+        if (j->comp[i].coef) kfree(j->comp[i].coef);
+    }
 done:
-    if (acc) kfree(acc);
-    if (pixels) kfree(pixels);
+    if (o.acc) kfree(o.acc);
+    if (o.pixels) kfree(o.pixels);
     kfree(j);
     return rc;
 }
@@ -486,10 +707,10 @@ static int bmp_decode(const uint8_t *d, size_t len, png_image_t *out) {
 
     int top_down = 0;
     if (h < 0) { top_down = 1; h = -h; }
-    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return -1;
+    if (w <= 0 || h <= 0 || w > 65535 || h > 65535) return -1;
     if (comp != 0 && comp != 3) return -1;
     if (bpp != 8 && bpp != 24 && bpp != 32) return -1;
-    if ((uint64_t)w * h * 3 > IMG_MAX_BYTES) return -1;
+    if ((uint64_t)w * (uint64_t)h * 3ULL > img_budget()) return -1;
 
     uint32_t pal_off = 14 + hdr;
     uint32_t pal_n = 0;

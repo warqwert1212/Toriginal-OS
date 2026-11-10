@@ -1,4 +1,5 @@
 #include "interrupts.h"
+#include "crash.h"
 #include "process.h"
 #include "idt.h"
 #include "string.h"
@@ -7,6 +8,7 @@
 #include "vga.h"
 #include "gfx_terminal.h"
 #include "apic.h"
+#include "apphost.h"
 
 static inline uint8_t inb(uint16_t port) {
     uint8_t v; __asm__ volatile("inb %1,%0":"=a"(v):"Nd"(port)); return v;
@@ -71,6 +73,10 @@ void idt_set_gate(uint8_t num, uint64_t handler, uint16_t sel, uint8_t flags)
 
 static void handle_exception(interrupt_frame_t *f)
 {
+    if ((f->cs & 3) == 3 && apphost_in_slice()) {
+        apphost_crash(f);
+        return;
+    }
     /* A ring-3 program faulted while the installer is waiting on it
      * (install-time partition manager / OOBE): don't take the whole
      * machine down - report it, end the process, and let the installer's
@@ -86,21 +92,7 @@ static void handle_exception(interrupt_frame_t *f)
         process_exit(-1);              /* runs the hook; it does not return */
     }
 
-    vga_set_color(VGA_WHITE, VGA_RED);
-    vga_write("\n!!! KERNEL PANIC: CPU EXCEPTION #");
-    vga_write_dec(f->interrupt_number);
-    vga_write(" !!!\nSystem halted.\n");
-
-    serial_puts("\n[PANIC] Exception #");
-    char buf[4];
-    uint64_t n = f->interrupt_number;
-    buf[0] = (char)('0' + n / 10);
-    buf[1] = (char)('0' + n % 10);
-    buf[2] = '\n'; buf[3] = '\0';
-    serial_puts(buf);
-    serial_puts("System halted.\n");
-
-    for (;;) __asm__ volatile("cli; hlt");
+    rsod_show("KERNEL PANIC: CPU EXCEPTION", "A fatal CPU exception occurred in the kernel.", f);
 }
 
 static void handle_irq(interrupt_frame_t *f)
@@ -122,7 +114,8 @@ static void handle_irq(interrupt_frame_t *f)
 static void pit_irq_handler(interrupt_frame_t *f)
 {
     pit_handler();
-    scheduler_yield(f);
+    if (apphost_in_slice() && (f->cs & 3) == 3) apphost_preempt(f);
+    else scheduler_yield(f);
 
     gterm_request_tick();
 }
@@ -177,6 +170,12 @@ __asm__(
     "and $-16, %rsp\n"          /* align down to 16 bytes for the call, ABI-required */
     "call isr_common_handler\n"
     "mov %rbx, %rsp\n"          /* undo the alignment adjustment */
+    "cmpq $0, g_host_force_leave(%rip)\n"
+    "je 1f\n"
+    "mov g_host_force_leave(%rip), %rax\n"
+    "movq $0, g_host_force_leave(%rip)\n"
+    "jmp host_leave\n"
+    "1:\n"
     "pop %r15\n" "pop %r14\n" "pop %r13\n" "pop %r12\n"
     "pop %r11\n" "pop %r10\n" "pop %r9\n"  "pop %r8\n"
     "pop %rbp\n" "pop %rdi\n" "pop %rsi\n" "pop %rdx\n"

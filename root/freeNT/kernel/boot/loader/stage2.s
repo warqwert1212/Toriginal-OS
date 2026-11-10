@@ -3,42 +3,12 @@
 .section .text
 .global _stage2_start
 
-.set ELF_STAGE_ADDR,   0x4000000   /* FIX: was 0x20000 - a real-mode
-                                      * segment:offset pair (what BIOS
-                                      * INT 13h reads are always
-                                      * limited to) can only reach just
-                                      * over 1 MiB, nowhere near enough
-                                      * for a kernel now budgeted up to
-                                      * 32 MiB (see ata.h's
-                                      * ATA_BOOT_RESERVED_SECTORS
-                                      * comment). load_kernel_elf below
-                                      * now reads each chunk into the
-                                      * small low KERNEL_CHUNK_BUF_ADDR
-                                      * buffer and copies it up here via
-                                      * "unreal mode" instead of reading
-                                      * the whole file directly to one
-                                      * ever-growing real-mode segment.
-                                      * Must match stage2_pm.s's
-                                      * ELF_STAGE_ADDR exactly - see
-                                      * that file's comment. */
 .set KERNEL_LOAD_LBA,  65           /* kernel copy starts right after stage2's
                                       * 64 reserved sectors (1 for stage1 + 64
                                       * for stage2 = sector 65) - see
                                       * installer.c's write_bootloader_to_disk()
                                       * for the authoritative layout, which this
                                       * constant must always match exactly. */
-.set KERNEL_MAX_SECTORS, 65536     /* 32 MiB ceiling for the staged kernel copy -
-                                     * FIX: was 1024 (512 KiB), too small once
-                                     * the kernel started embedding its own
-                                     * boot assets. Matches kernel64.ld's own
-                                     * __kernel_end ASSERT ceiling, and fits
-                                     * comfortably inside the reserved boot
-                                     * region (sectors 65..65600 fit within
-                                     * the 70048-sector reservation - see
-                                     * ata.h's ATA_BOOT_RESERVED_SECTORS - so
-                                     * this never spills into TRPFS's
-                                     * territory, which starts right at
-                                     * sector 70048) */
 .set KERNEL_CHUNK_BUF_ADDR, 0x20000 /* fixed low real-mode-reachable scratch
                                       * buffer each disk-read chunk lands in
                                       * (reused for every chunk - previously
@@ -161,10 +131,14 @@ a20_done:
     orl     $1, %eax
     movl    %eax, %cr0
 
-    ljmp    $0x08, $(STAGE2_LINEAR_BASE + protected_mode_entry)
+    ljmpl   $0x08, $(STAGE2_LINEAR_BASE + protected_mode_entry)
 
 fatal_disk_error:
     movw    $msg_disk_err, %si
+    cmpb    $0xE0, disk_err_code
+    jb      fatal_msg_ready
+    movw    $msg_bad_image, %si
+fatal_msg_ready:
     call    print_string
 
     /* DIAGNOSTIC (temporary): print the BIOS status code and the LBA
@@ -483,48 +457,9 @@ trbl_settings_absent:
     popa
     ret
 
-/* ── Load the kernel ELF from disk into ELF_STAGE_ADDR (high memory) ──────
- * BIOS INT 13h extended reads (AH=0x42) can only target a destination
- * reachable by a plain real-mode segment:offset pair - a hard ceiling
- * just over 1 MiB, regardless of how large the disk transfer itself
- * is allowed to be. That's nowhere near enough now that the kernel
- * can be budgeted up to 32 MiB (see ata.h's ATA_BOOT_RESERVED_SECTORS
- * comment) - the old version of this routine grew its destination
- * segment across the *whole* read and would silently wrap/overrun
- * into the video memory hole at 0xA0000 well before finishing a
- * multi-MB kernel.
- *
- * Fixed by decoupling "where the BIOS writes" from "where the kernel
- * ends up": each chunk (still capped at 127 sectors - the same
- * conservative INT 13h extensions transfer-size limit as before)
- * lands in the small, fixed, low KERNEL_CHUNK_BUF_ADDR buffer, then
- * gets copied up to its real destination (ELF_STAGE_ADDR, growing by
- * one chunk's worth of bytes each time) using "unreal mode" (see
- * enter_unreal/leave_unreal below): DS/ES briefly get a flat, base-0,
- * 4 GiB-limit descriptor so a 32-bit `rep movsl` can address anywhere
- * in the low 4 GiB, then get restored to normal real-mode segments
- * before the next BIOS call. This is the standard "big real mode"
- * technique used by many real-mode bootloaders for exactly this
- * problem - reused here rather than invented, but hand-adapted to
- * this file and not yet boot-tested in an emulator (none was
- * available while writing this). If boot stalls or hangs somewhere
- * around "loading kernel...", that print not being followed by
- * "kernel loaded..." pinpoints this routine - report exactly what's
- * on screen at that point.
- *
- * IMPORTANT: DS must be a normal real-mode segment (matching CS)
- * whenever INT 13h runs - AH=0x42 addresses the DAP via DS:SI, so if
- * DS is still carrying unreal mode's flat (base-0) descriptor at that
- * point, the BIOS dereferences completely the wrong linear address
- * for the DAP and reads garbage LBA/count/segment fields instead of
- * the ones set up below. (An earlier version of this routine entered
- * unreal mode once before the whole loop and left it there straight
- * through every INT 13h call - exactly this bug - which is why
- * enter_unreal/leave_unreal now bracket only the copy, per chunk,
- * every iteration.)
- *
- * Sets CF on any read failure, matching the convention the caller
- * checks. */
+/* Kernel loader: reads the ELF header, then streams each PT_LOAD segment
+ * from disk straight to its final address (unreal-mode copy), reading only
+ * the bytes the image really contains. Kernel size is bounded only by RAM. */
 
 /* ---- enter_unreal: give DS/ES gdt32's flat, base-0, 4 GiB-limit
  * descriptor. Call right before code that needs to address memory
@@ -748,117 +683,234 @@ e820_done:
     popal
     ret
 
+.set MAX_SEGS, 16
+
+read_sectors:
+    movw    %dx, dap_count
+    movl    %ebx, dap_lba
+    movl    $0, dap_lba+4
+    movw    $(KERNEL_CHUNK_BUF_ADDR >> 4), dap_seg
+    movl    %ebx, disk_err_lba
+    movw    $dap, %si
+    movb    $0x42, %ah
+    movb    boot_drive, %dl
+    int     $0x13
+    jnc     read_sectors_ok
+    movb    %ah, disk_err_code
+    stc
+    ret
+read_sectors_ok:
+    clc
+    ret
+
+check_ram:
+    pushal
+    pushw   %es
+    movl    cur_dst, %eax
+    cmpl    $0x100000, %eax
+    jb      check_ram_bad
+    movl    cur_msz, %edx
+    addl    %eax, %edx
+    jc      check_ram_bad
+    movw    $(E820_BUF >> 4), %cx
+    movw    %cx, %es
+    movl    %es:0, %ecx
+    testl   %ecx, %ecx
+    jz      check_ram_ok
+    movw    $8, %si
+check_ram_loop:
+    cmpl    $1, %es:16(%si)
+    jne     check_ram_next
+    cmpl    $0, %es:4(%si)
+    jne     check_ram_next
+    movl    %es:0(%si), %ebx
+    cmpl    %ebx, %eax
+    jb      check_ram_next
+    cmpl    $0, %es:12(%si)
+    jne     check_ram_big
+    movl    %es:8(%si), %edi
+    addl    %ebx, %edi
+    jnc     check_ram_cmp
+check_ram_big:
+    movl    $0xFFFFFFFF, %edi
+check_ram_cmp:
+    cmpl    %edi, %edx
+    jbe     check_ram_ok
+check_ram_next:
+    addw    $24, %si
+    decl    %ecx
+    jnz     check_ram_loop
+check_ram_bad:
+    popw    %es
+    popal
+    stc
+    ret
+check_ram_ok:
+    popw    %es
+    popal
+    clc
+    ret
+
 load_kernel_elf:
     pusha
     movw    $msg_loading_kernel, %si
     call    print_string
 
-    /* FIX: removed the AH=0x41 "check extensions present" handshake
-     * that used to sit here - see stage1.s's matching comment. This
-     * was the actual cause of "KERNEL DISK READ ERROR" reappearing:
-     * load_trbl_settings, called just before this in the exact same
-     * boot session, reads a sector with plain AH=0x42 and no such
-     * check, and it works - proof this handshake was never needed on
-     * this BIOS and was actively breaking the one read that had it. */
+    movl    $KERNEL_LOAD_LBA, %ebx
+    movl    $8, %edx
+    call    read_sectors
+    jc      load_kernel_elf_fail
 
-    movl    $KERNEL_MAX_SECTORS, %ecx   /* sectors still to read           */
-    movl    $KERNEL_LOAD_LBA, %ebx      /* next LBA to read from           */
-    movl    $ELF_STAGE_ADDR, %edi       /* next high-memory destination    */
+    movw    $(KERNEL_CHUNK_BUF_ADDR >> 4), %ax
+    movw    %ax, %es
+    cmpl    $0x464C457F, %es:0
+    jne     elf_bad_hdr
+    cmpb    $2, %es:4
+    jne     elf_bad_hdr
+    movl    %es:24, %eax
+    movl    %eax, kernel_entry
+    movl    %es:32, %ebx
+    movzwl  %es:54, %edx
+    movzwl  %es:56, %ecx
+    movl    %ecx, %eax
+    imull   %edx, %eax
+    addl    %ebx, %eax
+    cmpl    $4096, %eax
+    ja      elf_bad_hdr
 
-load_loop:
-    cmpl    $0, %ecx
-    je      load_done
+    movl    $0, seg_count
+    movw    $seg_tab, %di
+    movw    %bx, %si
+ph_loop:
+    testw   %cx, %cx
+    jz      ph_done
+    cmpl    $1, %es:(%si)
+    jne     ph_next
+    cmpl    $MAX_SEGS, seg_count
+    jae     elf_bad_hdr
+    movl    %es:8(%si), %eax
+    movl    %eax, (%di)
+    movl    %es:16(%si), %eax
+    movl    %eax, 4(%di)
+    movl    %es:32(%si), %eax
+    movl    %eax, 8(%di)
+    movl    %es:40(%si), %eax
+    movl    %eax, 12(%di)
+    addw    $16, %di
+    incl    seg_count
+ph_next:
+    addw    %dx, %si
+    decw    %cx
+    jmp     ph_loop
+ph_done:
+    movw    %cs, %ax
+    movw    %ax, %es
+    cmpl    $0, seg_count
+    je      elf_bad_hdr_noes
 
-    movl    %ecx, %edx
+    movl    $0, seg_idx
+seg_loop:
+    movl    seg_idx, %eax
+    cmpl    seg_count, %eax
+    jae     load_done
+    shll    $4, %eax
+    addl    $seg_tab, %eax
+    movw    %ax, %si
+    movl    0(%si), %eax
+    movl    %eax, cur_off
+    movl    4(%si), %eax
+    movl    %eax, cur_dst
+    movl    8(%si), %eax
+    movl    %eax, cur_fsz
+    movl    12(%si), %eax
+    movl    %eax, cur_msz
+
+    testl   $511, cur_off
+    jnz     seg_bad_align
+    movl    cur_msz, %eax
+    subl    cur_fsz, %eax
+    jb      seg_bad_size
+    movl    %eax, cur_zero
+    call    check_ram
+    jc      seg_no_ram
+
+    movl    cur_off, %eax
+    shrl    $9, %eax
+    addl    $KERNEL_LOAD_LBA, %eax
+    movl    %eax, cur_lba
+
+copy_loop:
+    cmpl    $0, cur_fsz
+    je      copy_done
+    movl    cur_fsz, %edx
+    addl    $511, %edx
+    shrl    $9, %edx
     cmpl    $KERNEL_CHUNK_MAX_SECTORS, %edx
-    jbe     load_chunk_size_ok
+    jbe     copy_count_ok
     movl    $KERNEL_CHUNK_MAX_SECTORS, %edx
-load_chunk_size_ok:
-    movw    %dx, dap_count
+copy_count_ok:
+    movl    cur_lba, %ebx
+    call    read_sectors
+    jc      load_kernel_elf_fail
 
-    movl    %ebx, dap_lba
-    movl    $0, dap_lba+4
-    movw    $(KERNEL_CHUNK_BUF_ADDR >> 4), dap_seg
-
-    /* Record what we're about to ask for BEFORE the BIOS call, not
-     * after. A real BIOS's extended-read handler (VirtualBox's
-     * included - see stage1.s's comment on its AH=0x42 quirks) isn't
-     * guaranteed to leave every register untouched on an error path;
-     * if it clobbers EBX internally while reporting the failure,
-     * reading EBX back afterward would show BIOS-side garbage instead
-     * of the LBA we actually requested. This way the error report is
-     * always accurate regardless of what the BIOS does. */
-    movl    %ebx, disk_err_lba
-
-    /* DS is a normal real-mode segment here (matching CS) - either
-     * because we've never called enter_unreal yet this iteration, or
-     * because the previous iteration's leave_unreal already restored
-     * it - so this correctly addresses the real dap fields above. */
-    movw    $dap, %si
-    movb    $0x42, %ah
-    movb    boot_drive, %dl
-    int     $0x13
-    jc      load_kernel_elf_read_failed
-
-    /* Copy this chunk from the low buffer up to %edi using a flat
-     * 32-bit copy (this is the actual unreal-mode payoff: %edi can be
-     * anywhere in the low 4 GiB here, not just under 1 MiB). Bracketed
-     * tightly around just this copy, per chunk - see the IMPORTANT
-     * note above load_kernel_elf for why it can't just wrap the whole
-     * loop. */
+    movzwl  dap_count, %ecx
+    shll    $9, %ecx
+    cmpl    cur_fsz, %ecx
+    jbe     copy_bytes_ok
+    movl    cur_fsz, %ecx
+copy_bytes_ok:
+    movl    %ecx, copy_bytes
     call    enter_unreal
-    movzwl  dap_count, %eax
-    imull   $512, %eax, %ebp        /* bytes read this chunk (a multiple
-                                      * of 4 - it's a sector count * 512 -
-                                      * so the dword shift below is exact) */
-    pushl   %ecx
-    movl    %ebp, %ecx
-    shrl    $2, %ecx
     movl    $KERNEL_CHUNK_BUF_ADDR, %esi
+    movl    cur_dst, %edi
+    movl    copy_bytes, %ecx
     cld
-    rep movsl %es:(%esi), %es:(%edi) /* flat ES -> flat ES, 32-bit */
-    popl    %ecx
-    movzwl  dap_count, %eax
-    subl    %eax, %ecx              /* ecx = sectors still remaining, updated */
-
-    /* Progress bar - still in unreal mode here, so this costs no extra
-     * CR0.PE toggle: draw_progress_bar writes straight to the
-     * framebuffer. Save %ebx/%ecx/%edi first (full 32-bit, via the
-     * stack) since we're about to call into a routine that only
-     * wraps itself in pusha/popa - in .code16 that only protects each
-     * register's low 16 bits, and draw_progress_bar does real 32-bit
-     * work internally on eax/ecx/esi/edi (framebuffer pointer math)
-     * once fb_found=1. Right now this call is a no-op (fb_found is
-     * still 0 here - VBE mode-set runs after kernel load, see step
-     * 3/4 reordering above), so none of that code path actually
-     * executes yet - but %edi in particular is this loop's live
-     * kernel-copy destination pointer, and leaving it unprotected
-     * would mean the instant fb_found becomes 1 here (a future
-     * reorder, or any other caller), the next chunk would get copied
-     * to a silently wrong address with no error message at all. Cheap
-     * to just close now rather than leave it as a landmine. */
-    pushl   %ebx
-    pushl   %ecx
-    pushl   %edi
-    movl    $KERNEL_MAX_SECTORS, %eax
-    movl    %eax, %ebx
-    subl    %ecx, %eax
-    call    draw_progress_bar
-    popl    %edi
-    popl    %ecx
-    popl    %ebx
-
+    rep movsb %es:(%esi), %es:(%edi)
+    movl    %edi, cur_dst
     call    leave_unreal
 
+    movl    copy_bytes, %eax
+    subl    %eax, cur_fsz
     movzwl  dap_count, %eax
-    addl    %eax, %ebx
-    /* FIX: no 'addl %ebp, %edi' here - the 'rep movsl' above already
-     * advanced EDI by exactly this chunk's byte count. Adding it again
-     * skipped one chunk of zeros between every pair of chunks, so the
-     * staged ELF was valid only for its first 127 sectors (~63 KiB) and
-     * the kernel text beyond that loaded as zeros. */
+    addl    %eax, cur_lba
+    jmp     copy_loop
 
-    jmp     load_loop
+copy_done:
+    cmpl    $0, cur_zero
+    je      seg_next
+    call    enter_unreal
+    movl    cur_dst, %edi
+    movl    cur_zero, %ecx
+    xorl    %eax, %eax
+    cld
+    rep stosb %al, %es:(%edi)
+    call    leave_unreal
+seg_next:
+    incl    seg_idx
+    jmp     seg_loop
+
+elf_bad_hdr:
+    movw    %cs, %ax
+    movw    %ax, %es
+elf_bad_hdr_noes:
+    movb    $0xE0, disk_err_code
+    jmp     load_kernel_elf_fail
+seg_bad_align:
+    movb    $0xE1, disk_err_code
+    movl    cur_off, %eax
+    movl    %eax, disk_err_lba
+    jmp     load_kernel_elf_fail
+seg_bad_size:
+    movb    $0xE3, disk_err_code
+    movl    cur_dst, %eax
+    movl    %eax, disk_err_lba
+    jmp     load_kernel_elf_fail
+seg_no_ram:
+    movb    $0xE2, disk_err_code
+    movl    cur_dst, %eax
+    addl    cur_msz, %eax
+    movl    %eax, disk_err_lba
+    jmp     load_kernel_elf_fail
 
 load_done:
     movw    $msg_kernel_loaded, %si
@@ -868,21 +920,23 @@ load_done:
     ret
 
 load_kernel_elf_fail:
-    /* DS/ES are already normal here (see the comment at the top of
-     * load_loop) - nothing to restore before returning. */
     popa
     stc
     ret
 
-load_kernel_elf_read_failed:
-    /* disk_err_lba was already recorded right before the int13 call
-     * above (see that comment for why it isn't captured here, from
-     * EBX, instead: EBX after a failing BIOS call isn't trustworthy).
-     * disk_err_code just needs AH, captured here before popa
-     * overwrites it. */
-    movb    %ah, disk_err_code
-    jmp     load_kernel_elf_fail
-
+.align 4
+seg_tab:      .space MAX_SEGS*16
+seg_count:    .long 0
+seg_idx:      .long 0
+cur_off:      .long 0
+cur_dst:      .long 0
+cur_fsz:      .long 0
+cur_msz:      .long 0
+cur_zero:     .long 0
+cur_lba:      .long 0
+copy_bytes:   .long 0
+.global kernel_entry
+kernel_entry: .long 0
 
 boot_drive:   .byte 0
 
@@ -901,6 +955,7 @@ msg_vbe_fail:        .asciz "TRBL stage2: VBE mode unavailable - continuing with
 msg_loading_kernel:  .asciz "TRBL stage2: loading kernel...\r\n"
 msg_kernel_loaded:   .asciz "TRBL stage2: kernel loaded, entering protected mode...\r\n"
 msg_disk_err:        .asciz "TRBL stage2: KERNEL DISK READ ERROR\r\n"
+msg_bad_image:       .asciz "TRBL stage2: KERNEL IMAGE INVALID OR DOES NOT FIT IN RAM\r\n"
 /* DIAGNOSTIC (temporary) - see fatal_disk_error's comment. */
 msg_err_code:        .asciz "  BIOS status (AH): 0x"
 msg_err_lba:         .asciz "\r\n  attempted LBA:   0x"
@@ -1028,8 +1083,6 @@ protected_mode_entry:
     movl    $(msg_p1 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
 
-    call    elf_load_segments
-
     movl    $(msg_p2 + STAGE2_LINEAR_BASE), %esi
     call    pm_serial_puts
 
@@ -1048,4 +1101,5 @@ protected_mode_entry:
     popl    %ebx
     popl    %eax
 
-    ljmp    $0x08, $KERNEL_ENTRY_LINK_ADDR
+    movl    (kernel_entry + STAGE2_LINEAR_BASE), %ecx
+    jmp     *%ecx

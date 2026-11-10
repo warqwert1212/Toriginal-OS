@@ -27,6 +27,7 @@
  * the wallpaper "unset" and wallpaper_draw() will fall back to flat
  * color until wallpaper_next()/wallpaper_set_path() succeeds. */
 void wallpaper_init(void);
+void wallpaper_release_scaled(void);
 
 /* Loads and decodes the PNG at `path`, replacing the current
  * wallpaper on success. On success, also persists `path` to
@@ -53,7 +54,7 @@ void wallpaper_draw(uint32_t screen_w, uint32_t screen_h, color_t fallback_color
  * desktop.c - the picker's contents are exactly and only whatever's
  * really sitting in this directory on disk, scanned fresh every time
  * it's opened. No hardcoded list anywhere. */
-int wallpaper_list(char out_names[][64], int max_entries);
+int wallpaper_list(char out_names[][128], int max_entries);
 
 /* True if wallpaper_set_path() has ever succeeded this session. */
 int wallpaper_is_loaded(void);

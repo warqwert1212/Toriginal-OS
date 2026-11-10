@@ -10,6 +10,8 @@ void kernel_install_mode(void);
 /* sys/shell/shell.c — OS CLI command dispatcher (ls, cat, mkdir, etc.)
  * Called by kernel_os_shell() after assembling a complete input line. */
 void sys_shell_dispatch(const char *line);
+const char *sys_shell_get_cwd(void);
+void sys_shell_set_cwd(const char *path);
 
 /* sys/shell/shell.c — refresh the top status bar (username + date/time).
  * Safe to call even if the bar isn't enabled yet (no-op until installed). */

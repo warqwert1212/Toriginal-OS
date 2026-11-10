@@ -99,6 +99,7 @@ static vaddr_t       heap_end      = 0;   /* one-past-last mapped byte       */
 static vaddr_t       heap_limit    = 0;   /* one-past-last byte of the window */
 static heap_block_t *g_first_block = NULL;
 static heap_block_t *g_free_list   = NULL;
+static heap_block_t *g_tail        = NULL;
 
 /* Running counters, exposed for diagnostics (e.g. a future `free` command
  * in the shell, or `meminfo` debug output). */
@@ -150,63 +151,63 @@ static void free_list_remove(heap_block_t *b) {
  * directly as virtual addresses. mm_map_page() is a no-op here (pml4==NULL)
  * so we skip it entirely — the frames are already accessible via the
  * identity map that boot64.s set up covering all available RAM. */
+static heap_block_t *heap_append(heap_block_t *b) {
+    b->all_next  = NULL;
+    b->all_prev  = NULL;
+    b->free_next = NULL;
+    b->free_prev = NULL;
+    b->magic     = HEAP_MAGIC_FREE;
+    stat_bytes_arena += b->size + HEAP_HEADER_SIZE;
+
+    if (!g_first_block) {
+        g_first_block = b;
+        g_tail = b;
+        free_list_insert(b);
+        return b;
+    }
+
+    heap_block_t *tail = g_tail;
+    uint8_t *tail_end = (uint8_t *)tail + HEAP_HEADER_SIZE + tail->size;
+    if (tail->magic == HEAP_MAGIC_FREE && tail_end == (uint8_t *)b) {
+        free_list_remove(tail);
+        tail->size += HEAP_HEADER_SIZE + b->size;
+        free_list_insert(tail);
+        return tail;
+    }
+
+    tail->all_next = b;
+    b->all_prev    = tail;
+    g_tail         = b;
+    free_list_insert(b);
+    return b;
+}
+
 static heap_block_t *heap_grow(size_t min_payload) {
     size_t needed = HEAP_HEADER_SIZE + min_payload;
     size_t pages  = (needed + PAGE_SIZE - 1) / PAGE_SIZE;
     if (pages < HEAP_GROW_PAGES) pages = HEAP_GROW_PAGES;
 
-    /* Allocate a contiguous run of frames from the PMM.
-     * We ask for one frame at a time and chain them — if any alloc fails
-     * we use however many we got. The frames won't be physically contiguous
-     * in general, but that's fine: each frame becomes its own block in the
-     * "all" list and they get coalesced on free if they happen to be adjacent. */
+    if (pages > HEAP_GROW_PAGES) {
+        void *run = pmm_alloc_contiguous_frames((uint32_t)pages);
+        if (run) {
+            heap_block_t *b = (heap_block_t *)run;
+            b->size = pages * PAGE_SIZE - HEAP_HEADER_SIZE;
+            return heap_append(b);
+        }
+    }
+
     heap_block_t *first_new = NULL;
-    heap_block_t *prev_new  = NULL;
 
     for (size_t i = 0; i < pages; i++) {
         void *frame = pmm_alloc_frame();
         if (!frame) {
-            if (i == 0) return NULL; /* total failure */
-            break;                   /* use what we got */
+            if (i == 0) return NULL;
+            break;
         }
-
-        /* Under identity mapping, the frame's PA is its VA. */
         heap_block_t *b = (heap_block_t *)frame;
-        b->size      = PAGE_SIZE - HEAP_HEADER_SIZE;
-        b->magic     = HEAP_MAGIC_FREE;
-        b->all_next  = NULL;
-        b->all_prev  = NULL;
-        b->free_next = NULL;
-        b->free_prev = NULL;
-
-        stat_bytes_arena += PAGE_SIZE;
-
-        if (!first_new) first_new = b;
-
-        /* Link into global "all" list at the tail. */
-        if (!g_first_block) {
-            g_first_block = b;
-        } else {
-            /* Find the current tail. */
-            heap_block_t *tail = g_first_block;
-            while (tail->all_next) tail = tail->all_next;
-
-            /* Merge if physically adjacent and tail is free. */
-            uint8_t *tail_end = (uint8_t *)tail + HEAP_HEADER_SIZE + tail->size;
-            if (tail->magic == HEAP_MAGIC_FREE && tail_end == (uint8_t *)b) {
-                free_list_remove(tail);
-                tail->size += HEAP_HEADER_SIZE + b->size;
-                free_list_insert(tail);
-                if (!prev_new) first_new = tail;
-                continue; /* b absorbed into tail, no new node */
-            }
-
-            tail->all_next = b;
-            b->all_prev    = tail;
-        }
-
-        free_list_insert(b);
-        prev_new = b;
+        b->size = PAGE_SIZE - HEAP_HEADER_SIZE;
+        heap_block_t *r = heap_append(b);
+        if (!first_new) first_new = r;
     }
 
     return first_new;
@@ -223,6 +224,7 @@ void mm_init_heap(vaddr_t s, vaddr_t e) {
 
     g_first_block = NULL;
     g_free_list   = NULL;
+    g_tail        = NULL;
     stat_bytes_allocated = 0;
     stat_bytes_arena     = 0;
     stat_alloc_calls     = 0;
@@ -256,6 +258,7 @@ static void maybe_split(heap_block_t *b, size_t want) {
     remainder->free_prev = NULL;
 
     b->all_next = remainder;
+    if (g_tail == b) g_tail = remainder;
     b->size     = want;
 
     free_list_insert(remainder);
@@ -280,9 +283,13 @@ void *kmalloc(size_t size) {
     }
 
     if (!b) {
-        b = heap_grow(size);
-        if (!b) return NULL; /* genuinely out of memory */
-        if (b->size < size) return NULL; /* grow() clamped smaller than asked */
+        if (!heap_grow(size)) return NULL;
+        b = g_free_list;
+        while (b) {
+            if (b->size >= size) break;
+            b = b->free_next;
+        }
+        if (!b) return NULL;
     }
 
     free_list_remove(b);
@@ -318,17 +325,21 @@ void *kzalloc(size_t size) {
  * (whole or split) as part of a live allocation. ───────────────────── */
 static heap_block_t *coalesce(heap_block_t *b) {
     heap_block_t *next = b->all_next;
-    if (next && next->magic == HEAP_MAGIC_FREE) {
+    if (next && next->magic == HEAP_MAGIC_FREE &&
+        (uint8_t *)b + HEAP_HEADER_SIZE + b->size == (uint8_t *)next) {
         free_list_remove(next); /* next is absorbed; discard its node */
+        if (g_tail == next) g_tail = b;
         b->size += HEAP_HEADER_SIZE + next->size;
         b->all_next = next->all_next;
         if (b->all_next) b->all_next->all_prev = b;
     }
 
     heap_block_t *prev = b->all_prev;
-    if (prev && prev->magic == HEAP_MAGIC_FREE) {
+    if (prev && prev->magic == HEAP_MAGIC_FREE &&
+        (uint8_t *)prev + HEAP_HEADER_SIZE + prev->size == (uint8_t *)b) {
         free_list_remove(prev); /* prev survives but is resizing */
         free_list_remove(b);    /* b is absorbed; discard its node */
+        if (g_tail == b) g_tail = prev;
         prev->size += HEAP_HEADER_SIZE + b->size;
         prev->all_next = b->all_next;
         if (prev->all_next) prev->all_next->all_prev = prev;
@@ -418,8 +429,10 @@ void *krealloc(void *ptr, size_t new_size) {
      * free and large enough, avoiding a copy entirely. */
     heap_block_t *next = b->all_next;
     if (next && next->magic == HEAP_MAGIC_FREE &&
+        (uint8_t *)b + HEAP_HEADER_SIZE + b->size == (uint8_t *)next &&
         b->size + HEAP_HEADER_SIZE + next->size >= new_size) {
         free_list_remove(next);
+        if (g_tail == next) g_tail = b;
         b->size += HEAP_HEADER_SIZE + next->size;
         b->all_next = next->all_next;
         if (b->all_next) b->all_next->all_prev = b;

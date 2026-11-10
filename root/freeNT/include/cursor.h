@@ -18,7 +18,22 @@
 typedef enum {
     CURSOR_ARROW = 0,  /* default pointer */
     CURSOR_HAND  = 1,  /* click / link / interactive state */
+    CURSOR_RESIZE_NS = 2,
+    CURSOR_RESIZE_WE = 3,
+    CURSOR_RESIZE_NWSE = 4,
+    CURSOR_RESIZE_NESW = 5,
+    CURSOR_MOVE = 6,
+    CURSOR_BUSY = 7,
+    CURSOR_COUNT = 8
 } cursor_shape_t;
+
+#define CURSOR_DIR "/system/gui/cursors"
+#define CURSOR_HOTSPOT_PATH CURSOR_DIR "/hotspots.txt"
+
+void cursor_reload(void);
+void cursor_get_hotspot(cursor_shape_t shape, int32_t *hx, int32_t *hy);
+const char *cursor_role_key(int role);
+const char *cursor_role_default(int role);
 
 #define CURSOR_ASSET_PATH_ARROW "/sys/gui/assets/cursor_arrow.png"
 #define CURSOR_ASSET_PATH_HAND  "/sys/gui/assets/cursor_hand.png"

@@ -1,0 +1,8 @@
+Execute at/: settings.bin
+Window name/: Settings
+Icon/: /system/gui/icons/vista_personalization.png
+Language/: bin
+Version/: 1.0
+Description/: System settings: display, colors, wallpaper, network
+Appstat/: gui
+mark executable/

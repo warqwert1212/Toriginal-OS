@@ -1,0 +1,8 @@
+Execute at/: computer.bin
+Window name/: Computer
+Icon/: /system/gui/icons/vista_pc_1.png
+Language/: bin
+Version/: 1.0
+Description/: File explorer
+Appstat/: gui
+mark executable/

@@ -1,0 +1,8 @@
+Execute at/: terminal.bin
+Window name/: Terminal
+Icon/: /system/gui/icons/terminal.png
+Language/: bin
+Version/: 1.0
+Description/: Toriginal OS command line
+Appstat/: gui
+mark executable/

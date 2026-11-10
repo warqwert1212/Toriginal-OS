@@ -1,0 +1,8 @@
+Execute at/: notepad.bin
+Window name/: Notepad
+Icon/: /system/gui/icons/notepad.png
+Language/: bin
+Version/: 1.0
+Description/: Text editor
+Appstat/: gui
+mark executable/

@@ -2,21 +2,8 @@
 
 .code32
 .section .text
-.global elf_load_segments
 .global build_multiboot2_info
 
-/* FIX: was 0x20000. Real mode (stage2.s's load_kernel_elf) can only
- * ask the BIOS to place a disk read at a plain segment:offset
- * address, which tops out just over 1 MiB - nowhere near enough once
- * the kernel started embedding its own boot assets (many MiB now,
- * budgeted up to 32 MiB - see ata.h's ATA_BOOT_RESERVED_SECTORS
- * comment). stage2.s now reads each chunk into a small low buffer and
- * copies it up here via "unreal mode" (see load_kernel_elf's comment
- * there) - this symbol just needs to name the same high, flat address
- * both files agree on. Kept well clear of the kernel's own
- * 0x200000-0x2000000 load window (kernel64.ld) so this staging copy
- * can never overlap the segments being copied out of it. */
-.set ELF_STAGE_ADDR, 0x4000000
 .set MB2_INFO_ADDR,  0x30000
 
 /* Same link-origin-vs-runtime-load mismatch as stage2.ld documents
@@ -55,105 +42,6 @@
  * nothing. */
 .extern pm_serial_putc
 .extern pm_serial_puts
-
-msg_s0: .asciz "S0: elf_load_segments entered\n"
-msg_sd: .asciz "SD: elf_load_segments done, segments="
-
-elf_load_segments:
-    pushal
-
-    movl    $(msg_s0 + STAGE2_LINEAR_BASE), %esi
-    call    pm_serial_puts
-    movb    $0, (seg_counter + STAGE2_LINEAR_BASE)            /* segments processed so far, in
-                                         * memory (not a register) since
-                                         * every general register below
-                                         * is already spoken for by the
-                                         * segment-copy logic itself */
-
-    /* ESI = ELF file base (real mode staged it here). */
-    movl    $ELF_STAGE_ADDR, %esi
-
-    /* EDI = pointer to first program header = base + e_phoff (low 32
-     * bits only - see file header comment). */
-    movl    ELF_STAGE_ADDR + EHDR_E_PHOFF, %edi
-    addl    %esi, %edi
-
-    /* ECX = e_phnum (loop counter), EBX = e_phentsize (stride). */
-    movzwl  ELF_STAGE_ADDR + EHDR_E_PHNUM, %ecx
-    movzwl  ELF_STAGE_ADDR + EHDR_E_PHENTSIZE, %ebx
-
-phdr_loop:
-    cmpl    $0, %ecx
-    je      elf_load_done
-
-    movl    (%edi), %eax               /* p_type */
-    cmpl    $PT_LOAD, %eax
-    jne     phdr_skip
-
-    /* Save the loop state we still need after this segment (EDI =
-     * current phdr pointer, EBX = phentsize, ECX = remaining count)
-     * in callee-saved-style registers instead of the stack, so there
-     * is no offset arithmetic to get wrong: EBP/loop regs untouched
-     * by the copy below, which only uses EAX/EDX/ESI/EDI/ECX. */
-    pushl   %ebx                       /* [esp+8] = phentsize (restored after) */
-    pushl   %ecx                       /* [esp+4] = remaining phdr count */
-    pushl   %edi                       /* [esp+0] = this phdr's pointer */
-
-    movl    PHDR_P_FILESZ(%edi), %ebx  /* EBX = filesz, kept past the copy */
-    movl    PHDR_P_MEMSZ(%edi), %edx   /* EDX = memsz, kept past the copy */
-    movl    PHDR_P_OFFSET(%edi), %eax
-    addl    %esi, %eax                 /* EAX = source ptr = ELF base + p_offset */
-    movl    PHDR_P_VADDR(%edi), %edi   /* EDI = dest ptr = p_vaddr (overwrites
-                                         * the phdr pointer in EDI - the copy
-                                         * we just pushed to the stack is the
-                                         * one we'll restore afterward) */
-    movl    %eax, %esi                 /* ESI = source ptr (was ELF base -
-                                         * no longer needed as such once every
-                                         * phdr's file offset is already
-                                         * resolved to an absolute address) */
-    movl    %ebx, %ecx                 /* ECX = filesz = copy length */
-    cld
-    rep     movsb                      /* copy filesz bytes: [[esp+0]].p_offset+base -> [[esp+0]].p_vaddr */
-
-    /* EDI now sits right after the copied bytes (movsb advanced it
-     * dest-side). Zero (memsz - filesz) more bytes right there. */
-    subl    %ebx, %edx                 /* EDX = memsz - filesz */
-    jle     zero_tail_done             /* <= 0: nothing to zero */
-    movl    %edx, %ecx
-    xorl    %eax, %eax
-    cld
-    rep     stosb
-zero_tail_done:
-
-    popl    %edi                       /* restore this phdr's pointer */
-    popl    %ecx                       /* restore remaining count */
-    popl    %ebx                       /* restore phentsize */
-
-    incb    (seg_counter + STAGE2_LINEAR_BASE)                /* one more PT_LOAD segment done */
-
-    /* ESI is no longer the ELF base after the copy above - restore it
-     * from EDI (still a valid phdr pointer) is wrong too, so instead
-     * recompute it the same way it was first set: ELF base is a fixed
-     * constant, not something that needs preserving across the loop. */
-    movl    $ELF_STAGE_ADDR, %esi
-
-phdr_skip:
-    addl    %ebx, %edi                 /* advance to next program header */
-    decl    %ecx
-    jmp     phdr_loop
-
-elf_load_done:
-    movl    $(msg_sd + STAGE2_LINEAR_BASE), %esi
-    call    pm_serial_puts
-    movzbl  (seg_counter + STAGE2_LINEAR_BASE), %eax
-    addb    $'0', %al
-    call    pm_serial_putc
-    movb    $'\n', %al
-    call    pm_serial_putc
-    popal
-    ret
-
-seg_counter: .byte 0
 
 /* ── multiboot2 info block builder ─────────────────────────────────────────
  * Layout (matches kernel.c's mb2_tag_t/mb2_tag_fb_t exactly):

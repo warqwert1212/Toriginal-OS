@@ -1,0 +1,8 @@
+Execute at/: packages.bin
+Window name/: Packages
+Icon/: /system/gui/icons/vista_marketplace.png
+Language/: bin
+Version/: 1.0
+Description/: Install, update and remove packages
+Appstat/: gui
+mark executable/

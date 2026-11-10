@@ -696,6 +696,7 @@ static int write_bootloader_to_disk(installer_errors_t *errs) {
         }
     }
     kfree(stage2_copy);
+    ata_flush_all();
 
     /* Seed the TRBL settings sector from whatever resolution syscfg
      * already has on record (e.g. set pre-install, or a default),
@@ -756,6 +757,7 @@ static int write_bootloader_to_disk(installer_errors_t *errs) {
         }
     }
 
+    ata_flush_all();
     io_put_string("      Bootloader installed (");
     {
         char nbuf[12];

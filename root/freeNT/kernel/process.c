@@ -33,6 +33,7 @@
 static process_t *process_table[MAX_PROCESSES] = {0};
 static pid_t      next_pid          = 1;
 static process_t *current_process   = NULL;
+static void process_unlink_runqueue(process_t *p);
 static process_t *run_queue_head    = NULL;
 static process_t *run_queue_tail    = NULL;
 
@@ -54,7 +55,13 @@ process_t *process_create(const char *name, uint8_t priority) {
     (void)name; /* TODO(v2): store process name for ps/debugging; not yet
                  * tracked in process_t, so explicitly mark unused for now
                  * rather than silently ignoring -Wunused-parameter. */
-    if (next_pid >= MAX_PROCESSES) return NULL;
+    pid_t new_pid = 0;
+    for (int tries = 0; tries < MAX_PROCESSES; tries++) {
+        if (next_pid <= 0 || next_pid >= MAX_PROCESSES) next_pid = 1;
+        if (!process_table[next_pid]) { new_pid = next_pid++; break; }
+        next_pid++;
+    }
+    if (!new_pid) return NULL;
 
     process_t *proc = (process_t *)kmalloc(sizeof(process_t));
     if (!proc) return NULL;
@@ -67,7 +74,7 @@ process_t *process_create(const char *name, uint8_t priority) {
      * saved-register fields as if they were a real prior context. */
     proc->context.never_run = 1;
 
-    proc->pid      = next_pid++;
+    proc->pid      = new_pid;
     proc->ppid     = current_process ? current_process->pid : 0;
     proc->state    = PROCESS_CREATED;
     proc->priority = priority;
@@ -85,7 +92,7 @@ process_t *process_create(const char *name, uint8_t priority) {
 
     proc->stack_end   = 0x7FFFFFFF000ULL;
     proc->stack_start = proc->stack_end - 0x100000ULL;
-    proc->heap_start  = 0x0000000010000000ULL;
+    proc->heap_start  = 0x0000000140000000ULL;
     proc->heap_end    = proc->heap_start; /* brk() starts at the base - nothing
                                             * mapped until the process actually
                                             * calls brk() to grow it, matching
@@ -134,13 +141,38 @@ process_t *process_create(const char *name, uint8_t priority) {
 // ---------------------------------------------------------------------------
 // process_get_by_pid / process_get_current
 // ---------------------------------------------------------------------------
+void process_reap(process_t *proc) {
+    if (!proc || proc == current_process) return;
+    process_unlink_runqueue(proc);
+    if (proc->pid > 0 && proc->pid < MAX_PROCESSES && process_table[proc->pid] == proc)
+        process_table[proc->pid] = NULL;
+    mm_free_address_space(proc->page_table_root);
+    proc->page_table_root = 0;
+    kfree(proc);
+}
+
 process_t *process_get_by_pid(pid_t pid) {
     if (pid < 0 || pid >= MAX_PROCESSES) return NULL;
     return process_table[pid];
 }
 
+process_t *process_find_window_owner(uint32_t window_id, int *slot) {
+    for (int i = 1; i < MAX_PROCESSES; i++) {
+        process_t *p = process_table[i];
+        if (!p) continue;
+        for (int k = 0; k < PROCESS_MAX_OWNED_WINDOWS; k++) {
+            if (p->owned_windows[k] == window_id) { if (slot) *slot = k; return p; }
+        }
+    }
+    return NULL;
+}
+
 process_t *process_get_current(void) {
     return current_process;
+}
+
+void process_set_current(process_t *p) {
+    current_process = p;
 }
 
 // ---------------------------------------------------------------------------
